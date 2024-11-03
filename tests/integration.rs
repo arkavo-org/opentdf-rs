@@ -9,7 +9,7 @@ fn test_tdf_archive_structure() -> Result<(), Box<dyn std::error::Error>> {
     let test_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("data")
-        .join("test.tdf");
+        .join("sensitive.txt.tdf");
 
     let file = std::fs::File::open(test_path)?;
     let mut archive = ZipArchive::new(file)?;

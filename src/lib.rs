@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use hmac::{Hmac, Mac, digest::{KeyInit, MacError}};
+use sha2::Sha256;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TdfManifest {
@@ -35,17 +37,27 @@ pub struct EncryptionInformation {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct PolicyBinding {
+    pub alg: String,
+    pub hash: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct KeyAccess {
     #[serde(rename = "type")]
     pub access_type: String,
     pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kid: Option<String>,
     pub protocol: String,
     #[serde(rename = "wrappedKey")]
     pub wrapped_key: String,
     #[serde(rename = "policyBinding")]
-    pub policy_binding: String,
-    #[serde(rename = "encryptedMetadata")]
-    pub encrypted_metadata: String,
+    pub policy_binding: PolicyBinding,
+    #[serde(rename = "encryptedMetadata", skip_serializing_if = "Option::is_none")]
+    pub encrypted_metadata: Option<String>,
+    #[serde(rename = "tdf_spec_version", skip_serializing_if = "Option::is_none")]
+    pub tdf_spec_version: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -84,6 +96,48 @@ pub struct Segment {
     pub encrypted_segment_size: Option<u64>,
 }
 
+impl KeyAccess {
+    /// Creates a new KeyAccess object with default values
+    pub fn new(url: String) -> Self {
+        KeyAccess {
+            access_type: "wrapped".to_string(), // Default type for TDF 3.x and newer
+            url,
+            kid: None,
+            protocol: "kas".to_string(),
+            wrapped_key: String::new(),
+            policy_binding: PolicyBinding {
+                alg: "HS256".to_string(),
+                hash: String::new(),
+            },
+            encrypted_metadata: None,
+            tdf_spec_version: None,
+        }
+    }
+
+    /// Generate policy binding using HMAC-SHA256
+    pub fn generate_policy_binding(&mut self, policy: &str, key: &[u8]) -> Result<(), MacError> {
+        type HmacSha256 = Hmac<Sha256>;
+
+        let policy_base64 = BASE64.encode(policy);
+        let mut mac = <HmacSha256 as KeyInit>::new_from_slice(key).map_err(|_| MacError)?;
+        mac.update(policy_base64.as_bytes());
+        let result = mac.finalize();
+        self.policy_binding.hash = BASE64.encode(result.into_bytes());
+        self.policy_binding.alg = "HS256".to_string();
+        Ok(())
+    }
+
+    /// Set encrypted metadata
+    pub fn set_encrypted_metadata(&mut self, metadata: &str) {
+        self.encrypted_metadata = Some(BASE64.encode(metadata));
+    }
+
+    /// Clear encrypted metadata
+    pub fn clear_encrypted_metadata(&mut self) {
+        self.encrypted_metadata = None;
+    }
+}
+
 impl TdfManifest {
     /// Create a new TdfManifest with default values
     pub fn new(payload_url: String, kas_url: String) -> Self {
@@ -98,14 +152,7 @@ impl TdfManifest {
             },
             encryption_information: EncryptionInformation {
                 encryption_type: "split".to_string(),
-                key_access: vec![KeyAccess {
-                    access_type: "wrapped".to_string(),
-                    url: kas_url,
-                    protocol: "kas".to_string(),
-                    wrapped_key: String::new(),
-                    policy_binding: String::new(),
-                    encrypted_metadata: String::new(),
-                }],
+                key_access: vec![KeyAccess::new(kas_url)],
                 method: EncryptionMethod {
                     algorithm: "AES-256-GCM".to_string(),
                     is_streamable: true,
@@ -160,6 +207,103 @@ impl TdfManifest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_key_access_metadata() {
+        let mut key_access = KeyAccess::new("http://example.com".to_string());
+
+        // Initially should be None
+        assert!(key_access.encrypted_metadata.is_none());
+
+        // Set metadata
+        key_access.set_encrypted_metadata("test metadata");
+        assert!(key_access.encrypted_metadata.is_some());
+
+        // Clear metadata
+        key_access.clear_encrypted_metadata();
+        assert!(key_access.encrypted_metadata.is_none());
+    }
+    
+    #[test]
+    fn test_manifest_deserialization() {
+        let json = r#"{
+            "encryptionInformation": {
+                "type": "split",
+                "keyAccess": [{
+                    "type": "wrapped",
+                    "url": "http://localhost:8080",
+                    "protocol": "kas",
+                    "wrappedKey": "abc123",
+                    "policyBinding": {
+                        "alg": "HS256",
+                        "hash": "def456"
+                    },
+                    "kid": "r1"
+                }],
+                "method": {
+                    "algorithm": "AES-256-GCM",
+                    "iv": "",
+                    "isStreamable": true
+                },
+                "integrityInformation": {
+                  "rootSignature": {
+                    "alg": "HS256",
+                    "sig": "M2E2MTI5YmMxMWU0ODIzZDA4YTdkNTY2MzdlNDM4OGRlZDE2MTFhZjU1YTY1YzBhYWNlMWVjYjlmODUzNmNiZQ=="
+                  },
+                  "segmentHashAlg": "GMAC",
+                  "segments": [
+                      {
+                          "hash": "NzhlZDg5OWMwZWVhZDBjMWEzZTQyYmFlODA0NjNlMDM=",
+                          "segmentSize": 14056,
+                          "encryptedSegmentSize": 14084
+                        }
+                  ],
+                  "segmentSizeDefault": 1000000,
+                  "encryptedSegmentSizeDefault": 1000028
+                },
+                "policy": "base64policy"
+            },
+            "payload": {
+                "type": "reference",
+                "url": "0.payload",
+                "protocol": "zip",
+                "mimeType": "application/octet-stream",
+                "isEncrypted": true
+            }
+        }"#;
+
+        let manifest = TdfManifest::from_json(json).unwrap();
+        assert_eq!(manifest.encryption_information.key_access[0].policy_binding.alg, "HS256");
+    }
+
+    #[test]
+    fn test_manifest_deserialization_without_metadata() {
+        let json = r#"{
+            "type": "wrapped",
+            "url": "http://localhost:8080",
+            "protocol": "kas",
+            "wrappedKey": "abc123",
+            "policyBinding": {
+                "alg": "HS256",
+                "hash": "def456"
+            },
+            "kid": "r1"
+        }"#;
+
+        let key_access: KeyAccess = serde_json::from_str(json).unwrap();
+        assert!(key_access.encrypted_metadata.is_none());
+    }
+    
+    #[test]
+    fn test_key_access_policy_binding() {
+        let mut key_access = KeyAccess::new("http://kas.example.com:4000".to_string());
+        let policy = r#"{"uuid":"test","body":{"attributes":[],"dissem":["user@example.com"]}}"#;
+        let key = b"test-key-for-hmac";
+
+        key_access.generate_policy_binding(policy, key).unwrap();
+        assert!(!key_access.policy_binding.hash.is_empty());
+        assert_eq!(key_access.policy_binding.alg, "HS256");
+    }
 
     #[test]
     fn test_manifest_serialization() {
