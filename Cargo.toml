@@ -1,0 +1,12 @@
+[package]
+name = "opentdf-rs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+zip = "2.2.0"
+serde_json = "1.0.132"
+serde = { version = "1.0.214", features = ["derive"] }
+base64 = "0.22.1"
+hmac = "0.12.1"
+sha2 = "0.10.8"
