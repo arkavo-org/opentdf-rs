@@ -1,4 +1,5 @@
-use opentdf::{TdfArchive, TdfArchiveBuilder, TdfManifest};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use opentdf::{EncryptedPayload, TdfArchive, TdfArchiveBuilder, TdfEncryption, TdfManifest};
 use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
@@ -105,37 +106,162 @@ fn test_tdf_archive_structure() -> Result<(), Box<dyn std::error::Error>> {
     // TODO file bug with opentdf
     // assert!(manifest.get("version").is_some(), "Manifest missing version");
     TdfManifest::from_json(&manifest_contents)?;
-
     assert!(!payload.is_empty(), "Payload file is empty");
 
     Ok(())
 }
 
 #[test]
-fn test_create_and_read_archive() -> Result<(), Box<dyn std::error::Error>> {
+fn test_create_and_read_encrypted_archive() -> Result<(), Box<dyn std::error::Error>> {
     use tempfile::NamedTempFile;
 
-    // Create test data
-    let manifest = TdfManifest::new(
+    // Initialize encryption
+    let tdf_encryption = TdfEncryption::new()?;
+    let original_data = b"sensitive payload data".to_vec();
+
+    // Encrypt the payload
+    let encrypted_payload = tdf_encryption.encrypt(&original_data)?;
+
+    // Create manifest with encryption information
+    let mut manifest = TdfManifest::new(
         "0.payload".to_string(),
         "http://kas.example.com:4000".to_string(),
     );
-    let payload = b"test payload data".to_vec();
+
+    // Update manifest with encryption details
+    manifest.encryption_information.method.algorithm = "AES-256-GCM".to_string();
+    manifest.encryption_information.method.iv = encrypted_payload.iv.clone();
+    manifest.encryption_information.key_access[0].wrapped_key =
+        encrypted_payload.encrypted_key.clone();
+
+    // Create policy with encryption metadata
+    let policy = serde_json::json!({
+        "uuid": "test-policy",
+        "body": {
+            "dataAttributes": [],
+            "dissem": ["user@example.com"],
+            "encryptionInformation": {
+                "keyHash": encrypted_payload.policy_key_hash,
+                "algorithm": "AES-256-GCM"
+            }
+        }
+    });
+    manifest.set_policy(&policy.to_string());
 
     // Create archive
     let temp_file = NamedTempFile::new()?;
     let temp_path = temp_file.path().to_owned();
 
     let mut builder = TdfArchiveBuilder::new(&temp_path)?;
-    builder.add_entry(&manifest, &payload, 0)?;
+    let encrypted_data = BASE64.decode(&encrypted_payload.ciphertext)?;
+    builder.add_entry(&manifest, &encrypted_data, 0)?;
     builder.finish()?;
 
-    // Read it back
+    // Read it back and verify
     let mut archive = TdfArchive::open(&temp_path)?;
     let entry = archive.by_index()?;
 
-    assert_eq!(entry.payload, payload);
+    // Decrypt the payload
+    let decrypted_payload = TdfEncryption::decrypt(
+        tdf_encryption.policy_key(),
+        &EncryptedPayload {
+            ciphertext: BASE64.encode(&entry.payload),
+            iv: entry.manifest.encryption_information.method.iv.clone(),
+            encrypted_key: entry.manifest.encryption_information.key_access[0]
+                .wrapped_key
+                .clone(),
+            policy_key_hash: serde_json::from_str::<serde_json::Value>(
+                &entry.manifest.get_policy()?,
+            )?["body"]["encryptionInformation"]["keyHash"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+        },
+    )?;
+
+    assert_eq!(decrypted_payload, original_data);
     assert_eq!(entry.manifest.payload.url, "0.payload");
+    assert_eq!(
+        entry.manifest.encryption_information.method.algorithm,
+        "AES-256-GCM"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_encrypted_archive_with_policy_verification() -> Result<(), Box<dyn std::error::Error>> {
+    use tempfile::NamedTempFile;
+
+    // Initialize encryption with a specific policy key
+    let tdf_encryption = TdfEncryption::new()?;
+    let original_data = b"data with policy verification".to_vec();
+
+    // Create and encrypt payload
+    let encrypted_payload = tdf_encryption.encrypt(&original_data)?;
+
+    // Create manifest with policy
+    let mut manifest = TdfManifest::new(
+        "0.payload".to_string(),
+        "http://kas.example.com:4000".to_string(),
+    );
+
+    // Set up policy with additional constraints
+    let policy = serde_json::json!({
+        "uuid": "test-policy-verification",
+        "body": {
+            "dataAttributes": ["CONFIDENTIAL"],
+            "dissem": ["user@example.com"],
+            "expiry": "2025-12-31T23:59:59Z",
+            "encryptionInformation": {
+                "keyHash": encrypted_payload.policy_key_hash,
+                "algorithm": "AES-256-GCM",
+                "keyAccess": {
+                    "protocol": "kas",
+                    "type": "wrapped"
+                }
+            }
+        }
+    });
+    manifest.set_policy(&policy.to_string());
+
+    // Update manifest encryption information
+    manifest.encryption_information.method.algorithm = "AES-256-GCM".to_string();
+    manifest.encryption_information.method.iv = encrypted_payload.iv.clone();
+    manifest.encryption_information.key_access[0].wrapped_key =
+        encrypted_payload.encrypted_key.clone();
+
+    // Create archive
+    let temp_file = NamedTempFile::new()?;
+    let temp_path = temp_file.path().to_owned();
+
+    let mut builder = TdfArchiveBuilder::new(&temp_path)?;
+    let encrypted_data = BASE64.decode(&encrypted_payload.ciphertext)?;
+    builder.add_entry(&manifest, &encrypted_data, 0)?;
+    builder.finish()?;
+
+    // Verify archive
+    let mut archive = TdfArchive::open(&temp_path)?;
+    let entry = archive.by_index()?;
+
+    // Verify policy hash matches
+    let stored_policy: serde_json::Value = serde_json::from_str(&entry.manifest.get_policy()?)?;
+    assert_eq!(
+        stored_policy["body"]["encryptionInformation"]["keyHash"]
+            .as_str()
+            .unwrap(),
+        encrypted_payload.policy_key_hash
+    );
+
+    // Verify encryption algorithm
+    assert_eq!(
+        entry.manifest.encryption_information.method.algorithm,
+        "AES-256-GCM"
+    );
+
+    // Verify we can decrypt with the correct policy key
+    let decrypted = TdfEncryption::decrypt(tdf_encryption.policy_key(), &encrypted_payload)?;
+    assert_eq!(decrypted, original_data);
 
     Ok(())
 }
