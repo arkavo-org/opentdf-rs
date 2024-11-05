@@ -1,4 +1,4 @@
-use opentdf::{TdfManifest, TdfArchive, TdfArchiveBuilder};
+use opentdf::{TdfArchive, TdfArchiveBuilder, TdfManifest};
 use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
@@ -22,10 +22,22 @@ fn test_tdf_archive_structure_valid() -> Result<(), Box<dyn std::error::Error>> 
     println!("\nEntry 0:");
     println!("  Manifest URL: {}", entry.manifest.payload.url);
     println!("  Payload Size: {} bytes", entry.payload.len());
-    println!("  Encryption Type: {}", entry.manifest.encryption_information.encryption_type);
-    println!("  Algorithm: {}", entry.manifest.encryption_information.method.algorithm);
-    println!("  Is Streamable: {}", entry.manifest.encryption_information.method.is_streamable);
-    println!("  Number of Key Access Entries: {}", entry.manifest.encryption_information.key_access.len());
+    println!(
+        "  Encryption Type: {}",
+        entry.manifest.encryption_information.encryption_type
+    );
+    println!(
+        "  Algorithm: {}",
+        entry.manifest.encryption_information.method.algorithm
+    );
+    println!(
+        "  Is Streamable: {}",
+        entry.manifest.encryption_information.method.is_streamable
+    );
+    println!(
+        "  Number of Key Access Entries: {}",
+        entry.manifest.encryption_information.key_access.len()
+    );
     println!("  Policy: {}", entry.manifest.get_policy()?);
     println!("===========================\n");
 
@@ -44,7 +56,7 @@ fn test_tdf_archive_structure() -> Result<(), Box<dyn std::error::Error>> {
 
     let file = std::fs::File::open(test_path)?;
     let mut archive = ZipArchive::new(file)?;
-    
+
     // Dump all zip information
     println!("\n=== ZIP Archive Information ===");
     println!("Total files: {}", archive.len());
@@ -63,7 +75,7 @@ fn test_tdf_archive_structure() -> Result<(), Box<dyn std::error::Error>> {
         println!("  Is File: {}", file.is_file());
     }
     println!("===========================\n");
-    
+
     // First, verify all required files exist
     let required_files = [
         "0.manifest.json",
@@ -74,13 +86,16 @@ fn test_tdf_archive_structure() -> Result<(), Box<dyn std::error::Error>> {
     for required_file in required_files {
         assert!(
             archive.by_name(required_file).is_ok(),
-            "Missing required file: {}", required_file
+            "Missing required file: {}",
+            required_file
         );
     }
 
     // Read all contents at once to avoid multiple mutable borrows
     let mut manifest_contents = String::new();
-    archive.by_name("0.manifest.json")?.read_to_string(&mut manifest_contents)?;
+    archive
+        .by_name("0.manifest.json")?
+        .read_to_string(&mut manifest_contents)?;
     println!("Manifest Contents:\n{}", manifest_contents);
     let mut payload = Vec::new();
     archive.by_name("0.payload")?.read_to_end(&mut payload)?;

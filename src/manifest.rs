@@ -1,6 +1,9 @@
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use hmac::{
+    digest::{KeyInit, MacError},
+    Hmac, Mac,
+};
 use serde::{Deserialize, Serialize};
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use hmac::{Hmac, Mac, digest::{KeyInit, MacError}};
 use sha2::Sha256;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -92,7 +95,10 @@ pub struct Segment {
     pub hash: String,
     #[serde(rename = "segmentSize", skip_serializing_if = "Option::is_none")]
     pub segment_size: Option<u64>,
-    #[serde(rename = "encryptedSegmentSize", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "encryptedSegmentSize",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub encrypted_segment_size: Option<u64>,
 }
 
@@ -191,16 +197,25 @@ impl TdfManifest {
     /// Get the decoded policy from the manifest
     pub fn get_policy(&self) -> Result<String, base64::DecodeError> {
         let bytes = BASE64.decode(&self.encryption_information.policy)?;
-        String::from_utf8(bytes).map_err(|err| base64::DecodeError::InvalidByte(err.utf8_error().valid_up_to(), 0))
+        String::from_utf8(bytes)
+            .map_err(|err| base64::DecodeError::InvalidByte(err.utf8_error().valid_up_to(), 0))
     }
 
     /// Add a segment to the manifest
-    pub fn add_segment(&mut self, hash: String, segment_size: Option<u64>, encrypted_segment_size: Option<u64>) {
-        self.encryption_information.integrity_information.segments.push(Segment {
-            hash,
-            segment_size,
-            encrypted_segment_size,
-        });
+    pub fn add_segment(
+        &mut self,
+        hash: String,
+        segment_size: Option<u64>,
+        encrypted_segment_size: Option<u64>,
+    ) {
+        self.encryption_information
+            .integrity_information
+            .segments
+            .push(Segment {
+                hash,
+                segment_size,
+                encrypted_segment_size,
+            });
     }
 }
 
@@ -273,7 +288,12 @@ mod tests {
         }"#;
 
         let manifest = TdfManifest::from_json(json).unwrap();
-        assert_eq!(manifest.encryption_information.key_access[0].policy_binding.alg, "HS256");
+        assert_eq!(
+            manifest.encryption_information.key_access[0]
+                .policy_binding
+                .alg,
+            "HS256"
+        );
     }
 
     #[test]

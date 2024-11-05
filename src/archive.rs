@@ -1,9 +1,9 @@
+use crate::manifest::TdfManifest;
 use std::fs::File;
 use std::io::{self, Read, Seek, Write};
 use std::path::Path;
-use zip::{ZipArchive, ZipWriter};
 use zip::write::FileOptions;
-use crate::manifest::TdfManifest;
+use zip::{ZipArchive, ZipWriter};
 
 #[derive(Debug)]
 pub struct TdfArchive<R: Read + Seek> {
@@ -70,8 +70,9 @@ impl<R: Read + Seek> TdfArchive<R> {
 
         // Read manifest
         let manifest = {
-            let mut manifest_file = self.zip_archive.by_name(&manifest_name)
-                .map_err(|_| TdfError::Structure(format!("Missing manifest file: {}", manifest_name)))?;
+            let mut manifest_file = self.zip_archive.by_name(&manifest_name).map_err(|_| {
+                TdfError::Structure(format!("Missing manifest file: {}", manifest_name))
+            })?;
             let mut manifest_contents = String::new();
             manifest_file.read_to_string(&mut manifest_contents)?;
             TdfManifest::from_json(&manifest_contents)?
@@ -79,8 +80,9 @@ impl<R: Read + Seek> TdfArchive<R> {
 
         // Read payload
         let payload = {
-            let mut payload_file = self.zip_archive.by_name(&payload_name)
-                .map_err(|_| TdfError::Structure(format!("Missing payload file: {}", payload_name)))?;
+            let mut payload_file = self.zip_archive.by_name(&payload_name).map_err(|_| {
+                TdfError::Structure(format!("Missing payload file: {}", payload_name))
+            })?;
             let mut payload = Vec::new();
             payload_file.read_to_end(&mut payload)?;
             payload
@@ -118,20 +120,25 @@ impl TdfArchiveBuilder {
     }
 
     /// Adds a TDF entry to the archive
-    pub fn add_entry(&mut self, manifest: &TdfManifest, payload: &[u8], index: usize) -> Result<(), TdfError> {
+    pub fn add_entry(
+        &mut self,
+        manifest: &TdfManifest,
+        payload: &[u8],
+        index: usize,
+    ) -> Result<(), TdfError> {
         let manifest_json = manifest.to_json()?;
 
         // Write manifest
         self.writer.start_file::<_, ()>(
             format!("{}.manifest.json", index),
-            FileOptions::default().compression_method(zip::CompressionMethod::Stored)
+            FileOptions::default().compression_method(zip::CompressionMethod::Stored),
         )?;
         self.writer.write_all(manifest_json.as_bytes())?;
 
         // Write payload with explicit type parameters
         self.writer.start_file::<_, ()>(
             format!("{}.payload", index),
-            FileOptions::default().compression_method(zip::CompressionMethod::Stored)
+            FileOptions::default().compression_method(zip::CompressionMethod::Stored),
         )?;
         self.writer.write_all(payload)?;
 
@@ -198,12 +205,18 @@ mod tests {
         // Create test data for multiple entries
         let entries = vec![
             (
-                TdfManifest::new("0.payload".to_string(), "https://kas1.example.com".to_string()),
-                b"first payload data".to_vec()
+                TdfManifest::new(
+                    "0.payload".to_string(),
+                    "https://kas1.example.com".to_string(),
+                ),
+                b"first payload data".to_vec(),
             ),
             (
-                TdfManifest::new("1.payload".to_string(), "https://kas2.example.com".to_string()),
-                b"second payload data".to_vec()
+                TdfManifest::new(
+                    "1.payload".to_string(),
+                    "https://kas2.example.com".to_string(),
+                ),
+                b"second payload data".to_vec(),
             ),
         ];
 
@@ -228,14 +241,20 @@ mod tests {
         assert_eq!(entry0.payload, b"first payload data");
         assert_eq!(entry0.index, 0);
         assert_eq!(entry0.manifest.payload.url, "0.payload");
-        assert_eq!(entry0.manifest.encryption_information.key_access[0].url, "https://kas1.example.com");
+        assert_eq!(
+            entry0.manifest.encryption_information.key_access[0].url,
+            "https://kas1.example.com"
+        );
 
         // Verify second entry
         let entry1 = archive.get_entry(1)?;
         assert_eq!(entry1.payload, b"second payload data");
         assert_eq!(entry1.index, 1);
         assert_eq!(entry1.manifest.payload.url, "1.payload");
-        assert_eq!(entry1.manifest.encryption_information.key_access[0].url, "https://kas2.example.com");
+        assert_eq!(
+            entry1.manifest.encryption_information.key_access[0].url,
+            "https://kas2.example.com"
+        );
 
         // Verify error on invalid index
         let invalid_entry = archive.get_entry(2);
