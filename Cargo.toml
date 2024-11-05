@@ -1,6 +1,6 @@
 [package]
 name = "opentdf"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 
 [dependencies]
@@ -12,3 +12,5 @@ hmac = "0.12.1"
 sha2 = "0.10.8"
 thiserror = "1.0.67"
 tempfile = "3.13.0"
+aes-gcm = "0.10.3"
+rand = "0.8.5"
