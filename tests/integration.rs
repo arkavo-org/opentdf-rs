@@ -1,8 +1,39 @@
-// tests/integration/tdf_archive.rs
-use std::path::PathBuf;
+use opentdf::{TdfManifest, TdfArchive, TdfArchiveBuilder};
+use std::fs::File;
 use std::io::Read;
+use std::path::PathBuf;
 use zip::ZipArchive;
-use opentdf_rs::TdfManifest;
+
+#[test]
+fn test_tdf_archive_structure_valid() -> Result<(), Box<dyn std::error::Error>> {
+    let test_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("data")
+        .join("sensitive.txt.tdf");
+
+    let mut archive: TdfArchive<File> = TdfArchive::open(test_path)?;
+
+    // Dump archive information
+    println!("\n=== TDF Archive Information ===");
+    println!("Total entries: {}", archive.len());
+
+    // Read first entry
+    let entry = archive.by_index()?;
+    println!("\nEntry 0:");
+    println!("  Manifest URL: {}", entry.manifest.payload.url);
+    println!("  Payload Size: {} bytes", entry.payload.len());
+    println!("  Encryption Type: {}", entry.manifest.encryption_information.encryption_type);
+    println!("  Algorithm: {}", entry.manifest.encryption_information.method.algorithm);
+    println!("  Is Streamable: {}", entry.manifest.encryption_information.method.is_streamable);
+    println!("  Number of Key Access Entries: {}", entry.manifest.encryption_information.key_access.len());
+    println!("  Policy: {}", entry.manifest.get_policy()?);
+    println!("===========================\n");
+
+    // Validate structure
+    archive.validate()?;
+
+    Ok(())
+}
 
 #[test]
 fn test_tdf_archive_structure() -> Result<(), Box<dyn std::error::Error>> {
@@ -61,6 +92,35 @@ fn test_tdf_archive_structure() -> Result<(), Box<dyn std::error::Error>> {
     TdfManifest::from_json(&manifest_contents)?;
 
     assert!(!payload.is_empty(), "Payload file is empty");
+
+    Ok(())
+}
+
+#[test]
+fn test_create_and_read_archive() -> Result<(), Box<dyn std::error::Error>> {
+    use tempfile::NamedTempFile;
+
+    // Create test data
+    let manifest = TdfManifest::new(
+        "0.payload".to_string(),
+        "http://kas.example.com:4000".to_string(),
+    );
+    let payload = b"test payload data".to_vec();
+
+    // Create archive
+    let temp_file = NamedTempFile::new()?;
+    let temp_path = temp_file.path().to_owned();
+
+    let mut builder = TdfArchiveBuilder::new(&temp_path)?;
+    builder.add_entry(&manifest, &payload, 0)?;
+    builder.finish()?;
+
+    // Read it back
+    let mut archive = TdfArchive::open(&temp_path)?;
+    let entry = archive.by_index()?;
+
+    assert_eq!(entry.payload, payload);
+    assert_eq!(entry.manifest.payload.url, "0.payload");
 
     Ok(())
 }
