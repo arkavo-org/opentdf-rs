@@ -28,6 +28,7 @@ When starting a new conversation or initializing, please read these files:
 - **Serialization**: Use `serde` attributes consistently for JSON serialization
 - **Security**: Never commit secrets, validate cryptographic operations
 - **Commit Preparation**: Always run `cargo build`, `cargo clippy`, and `cargo fmt` before committing
+- **Dead Code**: Remove unused code rather than using `#[allow(dead_code)]` attributes
 
 ## Workflow Guidelines
 

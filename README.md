@@ -15,84 +15,82 @@ OpenTDF-RS enables cryptographic binding of access policies directly to data obj
 
 ## MCP Server
 
-The Model Context Protocol (MCP) server provides an HTTP interface to access OpenTDF-RS capabilities. It enables systems to interact with TDF operations through a standardized API.
+OpenTDF-RS includes an implementation of the Model Context Protocol (MCP) server, allowing AI assistants and other tools to interact with TDF capabilities via a standardized API.
 
-### MCP Endpoints
+### MCP Server Tools
 
-| Endpoint                   | Method | Description                                |
-|----------------------------|--------|--------------------------------------------|
-| `/mcp/tdf/create`          | POST   | Create a new TDF archive                   |
-| `/mcp/tdf/read`            | POST   | Read contents from a TDF archive           |
-| `/mcp/tdf/encrypt`         | POST   | Encrypt data with TDF encryption           |
-| `/mcp/tdf/decrypt`         | POST   | Decrypt TDF-encrypted data                 |
-| `/mcp/policy/create`       | POST   | Create a new policy for TDF encryption     |
-| `/mcp/policy/validate`     | POST   | Validate a policy against a TDF archive    |
-| `/mcp/health`              | GET    | Check server health status                 |
+The MCP server provides the following tools:
+
+| Tool Name        | Description                                       |
+|------------------|---------------------------------------------------|
+| `tdf_create`     | Creates a new TDF archive with encrypted data     |
+| `tdf_read`       | Reads contents from a TDF archive                 |
+| `encrypt`        | Encrypts data using TDF encryption methods        |
+| `decrypt`        | Decrypts TDF-encrypted data                       |
+| `policy_create`  | Creates a new policy for TDF encryption           |
+| `policy_validate`| Validates a policy against a TDF archive          |
 
 ### Running the MCP Server
 
+To run the MCP server and interact with it via Claude or other MCP-compatible clients:
+
 ```bash
-cargo run --bin opentdf-mcp-server
+cargo run -p opentdf-mcp-server
 ```
 
-### MCP Server Examples
+The server listens on stdio for JSON-RPC messages, making it compatible with tools like Claude Code that use the MCP protocol for communication.
 
-Here are examples of how to interact with the MCP server using HTTP requests:
+### Using with Claude Code
 
-#### Health Check
-```
-GET http://localhost:3000/mcp/health
-```
+Claude Code can connect to the MCP server to perform TDF operations:
 
-#### Encrypt Data
-```
-POST http://localhost:3000/mcp/tdf/encrypt
-Content-Type: application/json
-
-{
-  "data": "SGVsbG8gV29ybGQ="  // Base64 encoded "Hello World"
-}
+```bash
+claude --mcp="cargo run -p opentdf-mcp-server"
 ```
 
-#### Create TDF Archive
-```
-POST http://localhost:3000/mcp/tdf/create
-Content-Type: application/json
+This starts Claude with the MCP server, allowing you to use TDF capabilities directly within the chat interface.
 
-{
-  "data": "SGVsbG8gV29ybGQ=",  // Base64 encoded "Hello World"
-  "kas_url": "http://kas.example.com",
-  "policy": {
-    "uuid": "test-policy",
-    "body": {
-      "dataAttributes": ["CONFIDENTIAL"],
-      "dissem": ["user@example.com"]
-    }
-  }
-}
+Example commands:
+
+```
+/mcp opentdf tdf_create {"data": "SGVsbG8gV29ybGQh", "kas_url": "https://kas.example.com", "policy": {"uuid": "sample-uuid", "body": {"dataAttributes": ["classification::public"], "dissem": ["user@example.com"]}}}
 ```
 
-#### Read TDF Archive
 ```
-POST http://localhost:3000/mcp/tdf/read
-Content-Type: application/json
-
-{
-  "tdf_data": "[Base64 encoded TDF archive]"
-}
+/mcp opentdf tdf_read {"tdf_data": "<base64-encoded-tdf-data>"}
 ```
 
-#### Create Policy
-```
-POST http://localhost:3000/mcp/policy/create
-Content-Type: application/json
+### Testing the MCP Server
 
-{
-  "attributes": ["CONFIDENTIAL", "INTERNAL_ONLY"],
-  "dissemination": ["user@example.com"],
-  "expiry": "2025-12-31T23:59:59Z"
-}
+A test script is provided to verify the MCP server functionality:
+
+```bash
+node tools/test-mcp.js
 ```
+
+This script tests:
+1. Server initialization 
+2. Tool availability
+3. Basic tool functionality
+4. Error handling
+
+## Development
+
+### MCP Server Development
+
+The MCP server implements the JSON-RPC 2.0 protocol over stdio to provide TDF capabilities to clients. When developing or extending the MCP server:
+
+1. **Tool Definitions**: Define tools with both `schema` and `inputSchema` fields for compatibility
+2. **Protocol Version**: Use the latest MCP protocol version (currently "2024-11-05")
+3. **Response Format**: Ensure all responses follow the JSON-RPC 2.0 specification
+4. **Error Handling**: Use standard JSON-RPC error codes (-32xxx)
+5. **Testing**: Use `tools/test-mcp.js` to verify functionality
+
+If adding new tools, remember to:
+- Add the tool to both the initialize response and listTools response
+- Implement proper parameter validation
+- Follow the JSON-RPC request/response flow
+- Document the tool in this README
 
 ## Getting Started
 
