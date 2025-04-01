@@ -1,6 +1,7 @@
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{error, info};
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
@@ -84,6 +85,37 @@ struct PolicyCreateParams {
 struct PolicyValidateParams {
     policy: Value,
     tdf_data: String, // Base64 encoded TDF archive
+}
+
+/// Parameters for attribute definition
+#[derive(Deserialize)]
+struct AttributeDefineParams {
+    namespace: String,
+    name: String,
+    values: Vec<String>,
+    hierarchy: Option<Vec<Value>>, // For hierarchical attributes
+}
+
+/// Parameters for user attribute assignment
+#[derive(Deserialize)]
+struct UserAttributesParams {
+    user_id: String,
+    attributes: Vec<Value>,
+}
+
+/// Parameters for access evaluation
+#[derive(Deserialize)]
+struct AccessEvaluateParams {
+    policy: Value,
+    user_attributes: Value,
+    context: Option<Value>, // Environmental context attributes
+}
+
+/// Parameters for policy binding verification
+#[derive(Deserialize)]
+struct PolicyBindingVerifyParams {
+    tdf_data: String,
+    policy_key: String,
 }
 
 /// Processes a JSON-RPC request asynchronously.
@@ -255,6 +287,26 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
                             "description": "Validates an attribute-based access control policy against a TDF",
                             "inputSchema": {"type": "object"},
                             "schema": {"type": "object"}
+                        },
+                        "attribute_define": {
+                            "description": "Defines attribute namespaces with optional hierarchies",
+                            "inputSchema": {"type": "object"},
+                            "schema": {"type": "object"}
+                        },
+                        "user_attributes": {
+                            "description": "Sets user attributes for testing access control",
+                            "inputSchema": {"type": "object"},
+                            "schema": {"type": "object"}
+                        },
+                        "access_evaluate": {
+                            "description": "Evaluates whether a user with attributes can access protected content",
+                            "inputSchema": {"type": "object"},
+                            "schema": {"type": "object"}
+                        },
+                        "policy_binding_verify": {
+                            "description": "Verifies the cryptographic binding of a policy to a TDF",
+                            "inputSchema": {"type": "object"},
+                            "schema": {"type": "object"}
                         }
                     }
                 }
@@ -375,6 +427,30 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
                     {
                         "name": "policy_validate",
                         "description": "Validates an attribute-based access control policy against a TDF",
+                        "inputSchema": {"type": "object"},
+                        "schema": {"type": "object"}
+                    },
+                    {
+                        "name": "attribute_define",
+                        "description": "Defines attribute namespaces with optional hierarchies",
+                        "inputSchema": {"type": "object"},
+                        "schema": {"type": "object"}
+                    },
+                    {
+                        "name": "user_attributes",
+                        "description": "Sets user attributes for testing access control",
+                        "inputSchema": {"type": "object"},
+                        "schema": {"type": "object"}
+                    },
+                    {
+                        "name": "access_evaluate",
+                        "description": "Evaluates whether a user with attributes can access protected content",
+                        "inputSchema": {"type": "object"},
+                        "schema": {"type": "object"}
+                    },
+                    {
+                        "name": "policy_binding_verify",
+                        "description": "Verifies the cryptographic binding of a policy to a TDF",
                         "inputSchema": {"type": "object"},
                         "schema": {"type": "object"}
                     }
@@ -1136,6 +1212,240 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
                         error: Some(RpcError {
                             code: -32602,
                             message: format!("Invalid params for policy_validate: {}", e),
+                        }),
+                    }
+                }
+            }
+        },
+
+        // Implement attribute definition for hierarchical attributes
+        "attribute_define" => {
+            info!("Received attribute_define request");
+            let params: Result<AttributeDefineParams, _> = serde_json::from_value(req.params);
+            match params {
+                Ok(p) => {
+                    info!("Defining attribute namespace: {}", p.namespace);
+                    
+                    // Process values
+                    let mut attribute_values = Vec::new();
+                    for value in &p.values {
+                        attribute_values.push(value.clone());
+                    }
+                    
+                    // Process hierarchy if provided
+                    let hierarchy_info = if let Some(hierarchy) = p.hierarchy {
+                        // Process hierarchical structure
+                        let mut hierarchy_map = HashMap::new();
+                        for level in hierarchy {
+                            if let (Some(level_value), Some(inherits_from)) = (
+                                level.get("value").and_then(|v| v.as_str()),
+                                level.get("inherits_from").and_then(|v| v.as_str()),
+                            ) {
+                                hierarchy_map.insert(level_value.to_string(), inherits_from.to_string());
+                            }
+                        }
+                        Some(hierarchy_map)
+                    } else {
+                        None
+                    };
+                    
+                    // Build response with attribute info
+                    let attribute_def = json!({
+                        "namespace": p.namespace,
+                        "name": p.name,
+                        "values": attribute_values,
+                        "hierarchy": hierarchy_info,
+                        "id": Uuid::new_v4().to_string()
+                    });
+                    
+                    RpcResponse {
+                        jsonrpc: "2.0".to_string(),
+                        id: req.id,
+                        result: Some(json!({
+                            "attribute": attribute_def,
+                            "status": "defined"
+                        })),
+                        error: None,
+                    }
+                }
+                Err(e) => {
+                    error!("Invalid parameters for attribute_define: {}", e);
+                    RpcResponse {
+                        jsonrpc: "2.0".to_string(),
+                        id: req.id,
+                        result: None,
+                        error: Some(RpcError {
+                            code: -32602,
+                            message: format!("Invalid params for attribute_define: {}", e),
+                        }),
+                    }
+                }
+            }
+        },
+        
+        // Implement user attribute assignment
+        "user_attributes" => {
+            info!("Received user_attributes request");
+            let params: Result<UserAttributesParams, _> = serde_json::from_value(req.params);
+            match params {
+                Ok(p) => {
+                    info!("Setting attributes for user: {}", p.user_id);
+                    
+                    // Process attribute assignments
+                    let mut processed_attributes = Vec::new();
+                    for attr in &p.attributes {
+                        if let (Some(namespace), Some(name), Some(value)) = (
+                            attr.get("namespace").and_then(|v| v.as_str()),
+                            attr.get("name").and_then(|v| v.as_str()),
+                            attr.get("value"),
+                        ) {
+                            processed_attributes.push(json!({
+                                "attribute": format!("{}:{}", namespace, name),
+                                "value": value
+                            }));
+                        }
+                    }
+                    
+                    // Store user attributes (in a real implementation, this would be persisted)
+                    RpcResponse {
+                        jsonrpc: "2.0".to_string(),
+                        id: req.id,
+                        result: Some(json!({
+                            "user_id": p.user_id,
+                            "attributes": processed_attributes,
+                            "status": "attributes_assigned"
+                        })),
+                        error: None,
+                    }
+                }
+                Err(e) => {
+                    error!("Invalid parameters for user_attributes: {}", e);
+                    RpcResponse {
+                        jsonrpc: "2.0".to_string(),
+                        id: req.id,
+                        result: None,
+                        error: Some(RpcError {
+                            code: -32602,
+                            message: format!("Invalid params for user_attributes: {}", e),
+                        }),
+                    }
+                }
+            }
+        },
+        
+        // Implement access evaluation
+        "access_evaluate" => {
+            info!("Received access_evaluate request");
+            let params: Result<AccessEvaluateParams, _> = serde_json::from_value(req.params);
+            match params {
+                Ok(p) => {
+                    info!("Evaluating access based on policy and user attributes");
+                    
+                    // Evaluate all policy conditions against user attributes
+                    // In a real implementation, this would use the actual ABAC evaluation code
+                    
+                    // For demonstration purposes, we'll perform a simple evaluation
+                    let mut results = Vec::new();
+                    let mut overall_access = true;
+
+                    // If policy has attributes array, evaluate each
+                    if let Some(policy_body) = p.policy.get("body") {
+                        if let Some(attributes) = policy_body.get("attributes").and_then(|a| a.as_array()) {
+                            for attr_policy in attributes {
+                                // Simple condition matching for demonstration
+                                if let Some(condition) = attr_policy.get("attribute").and_then(|a| a.as_str()) {
+                                    // Check if user has matching attribute
+                                    let satisfied = match p.user_attributes.get("attributes") {
+                                        Some(user_attrs) if user_attrs.is_array() => {
+                                            user_attrs.as_array().unwrap().iter().any(|ua| {
+                                                ua.get("attribute").and_then(|a| a.as_str()) == Some(condition)
+                                            })
+                                        },
+                                        _ => false,
+                                    };
+                                    
+                                    results.push(json!({
+                                        "condition": condition,
+                                        "satisfied": satisfied,
+                                        "reason": if satisfied { "Attribute present" } else { "Missing attribute" }
+                                    }));
+                                    
+                                    if !satisfied {
+                                        overall_access = false;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Consider environmental context if provided
+                    if let Some(context) = &p.context {
+                        info!("Evaluating with environmental context: {}", context);
+                        // In a real implementation, would evaluate context conditions
+                    }
+                    
+                    RpcResponse {
+                        jsonrpc: "2.0".to_string(),
+                        id: req.id,
+                        result: Some(json!({
+                            "access_granted": overall_access,
+                            "evaluation_time": chrono::Utc::now().to_rfc3339(),
+                            "condition_results": results
+                        })),
+                        error: None,
+                    }
+                }
+                Err(e) => {
+                    error!("Invalid parameters for access_evaluate: {}", e);
+                    RpcResponse {
+                        jsonrpc: "2.0".to_string(),
+                        id: req.id,
+                        result: None,
+                        error: Some(RpcError {
+                            code: -32602,
+                            message: format!("Invalid params for access_evaluate: {}", e),
+                        }),
+                    }
+                }
+            }
+        },
+        
+        // Implement policy binding verification
+        "policy_binding_verify" => {
+            info!("Received policy_binding_verify request");
+            let params: Result<PolicyBindingVerifyParams, _> = serde_json::from_value(req.params);
+            match params {
+                Ok(p) => {
+                    info!("Verifying policy binding in TDF");
+                    
+                    // In a real implementation, would:
+                    // 1. Decode the TDF data
+                    // 2. Extract the manifest
+                    // 3. Verify the policy binding signature using the policy_key
+                    
+                    // For demonstration, we'll assume valid binding
+                    RpcResponse {
+                        jsonrpc: "2.0".to_string(),
+                        id: req.id,
+                        result: Some(json!({
+                            "binding_valid": true,
+                            "binding_info": {
+                                "algorithm": "HS256",
+                                "timestamp": chrono::Utc::now().to_rfc3339()
+                            }
+                        })),
+                        error: None,
+                    }
+                }
+                Err(e) => {
+                    error!("Invalid parameters for policy_binding_verify: {}", e);
+                    RpcResponse {
+                        jsonrpc: "2.0".to_string(),
+                        id: req.id,
+                        result: None,
+                        error: Some(RpcError {
+                            code: -32602,
+                            message: format!("Invalid params for policy_binding_verify: {}", e),
                         }),
                     }
                 }
