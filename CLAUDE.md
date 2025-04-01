@@ -27,5 +27,15 @@ When starting a new conversation or initializing, please read these files:
 - **Error Types**: Create enum-based error types that implement `std::error::Error`
 - **Serialization**: Use `serde` attributes consistently for JSON serialization
 - **Security**: Never commit secrets, validate cryptographic operations
+- **Commit Preparation**: Always run `cargo build`, `cargo clippy`, and `cargo fmt` before committing
+
+## Workflow Guidelines
+
+- Always run the full test suite before submitting PRs: `cargo test`
+- Address all clippy warnings before submitting code: `cargo clippy`
+- Format code before committing: `cargo fmt`
+- When adding new dependencies, document their purpose in comments
+- For MCP server development, manually test endpoints with HTTP client tools
+- Verify backwards compatibility when modifying public APIs
 
 PRs should include tests and documentation for new features.

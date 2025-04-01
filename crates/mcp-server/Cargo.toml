@@ -20,3 +20,4 @@ clap = { version = "4.5.4", features = ["derive"] }
 uuid = { version = "1.8.0", features = ["v4", "serde"] }
 base64 = "0.22.1"
 thiserror = "1.0.67"
+tempfile = "3.13.0"

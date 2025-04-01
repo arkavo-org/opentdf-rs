@@ -35,6 +35,65 @@ The Model Context Protocol (MCP) server provides an HTTP interface to access Ope
 cargo run --bin opentdf-mcp-server
 ```
 
+### MCP Server Examples
+
+Here are examples of how to interact with the MCP server using HTTP requests:
+
+#### Health Check
+```
+GET http://localhost:3000/mcp/health
+```
+
+#### Encrypt Data
+```
+POST http://localhost:3000/mcp/tdf/encrypt
+Content-Type: application/json
+
+{
+  "data": "SGVsbG8gV29ybGQ="  // Base64 encoded "Hello World"
+}
+```
+
+#### Create TDF Archive
+```
+POST http://localhost:3000/mcp/tdf/create
+Content-Type: application/json
+
+{
+  "data": "SGVsbG8gV29ybGQ=",  // Base64 encoded "Hello World"
+  "kas_url": "http://kas.example.com",
+  "policy": {
+    "uuid": "test-policy",
+    "body": {
+      "dataAttributes": ["CONFIDENTIAL"],
+      "dissem": ["user@example.com"]
+    }
+  }
+}
+```
+
+#### Read TDF Archive
+```
+POST http://localhost:3000/mcp/tdf/read
+Content-Type: application/json
+
+{
+  "tdf_data": "[Base64 encoded TDF archive]"
+}
+```
+
+#### Create Policy
+```
+POST http://localhost:3000/mcp/policy/create
+Content-Type: application/json
+
+{
+  "attributes": ["CONFIDENTIAL", "INTERNAL_ONLY"],
+  "dissemination": ["user@example.com"],
+  "expiry": "2025-12-31T23:59:59Z"
+}
+```
+
 ## Getting Started
 
 ### Installation
