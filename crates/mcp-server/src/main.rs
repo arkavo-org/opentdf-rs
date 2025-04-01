@@ -1,11 +1,11 @@
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tracing::{info, error};
+use tracing::{error, info};
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use uuid::Uuid;
-use base64::Engine;
 
 use opentdf::{TdfArchive, TdfArchiveBuilder, TdfEncryption, TdfManifest};
 
@@ -63,8 +63,8 @@ struct DecryptParams {
     encrypted_data: String,  // Base64 encoded encrypted data
     iv: String,              // Base64 encoded initialization vector
     encrypted_key: String,   // Base64 encoded wrapped key
-    policy_key_hash: String, // Hash of the policy key
-    policy_key: String,      // Base64 encoded policy key
+    policy_key_hash: String, // Hash of the policy key for validation
+    policy_key: String,      // Base64 encoded policy key for decryption
 }
 
 /// Parameters for policy creation
@@ -245,10 +245,10 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
                     }
                 }
             });
-            
+
             // Skip pretty printing to reduce log size
             info!("Sending initialize response with capabilities.tools as OBJECT");
-            
+
             RpcResponse {
                 jsonrpc: "2.0".to_string(),
                 id: req.id,
@@ -260,14 +260,14 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
         // List available tools - support both "listTools" and "tools/list" endpoints
         "listTools" | "tools/list" => {
             info!("Received listTools request");
-            
+
             // Create a simple array of tools with minimal information
             let _tools_array = json!([
                 {
                     "name": "tdf_create",
                     "description": "Creates a new TDF archive with encrypted data and policy binding",
                     "schema": {
-                        "type": "object", 
+                        "type": "object",
                         "properties": {
                             "data": {"type": "string"},
                             "kas_url": {"type": "string"},
@@ -279,7 +279,7 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
                     "name": "tdf_read",
                     "description": "Reads contents from a TDF archive, returning the manifest and payload",
                     "schema": {
-                        "type": "object", 
+                        "type": "object",
                         "properties": {
                             "tdf_data": {"type": "string"}
                         }
@@ -289,7 +289,7 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
                     "name": "encrypt",
                     "description": "Encrypts data using TDF encryption methods",
                     "schema": {
-                        "type": "object", 
+                        "type": "object",
                         "properties": {
                             "data": {"type": "string"}
                         }
@@ -299,7 +299,7 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
                     "name": "decrypt",
                     "description": "Decrypts TDF-encrypted data with the proper key",
                     "schema": {
-                        "type": "object", 
+                        "type": "object",
                         "properties": {
                             "encrypted_data": {"type": "string"},
                             "iv": {"type": "string"},
@@ -313,7 +313,7 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
                     "name": "policy_create",
                     "description": "Creates a new policy for TDF encryption with attributes and dissemination rules",
                     "schema": {
-                        "type": "object", 
+                        "type": "object",
                         "properties": {
                             "attributes": {"type": "array"},
                             "dissemination": {"type": "array"},
@@ -325,7 +325,7 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
                     "name": "policy_validate",
                     "description": "Validates a policy against a TDF archive, checking compatibility",
                     "schema": {
-                        "type": "object", 
+                        "type": "object",
                         "properties": {
                             "policy": {"type": "object"},
                             "tdf_data": {"type": "string"}
@@ -333,10 +333,10 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
                     }
                 }
             ]);
-            
+
             // Log the response with high visibility - use compact representation
             info!("!!! SENDING TOOLS/LIST RESPONSE WITH TOOLS AS OBJECT !!!");
-            
+
             // Format the response to match what the test script expects
             let tool_list = json!({
                 "tools": [
@@ -354,7 +354,7 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
                     }
                 ]
             });
-            
+
             RpcResponse {
                 jsonrpc: "2.0".to_string(),
                 id: req.id.clone(),
@@ -655,20 +655,21 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
             match params {
                 Ok(p) => {
                     // Decode the encrypted data
-                    let _encrypted_data = match base64::engine::general_purpose::STANDARD.decode(&p.encrypted_data) {
-                        Ok(data) => data,
-                        Err(e) => {
-                            return RpcResponse {
-                                jsonrpc: "2.0".to_string(),
-                                id: req.id,
-                                result: None,
-                                error: Some(RpcError {
-                                    code: -32602,
-                                    message: format!("Invalid base64 encrypted data: {}", e),
-                                }),
-                            };
-                        }
-                    };
+                    let _encrypted_data =
+                        match base64::engine::general_purpose::STANDARD.decode(&p.encrypted_data) {
+                            Ok(data) => data,
+                            Err(e) => {
+                                return RpcResponse {
+                                    jsonrpc: "2.0".to_string(),
+                                    id: req.id,
+                                    result: None,
+                                    error: Some(RpcError {
+                                        code: -32602,
+                                        message: format!("Invalid base64 encrypted data: {}", e),
+                                    }),
+                                };
+                            }
+                        };
 
                     // Decode the IV
                     let _iv = match base64::engine::general_purpose::STANDARD.decode(&p.iv) {
@@ -687,43 +688,47 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
                     };
 
                     // Decode the encrypted key
-                    let _encrypted_key = match base64::engine::general_purpose::STANDARD.decode(&p.encrypted_key) {
-                        Ok(data) => data,
-                        Err(e) => {
-                            return RpcResponse {
-                                jsonrpc: "2.0".to_string(),
-                                id: req.id,
-                                result: None,
-                                error: Some(RpcError {
-                                    code: -32602,
-                                    message: format!("Invalid base64 encrypted key: {}", e),
-                                }),
-                            };
-                        }
-                    };
+                    let _encrypted_key =
+                        match base64::engine::general_purpose::STANDARD.decode(&p.encrypted_key) {
+                            Ok(data) => data,
+                            Err(e) => {
+                                return RpcResponse {
+                                    jsonrpc: "2.0".to_string(),
+                                    id: req.id,
+                                    result: None,
+                                    error: Some(RpcError {
+                                        code: -32602,
+                                        message: format!("Invalid base64 encrypted key: {}", e),
+                                    }),
+                                };
+                            }
+                        };
 
                     // Decode the policy key
-                    let _policy_key = match base64::engine::general_purpose::STANDARD.decode(&p.policy_key) {
-                        Ok(data) => data,
-                        Err(e) => {
-                            return RpcResponse {
-                                jsonrpc: "2.0".to_string(),
-                                id: req.id,
-                                result: None,
-                                error: Some(RpcError {
-                                    code: -32602,
-                                    message: format!("Invalid base64 policy key: {}", e),
-                                }),
-                            };
-                        }
-                    };
+                    let _policy_key =
+                        match base64::engine::general_purpose::STANDARD.decode(&p.policy_key) {
+                            Ok(data) => data,
+                            Err(e) => {
+                                return RpcResponse {
+                                    jsonrpc: "2.0".to_string(),
+                                    id: req.id,
+                                    result: None,
+                                    error: Some(RpcError {
+                                        code: -32602,
+                                        message: format!("Invalid base64 policy key: {}", e),
+                                    }),
+                                };
+                            }
+                        };
 
                     // In a real implementation, we would:
-                    // 1. Use the policy key to unwrap the encrypted key
-                    // 2. Use the unwrapped key and IV to decrypt the data
+                    // 1. Validate the policy_key_hash against the policy
+                    info!("Processing with policy key hash: {}", p.policy_key_hash);
+                    // 2. Use the policy key to unwrap the encrypted key
+                    // 3. Use the unwrapped key and IV to decrypt the data
                     // For now, we'll just return a placeholder
                     let decrypted_data = "Sample decrypted data".as_bytes();
-                    
+
                     // Return the decrypted data
                     RpcResponse {
                         jsonrpc: "2.0".to_string(),
@@ -756,20 +761,21 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
             match params {
                 Ok(p) => {
                     // Decode the base64 TDF data
-                    let tdf_data = match base64::engine::general_purpose::STANDARD.decode(&p.tdf_data) {
-                        Ok(data) => data,
-                        Err(e) => {
-                            return RpcResponse {
-                                jsonrpc: "2.0".to_string(),
-                                id: req.id,
-                                result: None,
-                                error: Some(RpcError {
-                                    code: -32602,
-                                    message: format!("Invalid base64 TDF data: {}", e),
-                                }),
-                            };
-                        }
-                    };
+                    let tdf_data =
+                        match base64::engine::general_purpose::STANDARD.decode(&p.tdf_data) {
+                            Ok(data) => data,
+                            Err(e) => {
+                                return RpcResponse {
+                                    jsonrpc: "2.0".to_string(),
+                                    id: req.id,
+                                    result: None,
+                                    error: Some(RpcError {
+                                        code: -32602,
+                                        message: format!("Invalid base64 TDF data: {}", e),
+                                    }),
+                                };
+                            }
+                        };
 
                     // Create a temporary file for the TDF archive
                     let temp_file = match tempfile::NamedTempFile::new() {
@@ -842,7 +848,7 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
 
                     // Get the encrypted payload (in a real implementation, we would extract this from the archive)
                     let payload = "Sample encrypted payload".as_bytes();
-                    
+
                     // Return the manifest and payload
                     RpcResponse {
                         jsonrpc: "2.0".to_string(),
@@ -889,7 +895,7 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
                     // 1. Validate the policy
                     // 2. Generate a policy hash
                     let policy_hash = "sample_policy_hash_123456789";
-                    
+
                     // Return the policy and hash
                     RpcResponse {
                         jsonrpc: "2.0".to_string(),
@@ -921,12 +927,20 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
             info!("Received policy_validate request");
             let params: Result<PolicyValidateParams, _> = serde_json::from_value(req.params);
             match params {
-                Ok(_p) => {
+                Ok(p) => {
                     // In a real implementation, we would:
-                    // 1. Parse the TDF archive to extract its policy
-                    // 2. Compare the provided policy against the archive's policy
+                    // 1. Parse the TDF archive from p.tdf_data to extract its embedded policy
+                    // 2. Compare the provided policy (p.policy) against the archive's policy
+                    info!(
+                        "Validating policy with UUID: {}",
+                        p.policy
+                            .get("uuid")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown")
+                    );
+                    info!("Against TDF data of length: {}", p.tdf_data.len());
                     // 3. Determine compatibility
-                    
+
                     // For now, just return a successful result
                     RpcResponse {
                         jsonrpc: "2.0".to_string(),
@@ -955,19 +969,24 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
 
         // "initialized" notification from the client.
         "initialized" => {
-            info!("Received initialized notification with params: {}", serde_json::to_string_pretty(&req.params).unwrap());
-            
+            info!(
+                "Received initialized notification with params: {}",
+                serde_json::to_string_pretty(&req.params).unwrap()
+            );
             // Attempt to parse configuration from client
             if let Value::Object(params) = &req.params {
                 if let Some(config) = params.get("configuration") {
-                    info!("Client provided configuration: {}", serde_json::to_string_pretty(config).unwrap());
+                    info!(
+                        "Client provided configuration: {}",
+                        serde_json::to_string_pretty(config).unwrap()
+                    );
                 }
             }
-            
+
             // The "initialized" message can be either a notification or a request
             // Always respond if there's an ID (request) but skip response for null ID (notification)
             info!("Processed initialized message");
-            
+
             RpcResponse {
                 jsonrpc: "2.0".to_string(),
                 id: req.id,
@@ -998,9 +1017,8 @@ async fn main() {
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
         .with(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                "opentdf_mcp_server=info,tower_http=info".into()
-            }),
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "opentdf_mcp_server=info,tower_http=info".into()),
         )
         .init();
 
@@ -1010,13 +1028,16 @@ async fn main() {
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin);
     let mut stdout = tokio::io::stdout();
-    
+
     // Buffer for reading lines
     let mut line = String::new();
-    
+
     // Print a ready message to let client know we're listening
     info!("MCP Server ready - waiting for JSON-RPC messages");
-    stdout.write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"server/ready\",\"params\":{}}\r\n").await.unwrap();
+    stdout
+        .write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"server/ready\",\"params\":{}}\r\n")
+        .await
+        .unwrap();
     stdout.flush().await.unwrap();
 
     // Process each line from standard input
@@ -1025,32 +1046,32 @@ async fn main() {
             // EOF reached
             break;
         }
-        
+
         let trimmed = line.trim();
         if trimmed.is_empty() {
             line.clear();
             continue;
         }
-        
+
         // Don't crash on invalid JSON
         if !trimmed.starts_with('{') {
             info!("Ignoring non-JSON input: {}", trimmed);
             line.clear();
             continue;
         }
-        
+
         // Log the received message for debugging with high visibility
         info!("!!! RECEIVED JSON-RPC MESSAGE !!!: {}", line);
         let req: RpcRequest = match serde_json::from_str(&line) {
             Ok(r) => r,
             Err(e) => {
                 error!("Error parsing JSON: {}", e);
-                
+
                 // Try to extract the ID from the malformed request
                 let id = serde_json::from_str::<serde_json::Value>(&line)
                     .map(|v| v.get("id").cloned().unwrap_or(Value::Null))
                     .unwrap_or(Value::Null);
-                
+
                 let error_resp = RpcResponse {
                     jsonrpc: "2.0".to_string(),
                     id,
@@ -1071,28 +1092,30 @@ async fn main() {
         };
 
         info!("Processing request with method: '{}'", req.method);
-        
+
         // Use a timeout to prevent hanging
         // Check if this is a notification (no id) and needs special handling
         let is_notification = req.id == Value::Null;
-        
+
         // Process the request/notification
         let response = match tokio::time::timeout(
             tokio::time::Duration::from_secs(5), // 5 second timeout
-            process_request(req.clone())
-        ).await {
+            process_request(req.clone()),
+        )
+        .await
+        {
             Ok(resp) => resp,
             Err(_) => {
                 // Timeout occurred
                 error!("Request processing timed out for method: '{}'", req.method);
-                
+
                 // Don't try to respond to notifications with timeouts
                 if is_notification {
                     info!("Skipping timeout response for notification");
                     line.clear();
                     continue;
                 }
-                
+
                 RpcResponse {
                     jsonrpc: "2.0".to_string(),
                     id: req.id,
@@ -1104,19 +1127,25 @@ async fn main() {
                 }
             }
         };
-        
+
         // For notifications, we don't send a response
         // Check both the original request ID and the response ID (handling the initialized case)
         if is_notification || response.id == Value::Null {
-            info!("Skipping response for notification method: '{}'", req.method);
+            info!(
+                "Skipping response for notification method: '{}'",
+                req.method
+            );
             line.clear();
             continue;
         }
-        
+
         // Standard JSON-RPC responses must be compact, not pretty-printed
         let resp_str = serde_json::to_string(&response).unwrap();
-        info!("!!! SENDING RESPONSE FOR REQUEST METHOD '{}' !!!:\n{}", req.method, resp_str);
-        
+        info!(
+            "!!! SENDING RESPONSE FOR REQUEST METHOD '{}' !!!:\n{}",
+            req.method, resp_str
+        );
+
         // Send the response
         // Format JSON-RPC output with CRLF as used by some implementations
         if let Err(e) = stdout.write_all(resp_str.as_bytes()).await {
@@ -1124,23 +1153,23 @@ async fn main() {
             line.clear();
             continue;
         }
-        
+
         // Add CR+LF for proper JSON-RPC newline handling
         if let Err(e) = stdout.write_all(b"\r\n").await {
             error!("Failed to write newline: {}", e);
             line.clear();
             continue;
         }
-        
+
         if let Err(e) = stdout.flush().await {
             error!("Failed to flush stdout: {}", e);
             line.clear();
             continue;
         }
-        
+
         // Clear the line buffer for the next message
         line.clear();
-        
+
         // Do not send additional initialized notification from here
         // The client will send the initialized request and we'll respond to that
     }
