@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "opentdf": {
+      "type": "stdio",
+      "command": "cargo",
+      "args": [
+        "run",
+        "-p",
+        "opentdf-mcp-server"
+      ],
+      "env": {}
+    }
+  }
+}

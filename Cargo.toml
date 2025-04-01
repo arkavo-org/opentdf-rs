@@ -2,6 +2,9 @@
 name = "opentdf"
 version = "0.3.0"
 edition = "2021"
+description = "Rust implementation of OpenTDF (Trusted Data Format)"
+license = "Apache-2.0"
+repository = "https://github.com/arkavo-org/opentdf-rs"
 
 [dependencies]
 zip = "2.2.0"
@@ -14,3 +17,10 @@ thiserror = "1.0.67"
 tempfile = "3.13.0"
 aes-gcm = "0.10.3"
 rand = "0.8.5"
+
+[workspace]
+members = ["crates/mcp-server"]
+
+[features]
+default = []
+mcp = []
