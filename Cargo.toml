@@ -17,6 +17,8 @@ thiserror = "1.0.67"
 tempfile = "3.13.0"
 aes-gcm = "0.10.3"
 rand = "0.8.5"
+chrono = { version = "0.4.35", features = ["serde"] }
+uuid = { version = "1.8.0", features = ["v4", "serde"] }
 
 [workspace]
 members = ["crates/mcp-server"]

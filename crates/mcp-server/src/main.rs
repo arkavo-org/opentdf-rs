@@ -7,7 +7,10 @@ use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use uuid::Uuid;
 
-use opentdf::{TdfArchive, TdfArchiveBuilder, TdfEncryption, TdfManifest};
+use opentdf::{
+    AttributeCondition, AttributeIdentifier, AttributePolicy, AttributeValue, Operator, Policy,
+    PolicyBody, TdfArchive, TdfArchiveBuilder, TdfEncryption, TdfManifest,
+};
 
 /// JSON-RPC request type.
 #[derive(Deserialize, Clone)]
@@ -70,9 +73,10 @@ struct DecryptParams {
 /// Parameters for policy creation
 #[derive(Deserialize)]
 struct PolicyCreateParams {
-    attributes: Vec<String>,
+    attributes: Vec<Value>,
     dissemination: Vec<String>,
-    expiry: Option<String>,
+    valid_from: Option<String>,
+    valid_to: Option<String>,
 }
 
 /// Parameters for policy validation
@@ -241,6 +245,16 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
                             "description": "Reads a TDF",
                             "inputSchema": {"type": "object"},
                             "schema": {"type": "object"}  // Include both for compatibility
+                        },
+                        "policy_create": {
+                            "description": "Creates an attribute-based access control policy",
+                            "inputSchema": {"type": "object"},
+                            "schema": {"type": "object"}
+                        },
+                        "policy_validate": {
+                            "description": "Validates an attribute-based access control policy against a TDF",
+                            "inputSchema": {"type": "object"},
+                            "schema": {"type": "object"}
                         }
                     }
                 }
@@ -351,6 +365,18 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
                         "description": "Reads a TDF",
                         "inputSchema": {"type": "object"},
                         "schema": {"type": "object"}  // Include both for compatibility
+                    },
+                    {
+                        "name": "policy_create",
+                        "description": "Creates an attribute-based access control policy",
+                        "inputSchema": {"type": "object"},
+                        "schema": {"type": "object"}
+                    },
+                    {
+                        "name": "policy_validate",
+                        "description": "Validates an attribute-based access control policy against a TDF",
+                        "inputSchema": {"type": "object"},
+                        "schema": {"type": "object"}
                     }
                 ]
             });
@@ -426,22 +452,81 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
                     manifest.encryption_information.key_access[0].wrapped_key =
                         encrypted_payload.encrypted_key.clone();
 
-                    // Set policy
-                    match serde_json::to_string(&p.policy) {
-                        Ok(policy_str) => {
-                            // Since set_policy doesn't return a Result based on error message
-                            manifest.set_policy(&policy_str);
+                    // Convert JSON policy to our Policy struct
+                    let policy: Result<Policy, _> = serde_json::from_value(p.policy.clone());
+                    match policy {
+                        Ok(policy) => {
+                            // Set the policy on the manifest
+                            if let Err(e) = manifest.set_policy(&policy) {
+                                return RpcResponse {
+                                    jsonrpc: "2.0".to_string(),
+                                    id: req.id,
+                                    result: None,
+                                    error: Some(RpcError {
+                                        code: -32000,
+                                        message: format!("Failed to set policy: {}", e),
+                                    }),
+                                };
+                            }
+
+                            // Generate policy binding
+                            if let Err(e) = manifest.encryption_information.key_access[0]
+                                .generate_policy_binding(&policy, tdf_encryption.policy_key())
+                            {
+                                return RpcResponse {
+                                    jsonrpc: "2.0".to_string(),
+                                    id: req.id,
+                                    result: None,
+                                    error: Some(RpcError {
+                                        code: -32000,
+                                        message: format!(
+                                            "Failed to generate policy binding: {}",
+                                            e
+                                        ),
+                                    }),
+                                };
+                            }
                         }
                         Err(e) => {
-                            return RpcResponse {
-                                jsonrpc: "2.0".to_string(),
-                                id: req.id,
-                                result: None,
-                                error: Some(RpcError {
-                                    code: -32000,
-                                    message: format!("Failed to serialize policy: {}", e),
-                                }),
-                            };
+                            // If policy is not in our struct format, try legacy approach
+                            match serde_json::to_string(&p.policy) {
+                                Ok(policy_str) => {
+                                    // Fallback to raw policy string
+                                    manifest.set_policy_raw(&policy_str);
+
+                                    // Generate raw policy binding
+                                    if let Err(e) = manifest.encryption_information.key_access[0]
+                                        .generate_policy_binding_raw(
+                                            &policy_str,
+                                            tdf_encryption.policy_key(),
+                                        )
+                                    {
+                                        return RpcResponse {
+                                            jsonrpc: "2.0".to_string(),
+                                            id: req.id,
+                                            result: None,
+                                            error: Some(RpcError {
+                                                code: -32000,
+                                                message: format!(
+                                                    "Failed to generate raw policy binding: {}",
+                                                    e
+                                                ),
+                                            }),
+                                        };
+                                    }
+                                }
+                                Err(e) => {
+                                    return RpcResponse {
+                                        jsonrpc: "2.0".to_string(),
+                                        id: req.id,
+                                        result: None,
+                                        error: Some(RpcError {
+                                            code: -32000,
+                                            message: format!("Failed to serialize policy: {}", e),
+                                        }),
+                                    };
+                                }
+                            }
                         }
                     }
 
@@ -881,30 +966,120 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
             let params: Result<PolicyCreateParams, _> = serde_json::from_value(req.params);
             match params {
                 Ok(p) => {
-                    // Create a policy object
-                    let policy = json!({
-                        "uuid": Uuid::new_v4().to_string(),
-                        "body": {
-                            "dataAttributes": p.attributes,
-                            "dissem": p.dissemination,
-                            "expiry": p.expiry
+                    // Convert attribute definitions to AttributePolicy objects
+                    let mut attribute_policies = Vec::new();
+
+                    for attr_value in p.attributes {
+                        match convert_to_attribute_policy(attr_value) {
+                            Ok(policy) => attribute_policies.push(policy),
+                            Err(e) => {
+                                return RpcResponse {
+                                    jsonrpc: "2.0".to_string(),
+                                    id: req.id,
+                                    result: None,
+                                    error: Some(RpcError {
+                                        code: -32602,
+                                        message: format!("Invalid attribute policy: {}", e),
+                                    }),
+                                };
+                            }
                         }
-                    });
+                    }
 
-                    // In a real implementation, we would:
-                    // 1. Validate the policy
-                    // 2. Generate a policy hash
-                    let policy_hash = "sample_policy_hash_123456789";
+                    // Parse time constraints if provided
+                    let valid_from = match p.valid_from {
+                        Some(time_str) => match chrono::DateTime::parse_from_rfc3339(&time_str) {
+                            Ok(dt) => Some(dt.with_timezone(&chrono::Utc)),
+                            Err(e) => {
+                                return RpcResponse {
+                                    jsonrpc: "2.0".to_string(),
+                                    id: req.id,
+                                    result: None,
+                                    error: Some(RpcError {
+                                        code: -32602,
+                                        message: format!("Invalid valid_from date format: {}", e),
+                                    }),
+                                };
+                            }
+                        },
+                        None => None,
+                    };
 
-                    // Return the policy and hash
-                    RpcResponse {
-                        jsonrpc: "2.0".to_string(),
-                        id: req.id,
-                        result: Some(json!({
-                            "policy": policy,
-                            "policy_hash": policy_hash,
-                        })),
-                        error: None,
+                    let valid_to = match p.valid_to {
+                        Some(time_str) => match chrono::DateTime::parse_from_rfc3339(&time_str) {
+                            Ok(dt) => Some(dt.with_timezone(&chrono::Utc)),
+                            Err(e) => {
+                                return RpcResponse {
+                                    jsonrpc: "2.0".to_string(),
+                                    id: req.id,
+                                    result: None,
+                                    error: Some(RpcError {
+                                        code: -32602,
+                                        message: format!("Invalid valid_to date format: {}", e),
+                                    }),
+                                };
+                            }
+                        },
+                        None => None,
+                    };
+
+                    // Create the Policy object
+                    let policy = Policy {
+                        uuid: Uuid::new_v4().to_string(),
+                        valid_from,
+                        valid_to,
+                        body: PolicyBody {
+                            attributes: attribute_policies,
+                            dissem: p.dissemination,
+                        },
+                    };
+
+                    // Convert to JSON
+                    let policy_json = match serde_json::to_value(&policy) {
+                        Ok(json) => json,
+                        Err(e) => {
+                            return RpcResponse {
+                                jsonrpc: "2.0".to_string(),
+                                id: req.id,
+                                result: None,
+                                error: Some(RpcError {
+                                    code: -32000,
+                                    message: format!("Failed to serialize policy: {}", e),
+                                }),
+                            };
+                        }
+                    };
+
+                    // Generate a hash for the policy
+                    let mut hasher = sha2::Sha256::new();
+                    match serde_json::to_string(&policy) {
+                        Ok(policy_str) => {
+                            hasher.update(policy_str.as_bytes());
+                            let policy_hash =
+                                base64::engine::general_purpose::STANDARD.encode(hasher.finalize());
+
+                            // Return the policy and hash
+                            RpcResponse {
+                                jsonrpc: "2.0".to_string(),
+                                id: req.id,
+                                result: Some(json!({
+                                    "policy": policy_json,
+                                    "policy_hash": policy_hash,
+                                })),
+                                error: None,
+                            }
+                        }
+                        Err(e) => {
+                            return RpcResponse {
+                                jsonrpc: "2.0".to_string(),
+                                id: req.id,
+                                result: None,
+                                error: Some(RpcError {
+                                    code: -32000,
+                                    message: format!("Failed to hash policy: {}", e),
+                                }),
+                            };
+                        }
                     }
                 }
                 Err(e) => {
@@ -1009,6 +1184,139 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
             }
         }
     }
+}
+
+/// Helper function to convert JSON to AttributePolicy
+fn convert_to_attribute_policy(value: Value) -> Result<AttributePolicy, String> {
+    // Check if this is a logical operator
+    if let Some(op_type) = value.get("type") {
+        if let Some(op_type_str) = op_type.as_str() {
+            match op_type_str.to_uppercase().as_str() {
+                "AND" => {
+                    if let Some(conditions) = value.get("conditions") {
+                        if let Some(conditions_array) = conditions.as_array() {
+                            let mut parsed_conditions = Vec::new();
+                            for condition in conditions_array {
+                                parsed_conditions
+                                    .push(convert_to_attribute_policy(condition.clone())?);
+                            }
+                            return Ok(AttributePolicy::and(parsed_conditions));
+                        }
+                    }
+                    return Err("AND operator requires 'conditions' array".to_string());
+                }
+                "OR" => {
+                    if let Some(conditions) = value.get("conditions") {
+                        if let Some(conditions_array) = conditions.as_array() {
+                            let mut parsed_conditions = Vec::new();
+                            for condition in conditions_array {
+                                parsed_conditions
+                                    .push(convert_to_attribute_policy(condition.clone())?);
+                            }
+                            return Ok(AttributePolicy::or(parsed_conditions));
+                        }
+                    }
+                    return Err("OR operator requires 'conditions' array".to_string());
+                }
+                "NOT" => {
+                    if let Some(condition) = value.get("condition") {
+                        let parsed_condition = convert_to_attribute_policy(condition.clone())?;
+                        return Ok(AttributePolicy::not(parsed_condition));
+                    }
+                    return Err("NOT operator requires 'condition' field".to_string());
+                }
+                _ => return Err(format!("Unknown logical operator type: {}", op_type_str)),
+            }
+        }
+    }
+
+    // If not a logical operator, try to parse as a condition
+    let attribute = value
+        .get("attribute")
+        .and_then(|a| a.as_str())
+        .ok_or_else(|| "Missing 'attribute' field".to_string())?;
+
+    let operator = value
+        .get("operator")
+        .and_then(|o| o.as_str())
+        .ok_or_else(|| "Missing 'operator' field".to_string())?;
+
+    // Parse the attribute identifier
+    let attr_id = AttributeIdentifier::from_string(attribute)
+        .map_err(|e| format!("Invalid attribute identifier: {}", e))?;
+
+    // Parse the operator
+    let op = match operator.to_lowercase().as_str() {
+        "equals" => Operator::Equals,
+        "notequals" => Operator::NotEquals,
+        "greaterthan" => Operator::GreaterThan,
+        "greaterthanorequal" => Operator::GreaterThanOrEqual,
+        "lessthan" => Operator::LessThan,
+        "lessthanorequal" => Operator::LessThanOrEqual,
+        "contains" => Operator::Contains,
+        "in" => Operator::In,
+        "allof" => Operator::AllOf,
+        "anyof" => Operator::AnyOf,
+        "notin" => Operator::NotIn,
+        "minimumof" => Operator::MinimumOf,
+        "maximumof" => Operator::MaximumOf,
+        "present" => Operator::Present,
+        "notpresent" => Operator::NotPresent,
+        _ => return Err(format!("Unknown operator: {}", operator)),
+    };
+
+    // For present/notpresent, no value is needed
+    if op == Operator::Present || op == Operator::NotPresent {
+        return Ok(AttributePolicy::Condition(AttributeCondition::new(
+            attr_id, op, None,
+        )));
+    }
+
+    // For other operators, we need a value
+    let value_field = value
+        .get("value")
+        .ok_or_else(|| format!("Missing 'value' field for operator: {}", operator))?;
+
+    // Convert the value to an AttributeValue
+    let attr_value = if let Some(string_val) = value_field.as_str() {
+        AttributeValue::String(string_val.to_string())
+    } else if let Some(num_val) = value_field.as_f64() {
+        AttributeValue::Number(num_val)
+    } else if let Some(bool_val) = value_field.as_bool() {
+        AttributeValue::Boolean(bool_val)
+    } else if let Some(array_val) = value_field.as_array() {
+        // Check if it's a string array or number array
+        if array_val.iter().all(|v| v.is_string()) {
+            let strings: Vec<String> = array_val
+                .iter()
+                .map(|v| v.as_str().unwrap().to_string())
+                .collect();
+            AttributeValue::StringArray(strings)
+        } else if array_val.iter().all(|v| v.is_number()) {
+            let numbers: Vec<f64> = array_val.iter().map(|v| v.as_f64().unwrap()).collect();
+            AttributeValue::NumberArray(numbers)
+        } else {
+            return Err("Array values must be all strings or all numbers".to_string());
+        }
+    } else if value_field.is_object() {
+        // Try to parse as a DateTime if it has the right format
+        if let Some(dt_str) = value_field.get("datetime").and_then(|v| v.as_str()) {
+            match chrono::DateTime::parse_from_rfc3339(dt_str) {
+                Ok(dt) => AttributeValue::DateTime(dt.with_timezone(&chrono::Utc)),
+                Err(e) => return Err(format!("Invalid datetime format: {}", e)),
+            }
+        } else {
+            return Err("Unsupported object value format".to_string());
+        }
+    } else {
+        return Err("Unsupported value type".to_string());
+    };
+
+    Ok(AttributePolicy::Condition(AttributeCondition::new(
+        attr_id,
+        op,
+        Some(attr_value),
+    )))
 }
 
 #[tokio::main]

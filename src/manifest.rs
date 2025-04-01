@@ -1,3 +1,4 @@
+use crate::policy::{Policy, PolicyError};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use hmac::{
     digest::{KeyInit, MacError},
@@ -120,8 +121,12 @@ impl KeyAccess {
         }
     }
 
-    /// Generate policy binding using HMAC-SHA256
-    pub fn generate_policy_binding(&mut self, policy: &str, key: &[u8]) -> Result<(), MacError> {
+    /// Generate policy binding using HMAC-SHA256 from raw policy string
+    pub fn generate_policy_binding_raw(
+        &mut self,
+        policy: &str,
+        key: &[u8],
+    ) -> Result<(), MacError> {
         type HmacSha256 = Hmac<Sha256>;
 
         let policy_base64 = BASE64.encode(policy);
@@ -130,6 +135,20 @@ impl KeyAccess {
         let result = mac.finalize();
         self.policy_binding.hash = BASE64.encode(result.into_bytes());
         self.policy_binding.alg = "HS256".to_string();
+        Ok(())
+    }
+
+    /// Generate policy binding using HMAC-SHA256 from a Policy object
+    pub fn generate_policy_binding(
+        &mut self,
+        policy: &Policy,
+        key: &[u8],
+    ) -> Result<(), PolicyError> {
+        let policy_json = policy.to_json()?;
+        self.generate_policy_binding_raw(&policy_json, key)
+            .map_err(|e| {
+                PolicyError::EvaluationError(format!("Failed to generate policy binding: {}", e))
+            })?;
         Ok(())
     }
 
@@ -189,16 +208,36 @@ impl TdfManifest {
         serde_json::to_string_pretty(self)
     }
 
-    /// Set the policy for the manifest
-    pub fn set_policy(&mut self, policy: &str) {
+    /// Set the policy for the manifest using a raw string
+    pub fn set_policy_raw(&mut self, policy: &str) {
         self.encryption_information.policy = BASE64.encode(policy);
     }
 
-    /// Get the decoded policy from the manifest
-    pub fn get_policy(&self) -> Result<String, base64::DecodeError> {
+    /// Get the decoded policy from the manifest as a raw string
+    pub fn get_policy_raw(&self) -> Result<String, base64::DecodeError> {
         let bytes = BASE64.decode(&self.encryption_information.policy)?;
         String::from_utf8(bytes)
             .map_err(|err| base64::DecodeError::InvalidByte(err.utf8_error().valid_up_to(), 0))
+    }
+
+    /// Set the policy for the manifest using a Policy object
+    pub fn set_policy(&mut self, policy: &Policy) -> Result<(), PolicyError> {
+        let policy_json = policy.to_json()?;
+        self.set_policy_raw(&policy_json);
+        Ok(())
+    }
+
+    /// Get the policy from the manifest as a Policy object
+    pub fn get_policy(&self) -> Result<Policy, PolicyError> {
+        let policy_json = match self.get_policy_raw() {
+            Ok(json) => json,
+            Err(e) => {
+                return Err(PolicyError::SerializationError(serde_json::Error::io(
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()),
+                )))
+            }
+        };
+        Policy::from_json(&policy_json)
     }
 
     /// Add a segment to the manifest
@@ -315,12 +354,33 @@ mod tests {
     }
 
     #[test]
-    fn test_key_access_policy_binding() {
+    fn test_key_access_policy_binding_raw() {
         let mut key_access = KeyAccess::new("http://kas.example.com:4000".to_string());
         let policy = r#"{"uuid":"test","body":{"attributes":[],"dissem":["user@example.com"]}}"#;
         let key = b"test-key-for-hmac";
 
-        key_access.generate_policy_binding(policy, key).unwrap();
+        key_access.generate_policy_binding_raw(policy, key).unwrap();
+        assert!(!key_access.policy_binding.hash.is_empty());
+        assert_eq!(key_access.policy_binding.alg, "HS256");
+    }
+
+    #[test]
+    fn test_key_access_policy_binding_object() {
+        use crate::policy::{Policy, PolicyBody};
+
+        let mut key_access = KeyAccess::new("http://kas.example.com:4000".to_string());
+        let policy = Policy {
+            uuid: "test".to_string(),
+            valid_from: None,
+            valid_to: None,
+            body: PolicyBody {
+                attributes: vec![],
+                dissem: vec!["user@example.com".to_string()],
+            },
+        };
+        let key = b"test-key-for-hmac";
+
+        key_access.generate_policy_binding(&policy, key).unwrap();
         assert!(!key_access.policy_binding.hash.is_empty());
         assert_eq!(key_access.policy_binding.alg, "HS256");
     }
@@ -343,16 +403,44 @@ mod tests {
     }
 
     #[test]
-    fn test_policy_encoding() {
+    fn test_policy_raw_encoding() {
         let mut manifest = TdfManifest::new(
             "0.payload".to_string(),
             "http://kas.example.com:4000".to_string(),
         );
 
         let policy = r#"{"uuid":"test","body":{"attributes":[],"dissem":["user@example.com"]}}"#;
-        manifest.set_policy(policy);
+        manifest.set_policy_raw(policy);
 
-        let decoded_policy = manifest.get_policy().unwrap();
+        let decoded_policy = manifest.get_policy_raw().unwrap();
         assert_eq!(policy, decoded_policy);
+    }
+
+    #[test]
+    fn test_policy_object_encoding() {
+        use crate::policy::{Policy, PolicyBody};
+
+        let mut manifest = TdfManifest::new(
+            "0.payload".to_string(),
+            "http://kas.example.com:4000".to_string(),
+        );
+
+        // Create a simple policy object
+        let policy = Policy {
+            uuid: "test".to_string(),
+            valid_from: None,
+            valid_to: None,
+            body: PolicyBody {
+                attributes: vec![],
+                dissem: vec!["user@example.com".to_string()],
+            },
+        };
+
+        manifest.set_policy(&policy).unwrap();
+
+        // Retrieve and verify
+        let retrieved_policy = manifest.get_policy().unwrap();
+        assert_eq!(policy.uuid, retrieved_policy.uuid);
+        assert_eq!(policy.body.dissem, retrieved_policy.body.dissem);
     }
 }

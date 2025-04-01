@@ -112,3 +112,52 @@ P3 - Future consideration*
 - [P3] Extend C2PA integration with advanced provenance verification features
 - [P3] Support multi-format C2PA manifests across diverse media types
 - [P3] Implement quantum-resistant cryptographic algorithms as standards mature
+
+## Detailed Requirements
+
+### Attribute-Based Access Control (ABAC)
+
+#### Overview
+Attribute-Based Access Control (ABAC) extends the TDF security model by evaluating access based on attributes associated with users, resources, actions, and environment rather than simple identity-based permissions.
+
+#### Business Value
+- Enables fine-grained, context-aware access control policies
+- Supports dynamic adaptation to changing security requirements
+- Reduces administrative overhead through policy-based automation
+- Enhances compliance with complex regulatory frameworks
+
+#### Core Requirements
+1. **Attribute Definition and Structure**
+   - Support attribute namespace definitions for organization-specific attributes
+   - Enable hierarchical attribute structures (e.g., classification levels)
+   - Support attribute inheritance and override mechanisms
+   - Allow for attribute value types including strings, numbers, booleans, and dates
+
+2. **Policy Expression**
+   - Support logical operators for attribute evaluation (AND, OR, NOT)
+   - Enable comparison operators for values (equals, greater than, less than, etc.)
+   - Allow time-based constraints (valid from/to dates)
+   - Support attribute presence/absence checks
+
+3. **Policy Binding and Integrity**
+   - Cryptographically bind attribute requirements to protected data
+   - Prevent tampering with attribute requirements
+   - Validate policy integrity before granting access
+
+4. **Attribute Resolution and Verification**
+   - Retrieve and validate user attributes from authoritative sources
+   - Support attribute attestation through verifiable credentials
+   - Enable verification of environmental attributes (time, location, network)
+   - Cache verified attributes with appropriate time-to-live settings
+
+5. **Integration Points**
+   - Extend TDF manifest format to include attribute-based policies
+   - Enhance Key Access Server (KAS) to evaluate attribute-based policies
+   - Support attribute exchange with external identity providers
+   - Provide policy evaluation plugins for custom attribute handling
+
+6. **Audit and Reporting**
+   - Log all attribute evaluations for access decisions
+   - Record attribute source and verification information
+   - Provide reporting on attribute usage patterns
+   - Support compliance verification through audit trails
