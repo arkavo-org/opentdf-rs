@@ -1,4 +1,4 @@
-name: BDD LLM MCP Test Suite
+name: Test
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
     branches: [ main ]
 
 jobs:
-  llm-mcp-tests:
+  BDD:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
