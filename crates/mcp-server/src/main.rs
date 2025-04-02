@@ -1362,7 +1362,25 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                 let params: Result<AccessEvaluateParams, _> = serde_json::from_value(req.params);
                 match params {
                     Ok(p) => {
-                        info!("Evaluating access based on policy and user attributes");
+                        // Start structured logging for policy evaluation
+                        let policy_uuid = p
+                            .policy
+                            .get("uuid")
+                            .and_then(|u| u.as_str())
+                            .unwrap_or("unknown");
+
+                        let user_id = p
+                            .user_attributes
+                            .get("user_id")
+                            .and_then(|u| u.as_str())
+                            .unwrap_or("unknown");
+
+                        info!(
+                            policy_uuid = policy_uuid,
+                            user_id = user_id,
+                            evaluation_type = "abac",
+                            "Starting attribute-based access evaluation"
+                        );
 
                         // Evaluate all policy conditions against user attributes
                         // In a real implementation, this would use the actual ABAC evaluation code
@@ -1408,9 +1426,23 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
 
                         // Consider environmental context if provided
                         if let Some(context) = &p.context {
-                            info!("Evaluating with environmental context: {}", context);
+                            info!(
+                                policy_uuid = policy_uuid,
+                                user_id = user_id,
+                                "Evaluating with environmental context: {}",
+                                context
+                            );
                             // In a real implementation, would evaluate context conditions
                         }
+
+                        // Log the final evaluation result
+                        info!(
+                            policy_uuid = policy_uuid,
+                            user_id = user_id,
+                            access_granted = overall_access,
+                            condition_count = results.len(),
+                            "Access evaluation complete"
+                        );
 
                         RpcResponse {
                             jsonrpc: "2.0".to_string(),
@@ -1445,9 +1477,17 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                     serde_json::from_value(req.params);
                 match params {
                     Ok(p) => {
+                        // Calculate TDF data hash for logging
+                        let mut hasher = sha2::Sha256::new();
+                        hasher.update(p.tdf_data.as_bytes());
+                        let tdf_hash =
+                            base64::engine::general_purpose::STANDARD.encode(hasher.finalize());
+
                         info!(
-                            "Verifying policy binding in TDF with data length: {}",
-                            p.tdf_data.len()
+                            tdf_size_bytes = p.tdf_data.len(),
+                            tdf_hash = &tdf_hash[0..16], // First 16 chars of hash for logging
+                            operation = "policy_binding_verify",
+                            "Starting policy binding verification"
                         );
 
                         // In a real implementation, would:
