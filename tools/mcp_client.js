@@ -63,6 +63,40 @@ process.stdin.on('data', (chunk) => {
   }
 });
 
+// Initialize client
+async function initialize() {
+  try {
+    console.error('Initializing MCP client...');
+    // First request the list of available tools
+    const toolsResponse = await sendRequest('listTools');
+    if (toolsResponse && toolsResponse.tools) {
+      console.error(`Available tools: ${toolsResponse.tools.map(t => t.name).join(', ')}`);
+      return true;
+    } else {
+      console.error('Error: Failed to retrieve tool list');
+      return false;
+    }
+  } catch (error) {
+    console.error(`Error initializing client: ${error.message}`);
+    return false;
+  }
+}
+
+// Generic function to call any MCP tool
+async function callTool(toolName, params = {}) {
+  try {
+    // Use mcp__opentdf__ prefix for all tools
+    const fullToolName = `mcp__opentdf__${toolName}`;
+    console.error(`Calling tool: ${fullToolName}`);
+    
+    const result = await sendRequest(fullToolName, params);
+    return result;
+  } catch (error) {
+    console.error(`Error calling tool ${toolName}: ${error.message}`);
+    throw error;
+  }
+}
+
 // Main function to create a TDF file
 async function createTdf(inputFile, outputFile, kasUrl) {
   try {
@@ -85,8 +119,8 @@ async function createTdf(inputFile, outputFile, kasUrl) {
       }
     };
     
-    // Create TDF
-    const result = await sendRequest("mcp__opentdf__tdf_create", {
+    // Create TDF using the generic callTool function
+    const result = await callTool('tdf_create', {
       data: base64Data,
       kas_url: kasUrl || "https://kas.example.com",
       policy: policy
@@ -116,8 +150,8 @@ async function readTdf(tdfFile) {
     const fileData = fs.readFileSync(tdfFile);
     const base64Data = fileData.toString('base64');
     
-    // Read TDF
-    const result = await sendRequest("mcp__opentdf__tdf_read", {
+    // Read TDF using the generic callTool function
+    const result = await callTool('tdf_read', {
       tdf_data: base64Data
     });
     
@@ -156,7 +190,14 @@ if (command === 'create') {
   const outputFile = args[2];
   const kasUrl = args[3];
   
-  createTdf(inputFile, outputFile, kasUrl)
+  initialize()
+    .then(success => {
+      if (success) {
+        return createTdf(inputFile, outputFile, kasUrl);
+      } else {
+        return false;
+      }
+    })
     .then(success => process.exit(success ? 0 : 1));
 } else if (command === 'read') {
   if (args.length < 2) {
@@ -166,12 +207,33 @@ if (command === 'create') {
   
   const tdfFile = args[1];
   
-  readTdf(tdfFile)
+  initialize()
+    .then(success => {
+      if (success) {
+        return readTdf(tdfFile);
+      } else {
+        return false;
+      }
+    })
     .then(success => process.exit(success ? 0 : 1));
+} else if (command === 'test-abac') {
+  // Load and run the ABAC test script
+  require('./test-scripts/test-abac-mcp.js');
 } else {
   console.error('Usage: node mcp_client.js <command> [options]');
   console.error('Commands:');
   console.error('  create <input_file> <output_tdf> [kas_url]  Create a TDF file');
   console.error('  read <tdf_file>                             Read a TDF file');
+  console.error('  test-abac                                   Run ABAC tests');
   process.exit(1);
+}
+
+// Export functions if being used as a module
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    initialize,
+    callTool,
+    createTdf,
+    readTdf
+  };
 }

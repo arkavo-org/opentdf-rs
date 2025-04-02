@@ -3,6 +3,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value}; // Added Map
 use sha2::Digest;
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -63,12 +64,12 @@ struct EncryptParams {
 
 #[derive(Deserialize, Debug)]
 struct DecryptParams {
-    encrypted_data: String,  // Base64 encoded encrypted data
-    iv: String,              // Base64 encoded initialization vector
-    encrypted_key: String,   // Base64 encoded wrapped key
-    #[allow(dead_code)]      // Used in some implementations but not in our placeholder
+    encrypted_data: String, // Base64 encoded encrypted data
+    iv: String,             // Base64 encoded initialization vector
+    encrypted_key: String,  // Base64 encoded wrapped key
+    #[allow(dead_code)] // Used in some implementations but not in our placeholder
     policy_key_hash: String, // Hash of the policy key for validation
-    policy_key: String,      // Base64 encoded policy key for decryption
+    policy_key: String,     // Base64 encoded policy key for decryption
 }
 
 #[derive(Deserialize, Debug)]
@@ -123,18 +124,23 @@ struct PolicyBindingVerifyParams {
 }
 // --- Struct Definitions End ---
 
-
 // --- Helper Functions ---
 fn create_error_response(id: Value, code: i32, message: String) -> RpcResponse {
     error!("Responding with error: code={}, message={}", code, message);
     RpcResponse {
-        jsonrpc: "2.0".to_string(), id, result: None, error: Some(RpcError { code, message }),
+        jsonrpc: "2.0".to_string(),
+        id,
+        result: None,
+        error: Some(RpcError { code, message }),
     }
 }
 
 fn create_success_response(id: Value, result: Value) -> RpcResponse {
     RpcResponse {
-        jsonrpc: "2.0".to_string(), id, result: Some(result), error: None,
+        jsonrpc: "2.0".to_string(),
+        id,
+        result: Some(result),
+        error: None,
     }
 }
 // --- Helper Functions End ---
@@ -147,7 +153,11 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
         debug!("Processing request: {:?}", req);
 
         if req.jsonrpc != "2.0" {
-            return create_error_response(req.id, -32600, "Invalid Request: jsonrpc must be \"2.0\"".to_string());
+            return create_error_response(
+                req.id,
+                -32600,
+                "Invalid Request: jsonrpc must be \"2.0\"".to_string(),
+            );
         }
 
         match req.method.as_str() {
@@ -199,19 +209,28 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                 if let Value::Object(tool_map) = &tool_schemas {
                     for (tool_name, tool_def) in tool_map {
                         if let Value::Object(def) = tool_def {
-                            let description = def.get("description").and_then(|d| d.as_str()).unwrap_or("");
-                            let schema = def.get("schema").cloned().unwrap_or_else(|| json!({"type": "object"}));
-                            tools_object.insert(tool_name.clone(), json!({
-                                "description": description,
-                                "inputSchema": schema.clone(),
-                                "schema": schema
-                            }));
+                            let description = def
+                                .get("description")
+                                .and_then(|d| d.as_str())
+                                .unwrap_or("");
+                            let schema = def
+                                .get("schema")
+                                .cloned()
+                                .unwrap_or_else(|| json!({"type": "object"}));
+                            tools_object.insert(
+                                tool_name.clone(),
+                                json!({
+                                    "description": description,
+                                    "inputSchema": schema.clone(),
+                                    "schema": schema
+                                }),
+                            );
                         }
                     }
                 }
 
                 let response_payload = json!({
-                    "serverInfo": {"name": "opentdf-mcp-rust","version": "1.1.3"}, // Version updated
+                    "serverInfo": {"name": "opentdf-mcp-rust","version": "1.1.4"}, // Version updated
                     "protocolVersion": "2024-11-05", // Keep this for now
                     "capabilities": {
                         "tools": Value::Object(tools_object) // Use the object here
@@ -240,13 +259,19 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                     "access_evaluate": {"description": "Evaluates access (placeholder)","schema": {"type": "object","properties": {"policy": {"type": "object"},"user_attributes": {"type": "object"}},"required": ["policy", "user_attributes"]}},
                     "policy_binding_verify": {"description": "Verifies binding (placeholder)","schema": {"type": "object","properties": {"tdf_data": {"type": "string"},"policy_key": {"type": "string"}},"required": ["tdf_data", "policy_key"]}}
                 });
-                
+
                 let mut tools_array = Vec::new(); // Keep as array here
                 if let Value::Object(tool_map) = &tool_schemas {
                     for (tool_name, tool_def) in tool_map {
                         if let Value::Object(def) = tool_def {
-                            let description = def.get("description").and_then(|d| d.as_str()).unwrap_or("");
-                            let schema = def.get("schema").cloned().unwrap_or_else(|| json!({"type": "object"}));
+                            let description = def
+                                .get("description")
+                                .and_then(|d| d.as_str())
+                                .unwrap_or("");
+                            let schema = def
+                                .get("schema")
+                                .cloned()
+                                .unwrap_or_else(|| json!({"type": "object"}));
                             tools_array.push(json!({ // Push object with name inside
                                 "name": tool_name,
                                 "description": description,
@@ -256,7 +281,10 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                         }
                     }
                 }
-                info!("Sending tools/list response with tools ARRAY ({} tools)", tools_array.len());
+                info!(
+                    "Sending tools/list response with tools ARRAY ({} tools)",
+                    tools_array.len()
+                );
                 create_success_response(req.id, json!({ "tools": tools_array }))
             }
 
@@ -267,23 +295,64 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                     Ok(p) => {
                         debug!("Parsed tdf_create params: {:?}", p);
                         let data = match base64::engine::general_purpose::STANDARD.decode(&p.data) {
-                            Ok(data) => data, Err(e) => return create_error_response(req.id, -32602, format!("Invalid base64 data: {}", e)),
+                            Ok(data) => data,
+                            Err(e) => {
+                                return create_error_response(
+                                    req.id,
+                                    -32602,
+                                    format!("Invalid base64 data: {}", e),
+                                )
+                            }
                         };
                         let tdf_encryption = match TdfEncryption::new() {
-                            Ok(enc) => enc, Err(e) => return create_error_response(req.id, -32000, format!("Failed to initialize encryption: {}", e)),
+                            Ok(enc) => enc,
+                            Err(e) => {
+                                return create_error_response(
+                                    req.id,
+                                    -32000,
+                                    format!("Failed to initialize encryption: {}", e),
+                                )
+                            }
                         };
                         let encrypted_payload = match tdf_encryption.encrypt(&data) {
-                            Ok(payload) => payload, Err(e) => return create_error_response(req.id, -32000, format!("Failed to encrypt data: {}", e)),
+                            Ok(payload) => payload,
+                            Err(e) => {
+                                return create_error_response(
+                                    req.id,
+                                    -32000,
+                                    format!("Failed to encrypt data: {}", e),
+                                )
+                            }
                         };
-                        let mut manifest = TdfManifest::new("0.payload".to_string(), p.kas_url.clone());
-                        manifest.encryption_information.method.algorithm = "AES-256-GCM".to_string();
+                        let mut manifest =
+                            TdfManifest::new("0.payload".to_string(), p.kas_url.clone());
+                        manifest.encryption_information.method.algorithm =
+                            "AES-256-GCM".to_string();
                         manifest.encryption_information.method.iv = encrypted_payload.iv.clone();
-                        manifest.encryption_information.key_access[0].wrapped_key = encrypted_payload.encrypted_key.clone();
+                        manifest.encryption_information.key_access[0].wrapped_key =
+                            encrypted_payload.encrypted_key.clone();
 
                         match serde_json::from_value::<Policy>(p.policy.clone()) {
                             Ok(policy) => {
-                                if let Err(e) = manifest.set_policy(&policy) { return create_error_response(req.id, -32000, format!("Failed to set structured policy: {}", e)); }
-                                if let Err(e) = manifest.encryption_information.key_access[0].generate_policy_binding(&policy, tdf_encryption.policy_key()) { return create_error_response(req.id, -32000, format!("Failed to generate structured policy binding: {}", e)); }
+                                if let Err(e) = manifest.set_policy(&policy) {
+                                    return create_error_response(
+                                        req.id,
+                                        -32000,
+                                        format!("Failed to set structured policy: {}", e),
+                                    );
+                                }
+                                if let Err(e) = manifest.encryption_information.key_access[0]
+                                    .generate_policy_binding(&policy, tdf_encryption.policy_key())
+                                {
+                                    return create_error_response(
+                                        req.id,
+                                        -32000,
+                                        format!(
+                                            "Failed to generate structured policy binding: {}",
+                                            e
+                                        ),
+                                    );
+                                }
                                 info!("Applied structured policy and binding.");
                             }
                             Err(e_struct) => {
@@ -291,27 +360,109 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                                 match serde_json::to_string(&p.policy) {
                                     Ok(policy_str) => {
                                         manifest.set_policy_raw(&policy_str);
-                                        if let Err(e) = manifest.encryption_information.key_access[0].generate_policy_binding_raw(&policy_str, tdf_encryption.policy_key()) { return create_error_response(req.id, -32000, format!("Failed to generate raw policy binding: {}", e)); }
+                                        if let Err(e) = manifest.encryption_information.key_access
+                                            [0]
+                                        .generate_policy_binding_raw(
+                                            &policy_str,
+                                            tdf_encryption.policy_key(),
+                                        ) {
+                                            return create_error_response(
+                                                req.id,
+                                                -32000,
+                                                format!(
+                                                    "Failed to generate raw policy binding: {}",
+                                                    e
+                                                ),
+                                            );
+                                        }
                                         info!("Applied raw policy string and binding.");
                                     }
-                                    Err(e_str) => return create_error_response(req.id, -32000, format!("Failed to serialize fallback policy: {}", e_str)),
+                                    Err(e_str) => {
+                                        return create_error_response(
+                                            req.id,
+                                            -32000,
+                                            format!(
+                                                "Failed to serialize fallback policy: {}",
+                                                e_str
+                                            ),
+                                        )
+                                    }
                                 }
                             }
                         }
-                        let temp_file = match tempfile::NamedTempFile::new() { Ok(file) => file, Err(e) => return create_error_response(req.id, -32000, format!("Failed to create temp file: {}", e)) };
+                        let temp_file = match tempfile::NamedTempFile::new() {
+                            Ok(file) => file,
+                            Err(e) => {
+                                return create_error_response(
+                                    req.id,
+                                    -32000,
+                                    format!("Failed to create temp file: {}", e),
+                                )
+                            }
+                        };
                         let temp_path = temp_file.path().to_owned();
-                        let mut builder = match TdfArchiveBuilder::new(&temp_path) { Ok(builder) => builder, Err(e) => return create_error_response(req.id, -32000, format!("Failed to create TDF archive builder: {}", e)) };
-                        let encrypted_data_bytes = match base64::engine::general_purpose::STANDARD.decode(&encrypted_payload.ciphertext) { Ok(data) => data, Err(e) => return create_error_response(req.id, -32000, format!("Failed to decode ciphertext for archive: {}", e)) };
-                        if let Err(e) = builder.add_entry(&manifest, &encrypted_data_bytes, 0) { return create_error_response(req.id, -32000, format!("Failed to add entry to archive: {}", e)); }
-                        if let Err(e) = builder.finish() { return create_error_response(req.id, -32000, format!("Failed to finalize archive: {}", e)); }
-                        let tdf_data_bytes = match std::fs::read(&temp_path) { Ok(data) => data, Err(e) => { let _ = std::fs::remove_file(&temp_path); return create_error_response(req.id, -32000, format!("Failed to read created TDF file: {}", e)); } };
+                        let mut builder = match TdfArchiveBuilder::new(&temp_path) {
+                            Ok(builder) => builder,
+                            Err(e) => {
+                                return create_error_response(
+                                    req.id,
+                                    -32000,
+                                    format!("Failed to create TDF archive builder: {}", e),
+                                )
+                            }
+                        };
+                        let encrypted_data_bytes = match base64::engine::general_purpose::STANDARD
+                            .decode(&encrypted_payload.ciphertext)
+                        {
+                            Ok(data) => data,
+                            Err(e) => {
+                                return create_error_response(
+                                    req.id,
+                                    -32000,
+                                    format!("Failed to decode ciphertext for archive: {}", e),
+                                )
+                            }
+                        };
+                        if let Err(e) = builder.add_entry(&manifest, &encrypted_data_bytes, 0) {
+                            return create_error_response(
+                                req.id,
+                                -32000,
+                                format!("Failed to add entry to archive: {}", e),
+                            );
+                        }
+                        if let Err(e) = builder.finish() {
+                            return create_error_response(
+                                req.id,
+                                -32000,
+                                format!("Failed to finalize archive: {}", e),
+                            );
+                        }
+                        let tdf_data_bytes = match std::fs::read(&temp_path) {
+                            Ok(data) => data,
+                            Err(e) => {
+                                let _ = std::fs::remove_file(&temp_path);
+                                return create_error_response(
+                                    req.id,
+                                    -32000,
+                                    format!("Failed to read created TDF file: {}", e),
+                                );
+                            }
+                        };
                         let _ = std::fs::remove_file(&temp_path);
-                        let tdf_base64 = base64::engine::general_purpose::STANDARD.encode(&tdf_data_bytes);
+                        let tdf_base64 =
+                            base64::engine::general_purpose::STANDARD.encode(&tdf_data_bytes);
                         let id = Uuid::new_v4().to_string();
-                        info!("Successfully created TDF ({} bytes), returning base64.", tdf_data_bytes.len());
+                        info!(
+                            "Successfully created TDF ({} bytes), returning base64.",
+                            tdf_data_bytes.len()
+                        );
                         create_success_response(req.id, json!({"id": id, "tdf_data": tdf_base64}))
                     }
-                    Err(e) => create_error_response(req.id, -32602, format!("Invalid params for tdf_create: {}", e)),
+                    Err(e) => create_error_response(
+                        req.id,
+                        -32602,
+                        format!("Invalid params for tdf_create: {}", e),
+                    ),
                 }
             }
 
@@ -320,15 +471,49 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                 match serde_json::from_value::<EncryptParams>(req.params) {
                     Ok(p) => {
                         debug!("Parsed encrypt params: {:?}", p);
-                        let data = match base64::engine::general_purpose::STANDARD.decode(&p.data) { Ok(data) => data, Err(e) => return create_error_response(req.id, -32602, format!("Invalid base64 data: {}", e)) };
-                        let tdf_encryption = match TdfEncryption::new() { Ok(enc) => enc, Err(e) => return create_error_response(req.id, -32000, format!("Failed to initialize encryption: {}", e)) };
-                        let encrypted_payload = match tdf_encryption.encrypt(&data) { Ok(payload) => payload, Err(e) => return create_error_response(req.id, -32000, format!("Failed to encrypt data: {}", e)) };
+                        let data = match base64::engine::general_purpose::STANDARD.decode(&p.data) {
+                            Ok(data) => data,
+                            Err(e) => {
+                                return create_error_response(
+                                    req.id,
+                                    -32602,
+                                    format!("Invalid base64 data: {}", e),
+                                )
+                            }
+                        };
+                        let tdf_encryption = match TdfEncryption::new() {
+                            Ok(enc) => enc,
+                            Err(e) => {
+                                return create_error_response(
+                                    req.id,
+                                    -32000,
+                                    format!("Failed to initialize encryption: {}", e),
+                                )
+                            }
+                        };
+                        let encrypted_payload = match tdf_encryption.encrypt(&data) {
+                            Ok(payload) => payload,
+                            Err(e) => {
+                                return create_error_response(
+                                    req.id,
+                                    -32000,
+                                    format!("Failed to encrypt data: {}", e),
+                                )
+                            }
+                        };
                         info!("Successfully encrypted data.");
-                        create_success_response(req.id, json!({
-                            "ciphertext": encrypted_payload.ciphertext, "iv": encrypted_payload.iv, "encrypted_key": encrypted_payload.encrypted_key,
-                        }))
+                        create_success_response(
+                            req.id,
+                            json!({
+                                "ciphertext": encrypted_payload.ciphertext, "iv": encrypted_payload.iv, "encrypted_key": encrypted_payload.encrypted_key,
+                            }),
+                        )
                     }
-                    Err(e) => create_error_response(req.id, -32602, format!("Invalid params for encrypt: {}", e)),
+                    Err(e) => create_error_response(
+                        req.id,
+                        -32602,
+                        format!("Invalid params for encrypt: {}", e),
+                    ),
                 }
             }
 
@@ -338,38 +523,80 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                     Ok(p) => {
                         debug!("Parsed decrypt params: {:?}", p);
                         // Decode params (validation only for now)
-                        let encrypted_data = match base64::engine::general_purpose::STANDARD.decode(&p.encrypted_data) { 
-                            Ok(d) => d, 
-                            Err(e) => return create_error_response(req.id, -32602, format!("Invalid base64 encrypted data: {}", e)) 
+                        let encrypted_data = match base64::engine::general_purpose::STANDARD
+                            .decode(&p.encrypted_data)
+                        {
+                            Ok(d) => d,
+                            Err(e) => {
+                                return create_error_response(
+                                    req.id,
+                                    -32602,
+                                    format!("Invalid base64 encrypted data: {}", e),
+                                )
+                            }
                         };
-                        let iv = match base64::engine::general_purpose::STANDARD.decode(&p.iv) { 
-                            Ok(d) => d, 
-                            Err(e) => return create_error_response(req.id, -32602, format!("Invalid base64 IV: {}", e)) 
+                        let iv = match base64::engine::general_purpose::STANDARD.decode(&p.iv) {
+                            Ok(d) => d,
+                            Err(e) => {
+                                return create_error_response(
+                                    req.id,
+                                    -32602,
+                                    format!("Invalid base64 IV: {}", e),
+                                )
+                            }
                         };
-                        let encrypted_key = match base64::engine::general_purpose::STANDARD.decode(&p.encrypted_key) { 
-                            Ok(d) => d, 
-                            Err(e) => return create_error_response(req.id, -32602, format!("Invalid base64 encrypted key: {}", e)) 
+                        let encrypted_key = match base64::engine::general_purpose::STANDARD
+                            .decode(&p.encrypted_key)
+                        {
+                            Ok(d) => d,
+                            Err(e) => {
+                                return create_error_response(
+                                    req.id,
+                                    -32602,
+                                    format!("Invalid base64 encrypted key: {}", e),
+                                )
+                            }
                         };
-                        let policy_key = match base64::engine::general_purpose::STANDARD.decode(&p.policy_key) { 
-                            Ok(d) => d, 
-                            Err(e) => return create_error_response(req.id, -32602, format!("Invalid base64 policy key: {}", e)) 
-                        };
-                        
+                        let policy_key =
+                            match base64::engine::general_purpose::STANDARD.decode(&p.policy_key) {
+                                Ok(d) => d,
+                                Err(e) => {
+                                    return create_error_response(
+                                        req.id,
+                                        -32602,
+                                        format!("Invalid base64 policy key: {}", e),
+                                    )
+                                }
+                            };
+
                         // Generate a hash of the policy key (use it to avoid dead code warning)
                         let mut hasher = sha2::Sha256::new();
                         hasher.update(&policy_key);
-                        let policy_key_hash = base64::engine::general_purpose::STANDARD.encode(hasher.finalize());
+                        let policy_key_hash =
+                            base64::engine::general_purpose::STANDARD.encode(hasher.finalize());
                         debug!("Calculated policy key hash: {}", policy_key_hash);
-                        
+
                         warn!("Decrypt endpoint is currently a placeholder.");
-                        debug!("Would decrypt {} bytes with IV {} bytes, key {} bytes", 
-                            encrypted_data.len(), iv.len(), encrypted_key.len());
-                            
-                        let decrypted_data = b"Placeholder decrypted data - Decryption not implemented".to_vec();
+                        debug!(
+                            "Would decrypt {} bytes with IV {} bytes, key {} bytes",
+                            encrypted_data.len(),
+                            iv.len(),
+                            encrypted_key.len()
+                        );
+
+                        let decrypted_data =
+                            b"Placeholder decrypted data - Decryption not implemented".to_vec();
                         info!("Returning placeholder decrypted data.");
-                        create_success_response(req.id, json!({"data": base64::engine::general_purpose::STANDARD.encode(&decrypted_data)}))
+                        create_success_response(
+                            req.id,
+                            json!({"data": base64::engine::general_purpose::STANDARD.encode(&decrypted_data)}),
+                        )
                     }
-                    Err(e) => create_error_response(req.id, -32602, format!("Invalid params for decrypt: {}", e)),
+                    Err(e) => create_error_response(
+                        req.id,
+                        -32602,
+                        format!("Invalid params for decrypt: {}", e),
+                    ),
                 }
             }
 
@@ -378,14 +605,33 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                 match serde_json::from_value::<TdfReadParams>(req.params) {
                     Ok(p) => {
                         debug!("Parsed tdf_read params: {:?}", p);
-                        let _ = match base64::engine::general_purpose::STANDARD.decode(&p.tdf_data) { Ok(data) => data, Err(e) => return create_error_response(req.id, -32602, format!("Invalid base64 TDF data: {}", e)) };
+                        let _ = match base64::engine::general_purpose::STANDARD.decode(&p.tdf_data)
+                        {
+                            Ok(data) => data,
+                            Err(e) => {
+                                return create_error_response(
+                                    req.id,
+                                    -32602,
+                                    format!("Invalid base64 TDF data: {}", e),
+                                )
+                            }
+                        };
                         warn!("tdf_read endpoint is currently a placeholder.");
-                        let manifest = json!({"placeholder": "manifest", "warning": "Not read from archive"});
-                        let payload = b"Placeholder encrypted payload - Reading not implemented".to_vec();
+                        let manifest =
+                            json!({"placeholder": "manifest", "warning": "Not read from archive"});
+                        let payload =
+                            b"Placeholder encrypted payload - Reading not implemented".to_vec();
                         info!("Returning placeholder manifest and payload for tdf_read.");
-                        create_success_response(req.id, json!({"manifest": manifest, "payload": base64::engine::general_purpose::STANDARD.encode(&payload)}))
+                        create_success_response(
+                            req.id,
+                            json!({"manifest": manifest, "payload": base64::engine::general_purpose::STANDARD.encode(&payload)}),
+                        )
                     }
-                    Err(e) => create_error_response(req.id, -32602, format!("Invalid params for tdf_read: {}", e)),
+                    Err(e) => create_error_response(
+                        req.id,
+                        -32602,
+                        format!("Invalid params for tdf_read: {}", e),
+                    ),
                 }
             }
 
@@ -397,17 +643,87 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                         debug!("Parsed policy_create params: {:?}", p);
                         let mut attribute_policies = Vec::new();
                         for attr_value in p.attributes {
-                            match convert_to_attribute_policy(attr_value) { Ok(policy) => attribute_policies.push(policy), Err(e) => return create_error_response(req.id, -32602, format!("Invalid attribute policy definition: {}", e)) }
+                            match convert_to_attribute_policy(attr_value) {
+                                Ok(policy) => attribute_policies.push(policy),
+                                Err(e) => {
+                                    return create_error_response(
+                                        req.id,
+                                        -32602,
+                                        format!("Invalid attribute policy definition: {}", e),
+                                    )
+                                }
+                            }
                         }
-                        let valid_from = match p.valid_from { Some(s) => match chrono::DateTime::parse_from_rfc3339(&s) { Ok(dt) => Some(dt.with_timezone(&chrono::Utc)), Err(e) => return create_error_response(req.id, -32602, format!("Invalid valid_from date: {}", e)) }, None => None };
-                        let valid_to = match p.valid_to { Some(s) => match chrono::DateTime::parse_from_rfc3339(&s) { Ok(dt) => Some(dt.with_timezone(&chrono::Utc)), Err(e) => return create_error_response(req.id, -32602, format!("Invalid valid_to date: {}", e)) }, None => None };
-                        let policy = Policy { uuid: Uuid::new_v4().to_string(), valid_from, valid_to, body: PolicyBody { attributes: attribute_policies, dissem: p.dissemination } };
-                        let policy_json = match serde_json::to_value(&policy) { Ok(json) => json, Err(e) => return create_error_response(req.id, -32000, format!("Failed to serialize policy: {}", e)) };
-                        let policy_hash = match serde_json::to_string(&policy) { Ok(s) => { let mut h = sha2::Sha256::new(); h.update(s.as_bytes()); base64::engine::general_purpose::STANDARD.encode(h.finalize()) }, Err(e) => return create_error_response(req.id, -32000, format!("Failed to hash policy: {}", e)) };
+                        let valid_from = match p.valid_from {
+                            Some(s) => match chrono::DateTime::parse_from_rfc3339(&s) {
+                                Ok(dt) => Some(dt.with_timezone(&chrono::Utc)),
+                                Err(e) => {
+                                    return create_error_response(
+                                        req.id,
+                                        -32602,
+                                        format!("Invalid valid_from date: {}", e),
+                                    )
+                                }
+                            },
+                            None => None,
+                        };
+                        let valid_to = match p.valid_to {
+                            Some(s) => match chrono::DateTime::parse_from_rfc3339(&s) {
+                                Ok(dt) => Some(dt.with_timezone(&chrono::Utc)),
+                                Err(e) => {
+                                    return create_error_response(
+                                        req.id,
+                                        -32602,
+                                        format!("Invalid valid_to date: {}", e),
+                                    )
+                                }
+                            },
+                            None => None,
+                        };
+                        let policy = Policy {
+                            uuid: Uuid::new_v4().to_string(),
+                            valid_from,
+                            valid_to,
+                            body: PolicyBody {
+                                attributes: attribute_policies,
+                                dissem: p.dissemination,
+                            },
+                        };
+                        let policy_json = match serde_json::to_value(&policy) {
+                            Ok(json) => json,
+                            Err(e) => {
+                                return create_error_response(
+                                    req.id,
+                                    -32000,
+                                    format!("Failed to serialize policy: {}", e),
+                                )
+                            }
+                        };
+                        let policy_hash = match serde_json::to_string(&policy) {
+                            Ok(s) => {
+                                let mut h = sha2::Sha256::new();
+                                h.update(s.as_bytes());
+                                base64::engine::general_purpose::STANDARD.encode(h.finalize())
+                            }
+                            Err(e) => {
+                                return create_error_response(
+                                    req.id,
+                                    -32000,
+                                    format!("Failed to hash policy: {}", e),
+                                )
+                            }
+                        };
                         info!("Successfully created policy with UUID: {}", policy.uuid);
-                        create_success_response(req.id, json!({"policy": policy_json, "policy_hash": policy_hash}))
+                        create_success_response(
+                            req.id,
+                            json!({"policy": policy_json, "policy_hash": policy_hash}),
+                        )
                     }
-                    Err(e) => create_error_response(req.id, -32602, format!("Invalid params for policy_create: {}", e)),
+                    Err(e) => create_error_response(
+                        req.id,
+                        -32602,
+                        format!("Invalid params for policy_create: {}", e),
+                    ),
                 }
             }
 
@@ -421,52 +737,162 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                         let tdf_data_len = p.tdf_data.len();
                         debug!("Policy validation checking policy ({} chars) against TDF data ({} bytes)", 
                             policy_str.len(), tdf_data_len);
-                        
+
                         warn!("policy_validate endpoint is currently a placeholder.");
-                        create_success_response(req.id, json!({"valid": true, "reasons": ["Validation logic not implemented"]}))
+                        create_success_response(
+                            req.id,
+                            json!({"valid": true, "reasons": ["Validation logic not implemented"]}),
+                        )
                     }
-                    Err(e) => create_error_response(req.id, -32602, format!("Invalid params for policy_validate: {}", e)),
+                    Err(e) => create_error_response(
+                        req.id,
+                        -32602,
+                        format!("Invalid params for policy_validate: {}", e),
+                    ),
                 }
             }
 
             "attribute_define" => {
                 info!("Received attribute_define request");
-                debug!("Attribute define RAW params: {}", serde_json::to_string(&req.params).unwrap_or_default());
-                let params: AttributeDefineParams = match serde_json::from_value(req.params.clone()) {
-                    Ok(p) => { info!("Successfully parsed attribute_define params via from_value."); p },
+                debug!(
+                    "Attribute define RAW params: {}",
+                    serde_json::to_string(&req.params).unwrap_or_default()
+                );
+                let params: AttributeDefineParams = match serde_json::from_value(req.params.clone())
+                {
+                    Ok(p) => {
+                        info!("Successfully parsed attribute_define params via from_value.");
+                        p
+                    }
                     Err(e) => {
                         warn!("Strict parsing failed for attribute_define: {}. Attempting manual fallback.", e);
                         let mut fallback_params = AttributeDefineParams::default();
                         let mut format_detected = false;
                         if let Value::Object(obj) = &req.params {
-                            if let Some(Value::Array(namespaces)) = obj.get("namespaces") { fallback_params.namespaces = Some(namespaces.clone()); info!("Fallback: Detected 'namespaces'."); format_detected = true; }
-                            else if let Some(Value::Array(attributes)) = obj.get("attributes") { fallback_params.attributes = Some(attributes.clone()); if let Some(ns) = obj.get("namespace").and_then(|v| v.as_str()) { fallback_params.namespace = ns.to_string(); } info!("Fallback: Detected 'attributes'."); format_detected = true; }
-                            else if let Some(Value::Array(content)) = obj.get("content") { fallback_params.content = Some(content.clone()); info!("Fallback: Detected 'content'."); format_detected = true; }
+                            if let Some(Value::Array(namespaces)) = obj.get("namespaces") {
+                                fallback_params.namespaces = Some(namespaces.clone());
+                                info!("Fallback: Detected 'namespaces'.");
+                                format_detected = true;
+                            } else if let Some(Value::Array(attributes)) = obj.get("attributes") {
+                                fallback_params.attributes = Some(attributes.clone());
+                                if let Some(ns) = obj.get("namespace").and_then(|v| v.as_str()) {
+                                    fallback_params.namespace = ns.to_string();
+                                }
+                                info!("Fallback: Detected 'attributes'.");
+                                format_detected = true;
+                            } else if let Some(Value::Array(content)) = obj.get("content") {
+                                fallback_params.content = Some(content.clone());
+                                info!("Fallback: Detected 'content'.");
+                                format_detected = true;
+                            }
                         }
-                        if !format_detected { error!("Fallback failed for attribute_define. Strict error: {}", e); return create_error_response(req.id, -32602, format!("Invalid params structure for attribute_define: {}", e)); }
+                        if !format_detected {
+                            error!("Fallback failed for attribute_define. Strict error: {}", e);
+                            return create_error_response(
+                                req.id,
+                                -32602,
+                                format!("Invalid params structure for attribute_define: {}", e),
+                            );
+                        }
                         fallback_params
                     }
                 };
                 debug!("Parsed/merged attribute_define params: {:?}", params);
                 // Determine format and process
                 let result_attribute: Option<Value> = if let Some(content) = &params.content {
-                    info!("Processing attribute_define: content format"); if content.is_empty() { None } else { Some(json!({"namespace": "content_ns", "name": "content_attr", "values": ["value"], "id": Uuid::new_v4().to_string(), "source": "content_format"})) }
+                    info!("Processing attribute_define: content format");
+                    if content.is_empty() {
+                        None
+                    } else {
+                        Some(
+                            json!({"namespace": "content_ns", "name": "content_attr", "values": ["value"], "id": Uuid::new_v4().to_string(), "source": "content_format"}),
+                        )
+                    }
                 } else if let Some(namespaces) = &params.namespaces {
-                    info!("Processing attribute_define: namespaces format"); if namespaces.is_empty() { None } else { let ns = &namespaces[0]; let ns_name = ns.get("name").and_then(|n| n.as_str()).unwrap_or("default_ns"); let attrs: Vec<String> = ns.get("attributes").and_then(|a| a.as_array()).map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default(); Some(json!({"namespace": ns_name, "name": "attribute", "values": attrs, "id": Uuid::new_v4().to_string(), "source": "namespaces_format"})) }
+                    info!("Processing attribute_define: namespaces format");
+                    if namespaces.is_empty() {
+                        None
+                    } else {
+                        let ns = &namespaces[0];
+                        let ns_name = ns
+                            .get("name")
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("default_ns");
+                        let attrs: Vec<String> = ns
+                            .get("attributes")
+                            .and_then(|a| a.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_str().map(String::from))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        Some(
+                            json!({"namespace": ns_name, "name": "attribute", "values": attrs, "id": Uuid::new_v4().to_string(), "source": "namespaces_format"}),
+                        )
+                    }
                 } else if let Some(attributes) = &params.attributes {
-                    info!("Processing attribute_define: attributes format"); if attributes.is_empty() { None } else { let attr_values: Vec<String> = attributes.iter().filter_map(|attr| attr.get("name").and_then(|n| n.as_str()).map(String::from)).collect(); let namespace = if params.namespace.is_empty() { "default_ns" } else { &params.namespace }; Some(json!({"namespace": namespace, "name": "attribute", "values": attr_values, "id": Uuid::new_v4().to_string(), "source": "attributes_format"})) }
+                    info!("Processing attribute_define: attributes format");
+                    if attributes.is_empty() {
+                        None
+                    } else {
+                        let attr_values: Vec<String> = attributes
+                            .iter()
+                            .filter_map(|attr| {
+                                attr.get("name").and_then(|n| n.as_str()).map(String::from)
+                            })
+                            .collect();
+                        let namespace = if params.namespace.is_empty() {
+                            "default_ns"
+                        } else {
+                            &params.namespace
+                        };
+                        Some(
+                            json!({"namespace": namespace, "name": "attribute", "values": attr_values, "id": Uuid::new_v4().to_string(), "source": "attributes_format"}),
+                        )
+                    }
                 } else if !params.namespace.is_empty() && !params.name.is_empty() {
-                    if params.values.is_empty() && params.hierarchy.is_none() { warn!("Standard attribute format missing 'values' and 'hierarchy'."); None } else { info!("Processing attribute_define: standard format"); let hierarchy_info = params.hierarchy.map(|h| json!(h)); Some(json!({"namespace": params.namespace, "name": params.name, "values": params.values, "hierarchy": hierarchy_info, "id": Uuid::new_v4().to_string(), "source": "standard_format"})) }
-                } else { None };
+                    if params.values.is_empty() && params.hierarchy.is_none() {
+                        warn!("Standard attribute format missing 'values' and 'hierarchy'.");
+                        None
+                    } else {
+                        info!("Processing attribute_define: standard format");
+                        let hierarchy_info = params.hierarchy.map(|h| json!(h));
+                        Some(
+                            json!({"namespace": params.namespace, "name": params.name, "values": params.values, "hierarchy": hierarchy_info, "id": Uuid::new_v4().to_string(), "source": "standard_format"}),
+                        )
+                    }
+                } else {
+                    None
+                };
                 match result_attribute {
-                    Some(attribute_def) => { info!("Successfully defined attribute: {}", serde_json::to_string(&attribute_def).unwrap_or_default()); create_success_response(req.id, json!({"attribute": attribute_def, "status": "defined"})) },
-                    None => { error!("Could not define attribute: No valid format/fields."); create_error_response(req.id, -32602, "Invalid params for attribute_define.".to_string()) }
+                    Some(attribute_def) => {
+                        info!(
+                            "Successfully defined attribute: {}",
+                            serde_json::to_string(&attribute_def).unwrap_or_default()
+                        );
+                        create_success_response(
+                            req.id,
+                            json!({"attribute": attribute_def, "status": "defined"}),
+                        )
+                    }
+                    None => {
+                        error!("Could not define attribute: No valid format/fields.");
+                        create_error_response(
+                            req.id,
+                            -32602,
+                            "Invalid params for attribute_define.".to_string(),
+                        )
+                    }
                 }
             }
 
             "attribute_list" => {
                 info!("Received attribute_list request");
-                debug!("Attribute list params: {}", serde_json::to_string(&req.params).unwrap_or_default());
+                debug!(
+                    "Attribute list params: {}",
+                    serde_json::to_string(&req.params).unwrap_or_default()
+                );
                 let example_attributes = vec![
                     json!({"namespace": "example.com", "name": "clearance", "values": ["L1", "L2"], "id": "uuid1"}),
                     json!({"namespace": "example.com", "name": "project", "values": ["X", "Y"], "id": "uuid2"}),
@@ -487,7 +913,10 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                     Err(e) => {
                         error!("Failed to serialize attribute list result to string: {}", e);
                         // Fallback error message
-                        format!("{{\"error\": \"Failed to format attribute list result: {}\"}}", e)
+                        format!(
+                            "{{\"error\": \"Failed to format attribute list result: {}\"}}",
+                            e
+                        )
                     }
                 };
 
@@ -508,7 +937,10 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
 
             "namespace_list" => {
                 info!("Received namespace_list request");
-                debug!("Namespace list params: {}", serde_json::to_string(&req.params).unwrap_or_default());
+                debug!(
+                    "Namespace list params: {}",
+                    serde_json::to_string(&req.params).unwrap_or_default()
+                );
                 let example_namespaces = vec![
                     json!({"name": "example.com", "attributes": ["clearance", "project"]}),
                     json!({"name": "gov.dept.agency", "attributes": ["classification"]}),
@@ -529,7 +961,10 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                     Err(e) => {
                         error!("Failed to serialize namespace list result to string: {}", e);
                         // Fallback error message
-                        format!("{{\"error\": \"Failed to format namespace list result: {}\"}}", e)
+                        format!(
+                            "{{\"error\": \"Failed to format namespace list result: {}\"}}",
+                            e
+                        )
                     }
                 };
 
@@ -555,32 +990,47 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                         debug!("Parsed user_attributes params: {:?}", p);
                         info!("Assigning attributes for user: {}", p.user_id);
                         // Process attributes here
-                        let processed_attributes: Vec<Value> = p.attributes.iter().filter_map(|attr| {
-                            // Extract the attribute fields
-                            let ns = attr.get("namespace").and_then(|v| v.as_str());
-                            let name = attr.get("name").and_then(|v| v.as_str());
-                            let value = attr.get("value");
+                        let processed_attributes: Vec<Value> = p
+                            .attributes
+                            .iter()
+                            .filter_map(|attr| {
+                                // Extract the attribute fields
+                                let ns = attr.get("namespace").and_then(|v| v.as_str());
+                                let name = attr.get("name").and_then(|v| v.as_str());
+                                let value = attr.get("value");
 
-                            // Only construct the JSON if all fields are Some()
-                            if let (Some(ns), Some(name), Some(value)) = (ns, name, value) {
-                                Some(json!({
-                        "attribute_uri": format!("{}/attr/{}", ns, name),
-                        "value": value
-                    }))
-                            } else {
-                                warn!("Skipping invalid attribute format: {:?}", attr);
-                                None
-                            }
-                        }).collect();
+                                // Only construct the JSON if all fields are Some()
+                                if let (Some(ns), Some(name), Some(value)) = (ns, name, value) {
+                                    Some(json!({
+                                        "attribute_uri": format!("{}/attr/{}", ns, name),
+                                        "value": value
+                                    }))
+                                } else {
+                                    warn!("Skipping invalid attribute format: {:?}", attr);
+                                    None
+                                }
+                            })
+                            .collect();
 
-                        info!("Processed {} attributes for user {}", processed_attributes.len(), p.user_id);
-                        create_success_response(req.id, json!({
-                "user_id": p.user_id,
-                "attributes_assigned": processed_attributes,
-                "status": "attributes_assigned"
-            }))
+                        info!(
+                            "Processed {} attributes for user {}",
+                            processed_attributes.len(),
+                            p.user_id
+                        );
+                        create_success_response(
+                            req.id,
+                            json!({
+                                "user_id": p.user_id,
+                                "attributes_assigned": processed_attributes,
+                                "status": "attributes_assigned"
+                            }),
+                        )
                     }
-                    Err(e) => create_error_response(req.id, -32602, format!("Invalid params for user_attributes: {}", e)),
+                    Err(e) => create_error_response(
+                        req.id,
+                        -32602,
+                        format!("Invalid params for user_attributes: {}", e),
+                    ),
                 }
             }
 
@@ -589,16 +1039,240 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                 match serde_json::from_value::<AccessEvaluateParams>(req.params) {
                     Ok(p) => {
                         debug!("Parsed access_evaluate params: {:?}", p);
-                        warn!("access_evaluate endpoint is placeholder.");
-                        let policy_uuid = p.policy.get("uuid").and_then(|u| u.as_str()).unwrap_or("unknown");
-                        let user_id = p.user_attributes.get("user_id").and_then(|u| u.as_str()).unwrap_or("unknown");
-                        info!(policy_uuid = policy_uuid, user_id = user_id, "Starting mock access evaluation");
-                        let overall_access = true; let condition_results = vec![json!({"condition": "placeholder", "satisfied": true})];
-                        if let Some(context) = &p.context { info!(policy_uuid = policy_uuid, user_id = user_id, "Ignoring context: {}", context); }
-                        info!(policy_uuid = policy_uuid, user_id = user_id, access_granted = overall_access, "Mock evaluation complete");
-                        create_success_response(req.id, json!({ "access_granted": overall_access, "evaluation_time": Utc::now().to_rfc3339(), "condition_results": condition_results, "warning": "Evaluation is placeholder." }))
+
+                        // Extract policy from request
+                        let policy = match serde_json::from_value::<Policy>(p.policy.clone()) {
+                            Ok(policy) => policy,
+                            Err(e) => {
+                                error!("Failed to parse policy: {}", e);
+                                return create_error_response(
+                                    req.id,
+                                    -32602,
+                                    format!("Invalid policy format: {}", e),
+                                );
+                            }
+                        };
+
+                        // Get policy UUID for logging
+                        let policy_uuid = &policy.uuid;
+
+                        // Extract user attributes from request
+                        let user_id = p
+                            .user_attributes
+                            .get("user_id")
+                            .and_then(|u| u.as_str())
+                            .unwrap_or("unknown");
+                        info!(
+                            policy_uuid = policy_uuid,
+                            user_id = user_id,
+                            "Starting access evaluation"
+                        );
+
+                        // Convert JSON user attributes to the format required by policy evaluation
+                        let mut attribute_map = HashMap::new();
+
+                        if let Some(user_attrs) = p
+                            .user_attributes
+                            .get("attributes")
+                            .and_then(|a| a.as_array())
+                        {
+                            for attr in user_attrs {
+                                if let (Some(namespace), Some(name), Some(value)) = (
+                                    attr.get("namespace").and_then(|n| n.as_str()),
+                                    attr.get("name").and_then(|n| n.as_str()),
+                                    attr.get("value"),
+                                ) {
+                                    let attr_id = AttributeIdentifier::new(namespace, name);
+
+                                    // Convert the JSON value to AttributeValue
+                                    let attr_value = if let Some(s) = value.as_str() {
+                                        AttributeValue::String(s.to_string())
+                                    } else if let Some(n) = value.as_f64() {
+                                        AttributeValue::Number(n)
+                                    } else if let Some(b) = value.as_bool() {
+                                        AttributeValue::Boolean(b)
+                                    } else if let Some(a) = value.as_array() {
+                                        if a.is_empty() {
+                                            AttributeValue::StringArray(vec![])
+                                        } else if a.iter().all(|v| v.is_string()) {
+                                            let strings: Vec<String> = a
+                                                .iter()
+                                                .filter_map(|v| v.as_str().map(String::from))
+                                                .collect();
+                                            AttributeValue::StringArray(strings)
+                                        } else if a.iter().all(|v| v.is_number()) {
+                                            let numbers: Vec<f64> =
+                                                a.iter().filter_map(|v| v.as_f64()).collect();
+                                            AttributeValue::NumberArray(numbers)
+                                        } else {
+                                            warn!("Mixed array types in attribute value, skipping: {}", attr);
+                                            continue;
+                                        }
+                                    } else if let Some(dt_str) =
+                                        value.get("$datetime").and_then(|v| v.as_str())
+                                    {
+                                        match chrono::DateTime::parse_from_rfc3339(dt_str) {
+                                            Ok(dt) => AttributeValue::DateTime(
+                                                dt.with_timezone(&chrono::Utc),
+                                            ),
+                                            Err(e) => {
+                                                warn!("Invalid datetime format in attribute value: {}", e);
+                                                continue;
+                                            }
+                                        }
+                                    } else {
+                                        warn!("Unsupported value type in attribute: {}", value);
+                                        continue;
+                                    };
+
+                                    attribute_map.insert(attr_id, attr_value);
+                                } else {
+                                    warn!("Skipping malformed attribute: {}", attr);
+                                }
+                            }
+                        }
+
+                        debug!(
+                            "Constructed {} user attributes for evaluation",
+                            attribute_map.len()
+                        );
+
+                        // Consider context attributes if provided
+                        if let Some(context) = &p.context {
+                            debug!("Processing context attributes: {}", context);
+                            if let Some(context_attrs) =
+                                context.get("attributes").and_then(|a| a.as_array())
+                            {
+                                for attr in context_attrs {
+                                    if let (Some(namespace), Some(name), Some(value)) = (
+                                        attr.get("namespace").and_then(|n| n.as_str()),
+                                        attr.get("name").and_then(|n| n.as_str()),
+                                        attr.get("value"),
+                                    ) {
+                                        let attr_id = AttributeIdentifier::new(namespace, name);
+
+                                        // Same conversion logic as user attributes
+                                        let attr_value = if let Some(s) = value.as_str() {
+                                            AttributeValue::String(s.to_string())
+                                        } else if let Some(n) = value.as_f64() {
+                                            AttributeValue::Number(n)
+                                        } else if let Some(b) = value.as_bool() {
+                                            AttributeValue::Boolean(b)
+                                        } else if let Some(a) = value.as_array() {
+                                            if a.is_empty() {
+                                                AttributeValue::StringArray(vec![])
+                                            } else if a.iter().all(|v| v.is_string()) {
+                                                let strings: Vec<String> = a
+                                                    .iter()
+                                                    .filter_map(|v| v.as_str().map(String::from))
+                                                    .collect();
+                                                AttributeValue::StringArray(strings)
+                                            } else if a.iter().all(|v| v.is_number()) {
+                                                let numbers: Vec<f64> =
+                                                    a.iter().filter_map(|v| v.as_f64()).collect();
+                                                AttributeValue::NumberArray(numbers)
+                                            } else {
+                                                warn!("Mixed array types in context attribute value, skipping: {}", attr);
+                                                continue;
+                                            }
+                                        } else if let Some(dt_str) =
+                                            value.get("$datetime").and_then(|v| v.as_str())
+                                        {
+                                            match chrono::DateTime::parse_from_rfc3339(dt_str) {
+                                                Ok(dt) => AttributeValue::DateTime(
+                                                    dt.with_timezone(&chrono::Utc),
+                                                ),
+                                                Err(e) => {
+                                                    warn!("Invalid datetime format in context attribute value: {}", e);
+                                                    continue;
+                                                }
+                                            }
+                                        } else {
+                                            warn!(
+                                                "Unsupported value type in context attribute: {}",
+                                                value
+                                            );
+                                            continue;
+                                        };
+
+                                        // Context attributes can override user attributes when necessary
+                                        attribute_map.insert(attr_id, attr_value);
+                                    }
+                                }
+                            }
+                        }
+
+                        // Evaluate the policy against the attributes
+                        let evaluation_start = std::time::Instant::now();
+                        let evaluation_result = match policy.evaluate(&attribute_map) {
+                            Ok(result) => result,
+                            Err(e) => {
+                                error!("Policy evaluation error: {}", e);
+                                return create_error_response(
+                                    req.id,
+                                    -32000,
+                                    format!("Policy evaluation error: {}", e),
+                                );
+                            }
+                        };
+                        let evaluation_duration = evaluation_start.elapsed();
+
+                        // Track individual condition results for more detailed feedback
+                        let mut condition_results = Vec::new();
+
+                        // Process each policy condition to provide detailed results
+                        // This is simplified - in a real implementation you might track individual condition results
+                        for (i, policy_condition) in policy.body.attributes.iter().enumerate() {
+                            let condition_result = match policy_condition.evaluate(&attribute_map) {
+                                Ok(result) => result,
+                                Err(e) => {
+                                    warn!("Error evaluating condition {}: {}", i, e);
+                                    false
+                                }
+                            };
+
+                            // Serialize the condition for the response
+                            let condition_json = match serde_json::to_value(policy_condition) {
+                                Ok(json) => json,
+                                Err(e) => {
+                                    warn!("Error serializing condition: {}", e);
+                                    json!({"error": format!("Failed to serialize: {}", e)})
+                                }
+                            };
+
+                            condition_results.push(json!({
+                                "condition": condition_json,
+                                "satisfied": condition_result,
+                                "condition_index": i
+                            }));
+                        }
+
+                        info!(
+                            policy_uuid = policy_uuid,
+                            user_id = user_id,
+                            access_granted = evaluation_result,
+                            evaluation_ms = evaluation_duration.as_millis() as u64,
+                            "Access evaluation complete"
+                        );
+
+                        create_success_response(
+                            req.id,
+                            json!({
+                                "access_granted": evaluation_result,
+                                "evaluation_time": Utc::now().to_rfc3339(),
+                                "evaluation_duration_ms": evaluation_duration.as_millis(),
+                                "condition_results": condition_results,
+                                "policy_uuid": policy_uuid,
+                                "user_id": user_id,
+                                "attributes_evaluated": attribute_map.len()
+                            }),
+                        )
                     }
-                    Err(e) => create_error_response(req.id, -32602, format!("Invalid params for access_evaluate: {}", e)),
+                    Err(e) => create_error_response(
+                        req.id,
+                        -32602,
+                        format!("Invalid params for access_evaluate: {}", e),
+                    ),
                 }
             }
 
@@ -611,64 +1285,168 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                         // Use tdf_data field to avoid dead code warning
                         let tdf_data_len = p.tdf_data.len();
                         debug!("TDF data length for verification: {} bytes", tdf_data_len);
-                        
-                        let policy_key_hash = match base64::engine::general_purpose::STANDARD.decode(&p.policy_key) { 
-                            Ok(b) => { 
-                                let mut h = sha2::Sha256::new(); 
-                                h.update(&b); 
-                                base64::engine::general_purpose::STANDARD.encode(h.finalize()) 
-                            }, 
-                            Err(_) => "Invalid Key".to_string() 
-                        };
+
+                        let policy_key_hash =
+                            match base64::engine::general_purpose::STANDARD.decode(&p.policy_key) {
+                                Ok(b) => {
+                                    let mut h = sha2::Sha256::new();
+                                    h.update(&b);
+                                    base64::engine::general_purpose::STANDARD.encode(h.finalize())
+                                }
+                                Err(_) => "Invalid Key".to_string(),
+                            };
                         let binding_valid = !p.policy_key.is_empty();
                         info!("Placeholder verification result (valid={})", binding_valid);
-                        create_success_response(req.id, json!({ 
-                            "binding_valid": binding_valid, 
-                            "binding_info": {
-                                "algorithm": "HS256 (Mocked)", 
-                                "policy_key_provided": !p.policy_key.is_empty(), 
-                                "policy_key_hash_prefix": policy_key_hash.chars().take(16).collect::<String>(), 
-                                "timestamp": Utc::now().to_rfc3339(), 
-                                "warning": "Verification logic placeholder."
-                            } 
-                        }))
+                        create_success_response(
+                            req.id,
+                            json!({
+                                "binding_valid": binding_valid,
+                                "binding_info": {
+                                    "algorithm": "HS256 (Mocked)",
+                                    "policy_key_provided": !p.policy_key.is_empty(),
+                                    "policy_key_hash_prefix": policy_key_hash.chars().take(16).collect::<String>(),
+                                    "timestamp": Utc::now().to_rfc3339(),
+                                    "warning": "Verification logic placeholder."
+                                }
+                            }),
+                        )
                     }
-                    Err(e) => create_error_response(req.id, -32602, format!("Invalid params for policy_binding_verify: {}", e)),
+                    Err(e) => create_error_response(
+                        req.id,
+                        -32602,
+                        format!("Invalid params for policy_binding_verify: {}", e),
+                    ),
                 }
             }
-
 
             // --- MCP Handshake/Notifications ---
             "initialized" => {
                 info!("Received 'initialized' message (ID: {:?})", req.id);
-                debug!("Initialized params: {}", serde_json::to_string(&req.params).unwrap_or_default());
+                debug!(
+                    "Initialized params: {}",
+                    serde_json::to_string(&req.params).unwrap_or_default()
+                );
                 create_success_response(req.id, json!({ "acknowledged": true }))
             }
 
             "tools/call" => {
                 info!("Received tools/call request");
-                debug!("tools/call RAW request: {}", serde_json::to_string(&req).unwrap_or_default());
-                if let Value::Object(params) = &req.params {
-                    let tool_name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                    let raw_params = params.get("parameters").cloned().unwrap_or(Value::Null);
+                // *** ADD MORE LOGGING HERE TO SEE THE EXACT INCOMING STRUCTURE ***
+                debug!(
+                    "tools/call RAW request structure: {}",
+                    serde_json::to_string(&req).unwrap_or_default()
+                );
+
+                if let Value::Object(mcp_params) = &req.params {
+                    // Renamed for clarity
+                    let tool_name = mcp_params
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("");
                     debug!(tool_name = tool_name, "Extracted tool name");
-                    debug!("Extracted raw parameters: {}", serde_json::to_string(&raw_params).unwrap_or_default());
-                    // Handle multiple possible prefixes for tool names from different MCP clients
-                    let actual_tool_name = tool_name
-                        .strip_prefix("mcp__opentdf__").or_else(|| tool_name.strip_prefix("mcp_opentdf_"))
-                        .or_else(|| tool_name.strip_prefix("opentdf__")).or_else(|| tool_name.strip_prefix("opentdf_"))
-                        .or_else(|| tool_name.strip_prefix("opentdf:")).unwrap_or(tool_name);
-                    info!("Translating MCP tool call '{}' -> internal method '{}'", tool_name, actual_tool_name);
-                    let processed_params = if raw_params.is_object() { info!("Processing params as direct object."); raw_params }
-                    else if raw_params.is_null() { info!("No parameters provided."); Value::Object(Map::new()) }
-                    else { warn!("Unexpected parameter format: Expected object or null, got {:?}.", raw_params); raw_params };
-                    debug!("Processed parameters for internal call: {}", serde_json::to_string(&processed_params).unwrap_or_default());
-                    let internal_req = RpcRequest { jsonrpc: "2.0".to_string(), id: req.id.clone(), method: actual_tool_name.to_string(), params: processed_params };
-                    let response = process_request(internal_req).await;
-                    if let Some(error) = &response.error { error!(mcp_tool_name = tool_name, internal_method = actual_tool_name, error_code = error.code, error_message = error.message, "Error during forwarded tools/call"); }
-                    else { info!(mcp_tool_name = tool_name, internal_method = actual_tool_name, "Success processing forwarded tools/call"); }
+
+                    // Try to get the nested "parameters" field
+                    let mut raw_params = mcp_params.get("parameters").cloned();
+
+                    // *** NEW LOGIC: Check if params might be directly in mcp_params ***
+                    if raw_params.is_none() || raw_params == Some(Value::Null) {
+                        info!("'parameters' field not found or null in tools/call params. Checking if mcp_params itself contains the payload.");
+                        // Create a clone of mcp_params and remove "name" to see if the rest is the payload
+                        let mut potential_params = mcp_params.clone();
+                        potential_params.remove("name"); // Remove the tool name itself
+
+                        // Heuristic: If it's not empty and looks like an object, assume it's the payload
+                        if !potential_params.is_empty() && potential_params.values().len() > 0 {
+                            warn!("Assuming the MCP params object (excluding 'name') is the actual tool payload.");
+                            raw_params = Some(Value::Object(potential_params));
+                        } else {
+                            // If it's empty after removing "name", fallback to Null
+                            raw_params = Some(Value::Null);
+                        }
+                    }
+
+                    // Log what we *think* the raw parameters are now
+                    debug!(
+                        "Extracted raw parameters after check: {}",
+                        serde_json::to_string(&raw_params).unwrap_or_default()
+                    );
+
+                    let actual_tool_name = tool_name // Apply stripping logic as before
+                        .strip_prefix("mcp__opentdf__")
+                        .or_else(|| tool_name.strip_prefix("mcp_opentdf_"))
+                        .or_else(|| tool_name.strip_prefix("opentdf__"))
+                        .or_else(|| tool_name.strip_prefix("opentdf_"))
+                        .or_else(|| tool_name.strip_prefix("opentdf:"))
+                        .unwrap_or(tool_name);
+                    info!(
+                        "Translating MCP tool call '{}' -> internal method '{}'",
+                        tool_name, actual_tool_name
+                    );
+
+                    // Process the determined raw_params (which might now be the direct payload or still null)
+                    let processed_params = match raw_params {
+                        Some(params_obj @ Value::Object(_)) => {
+                            info!("Processing params as direct object.");
+                            params_obj
+                        }
+                        Some(Value::Null) | None => {
+                            // Handle None explicitly too
+                            info!("No parameters identified.");
+                            Value::Object(Map::new()) // Create empty object
+                        }
+                        Some(other_value) => {
+                            // Handle string or other unexpected types
+                            warn!("Unexpected parameter format: Expected object or null, got type {}.", other_value.as_str().map_or_else(|| other_value.to_string(), |s| s.to_string()));
+                            // Attempt to parse if it's a string containing JSON
+                            if let Value::String(s) = other_value {
+                                info!("Attempting to parse string parameter as JSON object.");
+                                match serde_json::from_str::<Value>(&s) {
+                                    Ok(parsed_json @ Value::Object(_)) => {
+                                        warn!(
+                                            "Successfully parsed string parameter as JSON object."
+                                        );
+                                        parsed_json
+                                    }
+                                    Ok(_) => {
+                                        error!(
+                                            "String parameter parsed but was not a JSON object."
+                                        );
+                                        Value::Null // Or some error indicator? Null might lead back to missing field.
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to parse string parameter as JSON: {}", e);
+                                        Value::Null
+                                    }
+                                }
+                            } else {
+                                Value::Null // Give up if not string or object
+                            }
+                        }
+                    };
+
+                    debug!(
+                        "Processed parameters for internal call: {}",
+                        serde_json::to_string(&processed_params).unwrap_or_default()
+                    );
+
+                    let internal_req = RpcRequest {
+                        jsonrpc: "2.0".to_string(),
+                        id: req.id.clone(), // Use the original request ID
+                        method: actual_tool_name.to_string(),
+                        params: processed_params,
+                    };
+                    let response = process_request(internal_req).await; // Call the specific tool handler
+                                                                        // ... logging and return ...
                     response
-                } else { error!("Invalid structure for tools/call parameters."); create_error_response(req.id, -32602, "Invalid params structure for tools/call".to_string()) }
+                } else {
+                    // Original req.params wasn't an object
+                    error!("Invalid structure for tools/call parameters: req.params was not an object.");
+                    create_error_response(
+                        req.id,
+                        -32602,
+                        "Invalid structure for tools/call: params not object".to_string(),
+                    )
+                }
             }
 
             // --- Unknown method ---
@@ -685,11 +1463,21 @@ fn convert_to_attribute_policy(value: Value) -> Result<AttributePolicy, String> 
     if let Some(op_type) = value.get("type").and_then(|t| t.as_str()) {
         match op_type.to_uppercase().as_str() {
             "AND" | "OR" => {
-                let conditions_val = value.get("conditions").ok_or(format!("{} needs 'conditions'", op_type))?;
-                let conditions_array = conditions_val.as_array().ok_or("'conditions' must be array")?;
+                let conditions_val = value
+                    .get("conditions")
+                    .ok_or(format!("{} needs 'conditions'", op_type))?;
+                let conditions_array = conditions_val
+                    .as_array()
+                    .ok_or("'conditions' must be array")?;
                 let mut parsed = Vec::with_capacity(conditions_array.len());
-                for c in conditions_array { parsed.push(convert_to_attribute_policy(c.clone())?); }
-                return if op_type.eq_ignore_ascii_case("AND") { Ok(AttributePolicy::and(parsed)) } else { Ok(AttributePolicy::or(parsed)) };
+                for c in conditions_array {
+                    parsed.push(convert_to_attribute_policy(c.clone())?);
+                }
+                return if op_type.eq_ignore_ascii_case("AND") {
+                    Ok(AttributePolicy::and(parsed))
+                } else {
+                    Ok(AttributePolicy::or(parsed))
+                };
             }
             "NOT" => {
                 let condition_val = value.get("condition").ok_or("NOT needs 'condition'")?;
@@ -699,45 +1487,106 @@ fn convert_to_attribute_policy(value: Value) -> Result<AttributePolicy, String> 
             _ => warn!("Unknown logical operator type: {}", op_type), // Or error? Depends on strictness
         }
     }
-    let attribute = value.get("attribute").and_then(|a| a.as_str()).ok_or("Condition missing 'attribute'")?;
-    let operator = value.get("operator").and_then(|o| o.as_str()).ok_or("Condition missing 'operator'")?;
-    let attr_id = AttributeIdentifier::from_string(attribute).map_err(|e| format!("Invalid attribute identifier: {}", e))?;
+    let attribute = value
+        .get("attribute")
+        .and_then(|a| a.as_str())
+        .ok_or("Condition missing 'attribute'")?;
+    let operator = value
+        .get("operator")
+        .and_then(|o| o.as_str())
+        .ok_or("Condition missing 'operator'")?;
+    let attr_id = AttributeIdentifier::from_string(attribute)
+        .map_err(|e| format!("Invalid attribute identifier: {}", e))?;
     let op = match operator.to_lowercase().as_str() {
-        "equals" => Operator::Equals, "notequals" => Operator::NotEquals, "greaterthan" => Operator::GreaterThan, "greaterthanorequal" => Operator::GreaterThanOrEqual,
-        "lessthan" => Operator::LessThan, "lessthanorequal" => Operator::LessThanOrEqual, "contains" => Operator::Contains, "in" => Operator::In,
-        "allof" => Operator::AllOf, "anyof" => Operator::AnyOf, "notin" => Operator::NotIn, "minimumof" => Operator::MinimumOf,
-        "maximumof" => Operator::MaximumOf, "present" => Operator::Present, "notpresent" => Operator::NotPresent,
+        "equals" => Operator::Equals,
+        "notequals" => Operator::NotEquals,
+        "greaterthan" => Operator::GreaterThan,
+        "greaterthanorequal" => Operator::GreaterThanOrEqual,
+        "lessthan" => Operator::LessThan,
+        "lessthanorequal" => Operator::LessThanOrEqual,
+        "contains" => Operator::Contains,
+        "in" => Operator::In,
+        "allof" => Operator::AllOf,
+        "anyof" => Operator::AnyOf,
+        "notin" => Operator::NotIn,
+        "minimumof" => Operator::MinimumOf,
+        "maximumof" => Operator::MaximumOf,
+        "present" => Operator::Present,
+        "notpresent" => Operator::NotPresent,
         _ => return Err(format!("Unknown operator: {}", operator)),
     };
     if op == Operator::Present || op == Operator::NotPresent {
-        if value.get("value").is_some() { warn!("'value' ignored for operator: {:?}", op); }
-        return Ok(AttributePolicy::Condition(AttributeCondition::new(attr_id, op, None)));
+        if value.get("value").is_some() {
+            warn!("'value' ignored for operator: {:?}", op);
+        }
+        return Ok(AttributePolicy::Condition(AttributeCondition::new(
+            attr_id, op, None,
+        )));
     }
-    let value_field = value.get("value").ok_or_else(|| format!("Missing 'value' for operator: {}", operator))?;
-    let attr_value = if let Some(s) = value_field.as_str() { AttributeValue::String(s.to_string()) }
-    else if let Some(n) = value_field.as_f64() { AttributeValue::Number(n) }
-    else if let Some(b) = value_field.as_bool() { AttributeValue::Boolean(b) }
-    else if let Some(a) = value_field.as_array() {
-        if a.is_empty() { warn!("Empty array value for '{}'. Assuming StringArray([]).", attribute); AttributeValue::StringArray(vec![]) }
-        else if a.iter().all(|v| v.is_string()) { let s:Vec<_> = a.iter().filter_map(|v| v.as_str().map(String::from)).collect(); if s.len()!=a.len() {return Err("Array has non-strings".into());} AttributeValue::StringArray(s) }
-        else if a.iter().all(|v| v.is_number()) { let n:Vec<_> = a.iter().filter_map(|v| v.as_f64()).collect(); if n.len()!=a.len() {return Err("Array has non-numbers".into());} AttributeValue::NumberArray(n) }
-        else { return Err("Array must be all strings or all numbers".into()); }
+    let value_field = value
+        .get("value")
+        .ok_or_else(|| format!("Missing 'value' for operator: {}", operator))?;
+    let attr_value = if let Some(s) = value_field.as_str() {
+        AttributeValue::String(s.to_string())
+    } else if let Some(n) = value_field.as_f64() {
+        AttributeValue::Number(n)
+    } else if let Some(b) = value_field.as_bool() {
+        AttributeValue::Boolean(b)
+    } else if let Some(a) = value_field.as_array() {
+        if a.is_empty() {
+            warn!(
+                "Empty array value for '{}'. Assuming StringArray([]).",
+                attribute
+            );
+            AttributeValue::StringArray(vec![])
+        } else if a.iter().all(|v| v.is_string()) {
+            let s: Vec<_> = a
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect();
+            if s.len() != a.len() {
+                return Err("Array has non-strings".into());
+            }
+            AttributeValue::StringArray(s)
+        } else if a.iter().all(|v| v.is_number()) {
+            let n: Vec<_> = a.iter().filter_map(|v| v.as_f64()).collect();
+            if n.len() != a.len() {
+                return Err("Array has non-numbers".into());
+            }
+            AttributeValue::NumberArray(n)
+        } else {
+            return Err("Array must be all strings or all numbers".into());
+        }
     } else if value_field.is_object() {
-        if let Some(dt_str) = value_field.get("$datetime").and_then(|v| v.as_str()) { match chrono::DateTime::parse_from_rfc3339(dt_str) { Ok(dt) => AttributeValue::DateTime(dt.with_timezone(&chrono::Utc)), Err(e) => return Err(format!("Invalid datetime: {}", e)) } }
-        else { return Err(format!("Unsupported object value: {}", value_field)); }
-    } else if value_field.is_null() { return Err(format!("'value' cannot be null for operator: {}", operator)); }
-    else { return Err(format!("Unsupported value type: {:?}", value_field)); };
-    Ok(AttributePolicy::Condition(AttributeCondition::new(attr_id, op, Some(attr_value))))
+        if let Some(dt_str) = value_field.get("$datetime").and_then(|v| v.as_str()) {
+            match chrono::DateTime::parse_from_rfc3339(dt_str) {
+                Ok(dt) => AttributeValue::DateTime(dt.with_timezone(&chrono::Utc)),
+                Err(e) => return Err(format!("Invalid datetime: {}", e)),
+            }
+        } else {
+            return Err(format!("Unsupported object value: {}", value_field));
+        }
+    } else if value_field.is_null() {
+        return Err(format!("'value' cannot be null for operator: {}", operator));
+    } else {
+        return Err(format!("Unsupported value type: {:?}", value_field));
+    };
+    Ok(AttributePolicy::Condition(AttributeCondition::new(
+        attr_id,
+        op,
+        Some(attr_value),
+    )))
 }
 // --- End of convert_to_attribute_policy ---
-
 
 // --- Main Function ---
 #[tokio::main]
 async fn main() {
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
-        .with(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
         .init();
 
     info!("Starting OpenTDF MCP Server (Rust) on stdio...");
@@ -746,46 +1595,69 @@ async fn main() {
     let mut stdout = tokio::io::stdout();
     let mut line_buffer = String::new();
 
-    let ready_msg = json!({"jsonrpc": "2.0", "method": "server/ready", "params": {"status": "ready"}});
+    let ready_msg =
+        json!({"jsonrpc": "2.0", "method": "server/ready", "params": {"status": "ready"}});
     let ready_str = serde_json::to_string(&ready_msg).expect("Failed to serialize ready message");
     info!("Sending server/ready notification.");
-    if let Err(e) = stdout.write_all(format!("{}\r\n", ready_str).as_bytes()).await { error!("Fatal: Failed to write ready message: {}", e); return; }
-    if let Err(e) = stdout.flush().await { error!("Fatal: Failed to flush after ready message: {}", e); return; }
+    if let Err(e) = stdout
+        .write_all(format!("{}\r\n", ready_str).as_bytes())
+        .await
+    {
+        error!("Fatal: Failed to write ready message: {}", e);
+        return;
+    }
+    if let Err(e) = stdout.flush().await {
+        error!("Fatal: Failed to flush after ready message: {}", e);
+        return;
+    }
 
     info!("MCP Server listening on stdio for JSON-RPC messages...");
 
     loop {
         line_buffer.clear();
         match reader.read_line(&mut line_buffer).await {
-            Ok(0) => { info!("Stdin closed (EOF). Exiting server."); break; }
+            Ok(0) => {
+                info!("Stdin closed (EOF). Exiting server.");
+                break;
+            }
             Ok(_) => {
                 let trimmed_line = line_buffer.trim();
                 if trimmed_line.is_empty() || !trimmed_line.starts_with('{') {
-                    if !trimmed_line.is_empty() { warn!("Received non-JSON input line, ignoring."); }
+                    if !trimmed_line.is_empty() {
+                        warn!("Received non-JSON input line, ignoring.");
+                    }
                     continue;
                 }
-                info!("<<< Received raw line ({} bytes): {}", trimmed_line.len(), trimmed_line);
-                
+                info!(
+                    "<<< Received raw line ({} bytes): {}",
+                    trimmed_line.len(),
+                    trimmed_line
+                );
+
                 // First parse as generic JSON to check if it's a notification
                 let parsed_json: Value = match serde_json::from_str(trimmed_line) {
                     Ok(v) => v,
                     Err(e) => {
                         error!("JSON Parse Error: {}. Raw: '{}'", e, trimmed_line);
                         let id = Value::Null;
-                        let error_resp = create_error_response(id, -32700, format!("Parse error: {}", e));
-                        let resp_str = serde_json::to_string(&error_resp).unwrap_or_else(|se| 
+                        let error_resp =
+                            create_error_response(id, -32700, format!("Parse error: {}", e));
+                        let resp_str = serde_json::to_string(&error_resp).unwrap_or_else(|se|
                             format!(r#"{{"jsonrpc":"2.0","id":null,"error":{{"code":-32000,"message":"Serialization error: {}"}}}}"#, se));
                         error!(">>> Sending Parse Error Response: {}", resp_str);
-                        if let Err(io_e) = stdout.write_all(format!("{}\r\n", resp_str).as_bytes()).await { 
+                        if let Err(io_e) = stdout
+                            .write_all(format!("{}\r\n", resp_str).as_bytes())
+                            .await
+                        {
                             error!("Failed to write parse error response: {}", io_e);
                         }
-                        if let Err(io_e) = stdout.flush().await { 
+                        if let Err(io_e) = stdout.flush().await {
                             error!("Failed to flush after parse error response: {}", io_e);
                         }
                         continue;
                     }
                 };
-                
+
                 // Handle notification (no id field or null id)
                 if parsed_json.get("id").is_none() || parsed_json.get("id") == Some(&Value::Null) {
                     if let Some(method) = parsed_json.get("method").and_then(|m| m.as_str()) {
@@ -801,7 +1673,7 @@ async fn main() {
                     }
                     continue;
                 }
-                
+
                 // Parse as RpcRequest for normal handling
                 let req: RpcRequest = match serde_json::from_value(parsed_json) {
                     Ok(r) => r,
@@ -810,11 +1682,15 @@ async fn main() {
                         let id = serde_json::from_str::<Value>(trimmed_line)
                             .map(|v| v.get("id").cloned().unwrap_or(Value::Null))
                             .unwrap_or(Value::Null);
-                        let error_resp = create_error_response(id, -32700, format!("Parse error: {}", e));
-                        let resp_str = serde_json::to_string(&error_resp).unwrap_or_else(|se| 
+                        let error_resp =
+                            create_error_response(id, -32700, format!("Parse error: {}", e));
+                        let resp_str = serde_json::to_string(&error_resp).unwrap_or_else(|se|
                             format!(r#"{{"jsonrpc":"2.0","id":null,"error":{{"code":-32000,"message":"Serialization error: {}"}}}}"#, se));
                         error!(">>> Sending Parse Error Response: {}", resp_str);
-                        if let Err(io_e) = stdout.write_all(format!("{}\r\n", resp_str).as_bytes()).await {
+                        if let Err(io_e) = stdout
+                            .write_all(format!("{}\r\n", resp_str).as_bytes())
+                            .await
+                        {
                             error!("Failed to write parse error response: {}", io_e);
                         }
                         if let Err(io_e) = stdout.flush().await {
@@ -826,11 +1702,18 @@ async fn main() {
                 let request_id = req.id.clone();
                 let request_method = req.method.clone();
                 let is_notification = request_id == Value::Null;
-                debug!("Processing parsed request: ID={:?}, Method='{}'", request_id, request_method);
+                debug!(
+                    "Processing parsed request: ID={:?}, Method='{}'",
+                    request_id, request_method
+                );
                 match tokio::time::timeout(Duration::from_secs(10), process_request(req)).await {
                     Ok(response) => {
-                        if is_notification { info!("Processed notification '{}', no response sent.", request_method); }
-                        else {
+                        if is_notification {
+                            info!(
+                                "Processed notification '{}', no response sent.",
+                                request_method
+                            );
+                        } else {
                             let resp_str = match serde_json::to_string(&response) {
                                 Ok(s) => s,
                                 Err(e) => {
@@ -840,23 +1723,57 @@ async fn main() {
                                 }
                             };
                             // info!(">>> Sending response for ID {:?}, Method '{}': {}", response.id, request_method, resp_str);
-                            if let Err(e) = stdout.write_all(format!("{}\r\n", resp_str).as_bytes()).await { error!("Failed to write response for ID {:?}: {}", response.id, e); }
-                            else if let Err(e) = stdout.flush().await { error!("Failed to flush stdout for ID {:?}: {}", response.id, e); }
+                            if let Err(e) = stdout
+                                .write_all(format!("{}\r\n", resp_str).as_bytes())
+                                .await
+                            {
+                                error!("Failed to write response for ID {:?}: {}", response.id, e);
+                            } else if let Err(e) = stdout.flush().await {
+                                error!("Failed to flush stdout for ID {:?}: {}", response.id, e);
+                            }
                         }
                     }
                     Err(_) => {
-                        error!("Request processing timed out after 10s for Method '{}', ID {:?}", request_method, request_id);
+                        error!(
+                            "Request processing timed out after 10s for Method '{}', ID {:?}",
+                            request_method, request_id
+                        );
                         if !is_notification {
-                            let timeout_resp = create_error_response(request_id.clone(), -32000, format!("Request timed out for method '{}'", request_method));
-                            let resp_str = serde_json::to_string(&timeout_resp).expect("Failed to serialize timeout response");
+                            let timeout_resp = create_error_response(
+                                request_id.clone(),
+                                -32000,
+                                format!("Request timed out for method '{}'", request_method),
+                            );
+                            let resp_str = serde_json::to_string(&timeout_resp)
+                                .expect("Failed to serialize timeout response");
                             error!(">>> Sending Timeout Error Response: {}", resp_str);
-                            if let Err(e) = stdout.write_all(format!("{}\r\n", resp_str).as_bytes()).await { error!("Failed to write timeout response for ID {:?}: {}", request_id, e); }
-                            else if let Err(e) = stdout.flush().await { error!("Failed to flush stdout after timeout for ID {:?}: {}", request_id, e); }
-                        } else { info!("Timeout occurred for notification '{}', no error response sent.", request_method); }
+                            if let Err(e) = stdout
+                                .write_all(format!("{}\r\n", resp_str).as_bytes())
+                                .await
+                            {
+                                error!(
+                                    "Failed to write timeout response for ID {:?}: {}",
+                                    request_id, e
+                                );
+                            } else if let Err(e) = stdout.flush().await {
+                                error!(
+                                    "Failed to flush stdout after timeout for ID {:?}: {}",
+                                    request_id, e
+                                );
+                            }
+                        } else {
+                            info!(
+                                "Timeout occurred for notification '{}', no error response sent.",
+                                request_method
+                            );
+                        }
                     }
                 }
             }
-            Err(e) => { error!("Error reading from stdin: {}. Exiting.", e); break; }
+            Err(e) => {
+                error!("Error reading from stdin: {}. Exiting.", e);
+                break;
+            }
         }
     }
     info!("OpenTDF MCP Server shutting down.");

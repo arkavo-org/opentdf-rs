@@ -10,23 +10,56 @@ Start Claude with the OpenTDF MCP server:
 claude --mcp="cargo run -p opentdf-mcp-server"
 ```
 
+## MCP Client
+
+The `mcp_client.js` tool provides a Node.js client for interacting with the OpenTDF MCP server.
+
+### Usage
+
+```bash
+# Create a TDF file
+node mcp_client.js create <input_file> <output_tdf> [kas_url]
+
+# Read a TDF file
+node mcp_client.js read <tdf_file>
+
+# Run ABAC tests
+node mcp_client.js test-abac
+```
+
 ## Test Scripts
 
 The following test scripts demonstrate OpenTDF functionality:
 
 | Script | Description |
 |--------|-------------|
+| `test-scripts/test-abac-mcp.js` | ABAC policy evaluation testing |
+| `test-scripts/http-test-abac.js` | HTTP-based ABAC testing |
 | `test-mcp.js` | Basic MCP integration testing |
-| `mcp-abac-test.js` | ABAC policy evaluation testing |
 | `audit-logging-test.js` | Comprehensive audit logging for ABAC access |
 
-To run a test script directly:
+To run the ABAC tests:
 
 ```bash
-node tools/audit-logging-test.js
+# Using the convenience script
+./run-abac-test.sh
+
+# Or directly with Node.js
+node test-scripts/test-abac-mcp.js
 ```
 
 The audit logging test generates detailed compliance reports in the `tools/reports` directory.
+
+## ABAC Test Scenarios
+
+The ABAC tests include various scenarios:
+
+1. Valid user with all required attributes (should be granted access)
+2. User from legal department (testing OR conditions)
+3. User with insufficient clearance (should be denied access)
+4. User from unauthorized department (should be denied access) 
+5. User from unauthorized region (should be denied access)
+6. Context attributes that override user attributes
 
 ## Example Tasks
 

@@ -426,10 +426,31 @@ fn evaluate_condition(
             // Special handling for string values to support hierarchies
             match (attr_value, expected_value) {
                 (AttributeValue::String(a), AttributeValue::String(b)) => {
-                    // Simple string comparison as a fallback for hierarchical values
+                    // For security clearance, implement a basic hierarchy
                     // In a real implementation, we would have a lookup table for hierarchy levels
-                    // For now, just directly compare strings
-                    Ok(a >= b)
+                    if a == b {
+                        return Ok(true); // Same level meets requirement
+                    }
+
+                    // Define a simple hierarchy for clearance levels
+                    let level_values = match a.to_uppercase().as_str() {
+                        "TOP_SECRET" => 4,
+                        "SECRET" => 3,
+                        "CONFIDENTIAL" => 2,
+                        "PUBLIC" => 1,
+                        _ => 0, // Unknown levels default to lowest
+                    };
+
+                    let required_level = match b.to_uppercase().as_str() {
+                        "TOP_SECRET" => 4,
+                        "SECRET" => 3,
+                        "CONFIDENTIAL" => 2,
+                        "PUBLIC" => 1,
+                        _ => 0,
+                    };
+
+                    // User's level must be >= required level
+                    Ok(level_values >= required_level)
                 }
                 _ => compare_numeric(attr_value, expected_value, |a, b| a >= b),
             }
@@ -439,8 +460,30 @@ fn evaluate_condition(
             // Special handling for string values to support hierarchies
             match (attr_value, expected_value) {
                 (AttributeValue::String(a), AttributeValue::String(b)) => {
-                    // Simple string comparison as a fallback
-                    Ok(a <= b)
+                    // For security clearance, implement a basic hierarchy
+                    if a == b {
+                        return Ok(true); // Same level meets requirement
+                    }
+
+                    // Define a simple hierarchy for clearance levels
+                    let level_values = match a.to_uppercase().as_str() {
+                        "TOP_SECRET" => 4,
+                        "SECRET" => 3,
+                        "CONFIDENTIAL" => 2,
+                        "PUBLIC" => 1,
+                        _ => 0, // Unknown levels default to lowest
+                    };
+
+                    let max_level = match b.to_uppercase().as_str() {
+                        "TOP_SECRET" => 4,
+                        "SECRET" => 3,
+                        "CONFIDENTIAL" => 2,
+                        "PUBLIC" => 1,
+                        _ => 0,
+                    };
+
+                    // User's level must be <= maximum level
+                    Ok(level_values <= max_level)
                 }
                 _ => compare_numeric(attr_value, expected_value, |a, b| a <= b),
             }
