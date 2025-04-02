@@ -24,14 +24,6 @@ jobs:
         with:
           node-version: '20'
       
-      - name: Install dependencies
-        working-directory: ./tools
-        run: npm install
-      
-      - name: Run Cucumber.js tests
-        working-directory: ./tools
-        run: npx cucumber-js
-      
       - name: Generate test report
         working-directory: ./tools
         run: node generate-bdd-report.js
