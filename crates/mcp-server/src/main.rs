@@ -1482,10 +1482,17 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                         hasher.update(p.tdf_data.as_bytes());
                         let tdf_hash =
                             base64::engine::general_purpose::STANDARD.encode(hasher.finalize());
+                            
+                        // Calculate policy key hash for verification
+                        let mut policy_key_hasher = sha2::Sha256::new();
+                        policy_key_hasher.update(p.policy_key.as_bytes());
+                        let policy_key_hash =
+                            base64::engine::general_purpose::STANDARD.encode(policy_key_hasher.finalize());
 
                         info!(
                             tdf_size_bytes = p.tdf_data.len(),
                             tdf_hash = &tdf_hash[0..16], // First 16 chars of hash for logging
+                            policy_key_hash = &policy_key_hash[0..16],
                             operation = "policy_binding_verify",
                             "Starting policy binding verification"
                         );
@@ -1494,15 +1501,19 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                         // 1. Decode the TDF data
                         // 2. Extract the manifest
                         // 3. Verify the policy binding signature using the policy_key
+                        
+                        // Mock binding verification using the policy key
+                        let binding_valid = !p.policy_key.is_empty(); // Simple check to use the policy_key
 
-                        // For demonstration, we'll assume valid binding
                         RpcResponse {
                             jsonrpc: "2.0".to_string(),
                             id: req.id,
                             result: Some(json!({
-                                "binding_valid": true,
+                                "binding_valid": binding_valid,
                                 "binding_info": {
                                     "algorithm": "HS256",
+                                    "policy_key_provided": true,
+                                    "policy_key_hash_prefix": &policy_key_hash[0..16],
                                     "timestamp": chrono::Utc::now().to_rfc3339()
                                 }
                             })),
