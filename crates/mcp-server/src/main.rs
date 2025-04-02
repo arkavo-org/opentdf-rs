@@ -1482,12 +1482,12 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                         hasher.update(p.tdf_data.as_bytes());
                         let tdf_hash =
                             base64::engine::general_purpose::STANDARD.encode(hasher.finalize());
-                            
+
                         // Calculate policy key hash for verification
                         let mut policy_key_hasher = sha2::Sha256::new();
                         policy_key_hasher.update(p.policy_key.as_bytes());
-                        let policy_key_hash =
-                            base64::engine::general_purpose::STANDARD.encode(policy_key_hasher.finalize());
+                        let policy_key_hash = base64::engine::general_purpose::STANDARD
+                            .encode(policy_key_hasher.finalize());
 
                         info!(
                             tdf_size_bytes = p.tdf_data.len(),
@@ -1501,7 +1501,7 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                         // 1. Decode the TDF data
                         // 2. Extract the manifest
                         // 3. Verify the policy binding signature using the policy_key
-                        
+
                         // Mock binding verification using the policy key
                         let binding_valid = !p.policy_key.is_empty(); // Simple check to use the policy_key
 
