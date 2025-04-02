@@ -10,6 +10,24 @@ Start Claude with the OpenTDF MCP server:
 claude --mcp="cargo run -p opentdf-mcp-server"
 ```
 
+## Test Scripts
+
+The following test scripts demonstrate OpenTDF functionality:
+
+| Script | Description |
+|--------|-------------|
+| `test-mcp.js` | Basic MCP integration testing |
+| `mcp-abac-test.js` | ABAC policy evaluation testing |
+| `audit-logging-test.js` | Comprehensive audit logging for ABAC access |
+
+To run a test script directly:
+
+```bash
+node tools/audit-logging-test.js
+```
+
+The audit logging test generates detailed compliance reports in the `tools/reports` directory.
+
 ## Example Tasks
 
 Here are some examples of tasks you can ask Claude to perform using the OpenTDF MCP integration.
