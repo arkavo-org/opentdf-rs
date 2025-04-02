@@ -52,11 +52,14 @@ mcpServer.stdout.on('data', (data) => {
       // Try to parse the accumulated JSON
       const response = JSON.parse(jsonBuffer);
       
+      // Log raw response for debugging
+      console.log(`📥 Received raw JSON: ${jsonBuffer.substring(0, 100)}...`);
+      
       // Reset buffer after successful parse
       jsonBuffer = '';
       
       // Find matching request
-      if (pendingRequests.has(response.id)) {
+      if (response.id && pendingRequests.has(response.id)) {
         console.log(`✅ Response received for request ${response.id}`);
         const request = pendingRequests.get(response.id);
         pendingRequests.delete(response.id);
@@ -68,10 +71,13 @@ mcpServer.stdout.on('data', (data) => {
         // Start the test sequence when server is ready
         setTimeout(runTests, 1000);
       } else {
-        console.log('Received response for unknown request ID:', response.id);
+        console.log(`⚠️ Response has no matching request: ID=${response.id}, Method=${response.method}`);
+        console.log(`⚠️ Current pending request IDs: ${[...pendingRequests.keys()].join(', ')}`);
       }
     } catch (e) {
       // JSON is incomplete, continue collecting
+      console.log(`⚠️ JSON parse error on buffer: ${jsonBuffer.substring(0, 50)}...`);
+      console.log(`⚠️ Error: ${e.message}`);
     }
   } else if (output.trim()) {
     console.log(`Server log: ${output.trim()}`);
@@ -114,11 +120,13 @@ function sendRequest(method, params = {}) {
     // Set timeout for this request
     setTimeout(() => {
       if (pendingRequests.has(id)) {
+        console.log(`🕒 Timeout reached for request ${id} (${method})`);
+        console.log(`🔍 Debug: Pending requests at timeout: ${[...pendingRequests.keys()].join(', ')}`);
         const pendingRequest = pendingRequests.get(id);
         pendingRequests.delete(id);
         pendingRequest.reject(new Error(`Timeout waiting for ${method} response`));
       }
-    }, 5000);
+    }, 10000); // Increased timeout to 10 seconds
   });
 }
 
@@ -195,6 +203,8 @@ function handleListToolsResponse(result) {
 
 // Run all ABAC tests
 async function runTests() {
+  // Flag to track test failure
+  let testFailed = false;
   try {
     // Initialize the server
     console.log('\nSending initialize request...');
@@ -421,10 +431,13 @@ async function runTests() {
 
   } catch (error) {
     console.log(`\n❌ Test failed: ${error.message}`);
+    // Set failure flag
+    testFailed = true;
   } finally {
     // Clean up
     console.log('\nTest completed. Shutting down server...');
     mcpServer.kill();
-    process.exit(0);
+    // Exit with appropriate code
+    process.exit(testFailed ? 1 : 0);
   }
 }

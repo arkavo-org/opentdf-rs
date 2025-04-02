@@ -26,7 +26,16 @@ jobs:
       
       - name: Run MCP ABAC tests
         working-directory: ./tools
-        run: node test-mcp.js
+        run: |
+          # Run the test and capture output
+          OUTPUT=$(node test-mcp.js)
+          echo "$OUTPUT"
+          
+          # Check for test failure
+          if echo "$OUTPUT" | grep -q "❌ Test failed"; then
+            echo "::error::MCP ABAC tests failed"
+            exit 1
+          fi
       
       - name: Create artifact directory
         run: mkdir -p artifacts
