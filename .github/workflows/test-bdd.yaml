@@ -16,9 +16,6 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-        with:
-          persist-credentials: false # To avoid Git auth issues
-          submodules: false # Don't attempt to check out submodules
       
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -64,12 +61,3 @@ jobs:
           # Kill any lingering processes
           killall -9 opentdf-mcp-server || true
           killall -9 node || true
-          
-      # This is needed to prevent git submodule errors in post-checkout cleanup
-      - name: Fix submodule cleanup
-        if: always()
-        run: |
-          echo "Removing problematic Git references..."
-          rm -rf .git/modules/inspector .git/modules/mcp-rust-sdk || true
-          git config --local --unset submodule.inspector.url || true
-          git config --local --unset submodule.mcp-rust-sdk.url || true
