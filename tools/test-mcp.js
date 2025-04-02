@@ -16,8 +16,8 @@ const crypto = require('crypto');
 console.log('OpenTDF ABAC Test with MCP');
 console.log('=========================');
 
-// Start the MCP server using pre-built release binary
-const mcpServer = spawn('../../target/release/opentdf-mcp-server', [], {
+// Start the MCP server
+const mcpServer = spawn('cargo', ['run', '-p', 'opentdf-mcp-server'], {
   stdio: ['pipe', 'pipe', 'inherit'] // pipe stdin/stdout, inherit stderr
 });
 
