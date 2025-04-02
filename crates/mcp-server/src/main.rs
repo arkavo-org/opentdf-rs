@@ -1,11 +1,14 @@
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::Digest;
 use std::collections::HashMap;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{error, info};
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+use std::future::Future;
+use std::pin::Pin;
 use uuid::Uuid;
 
 use opentdf::{
@@ -14,7 +17,7 @@ use opentdf::{
 };
 
 /// JSON-RPC request type.
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Serialize, Clone)]
 struct RpcRequest {
     jsonrpc: String,
     id: Value,
@@ -42,7 +45,7 @@ struct RpcError {
 }
 
 /// Parameters for TDF creation
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct TdfCreateParams {
     data: String, // Base64 encoded data
     kas_url: String,
@@ -50,7 +53,7 @@ struct TdfCreateParams {
 }
 
 /// Parameters for TDF reading
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct TdfReadParams {
     tdf_data: String, // Base64 encoded TDF archive
 }
@@ -118,8 +121,12 @@ struct PolicyBindingVerifyParams {
     policy_key: String,
 }
 
+/// Type alias for the boxed future that process_request returns
+type ResponseFuture = Pin<Box<dyn Future<Output = RpcResponse> + Send>>;
+
 /// Processes a JSON-RPC request asynchronously.
-async fn process_request(req: RpcRequest) -> RpcResponse {
+fn process_request(req: RpcRequest) -> ResponseFuture {
+    Box::pin(async move {
     // Validate JSON-RPC version.
     if req.jsonrpc != "2.0" {
         return RpcResponse {
@@ -312,8 +319,7 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
                 }
             });
 
-            // Skip pretty printing to reduce log size
-            info!("Sending initialize response with capabilities.tools as OBJECT");
+            info!("Sending initialize response with tools array for Claude compatibility");
 
             RpcResponse {
                 jsonrpc: "2.0".to_string(),
@@ -437,21 +443,22 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
                         "schema": {"type": "object"}
                     },
                     {
-                        "name": "user_attributes",
-                        "description": "Sets user attributes for testing access control",
-                        "inputSchema": {"type": "object"},
-                        "schema": {"type": "object"}
-                    },
-                    {
-                        "name": "access_evaluate",
-                        "description": "Evaluates whether a user with attributes can access protected content",
-                        "inputSchema": {"type": "object"},
-                        "schema": {"type": "object"}
-                    },
-                    {
                         "name": "policy_binding_verify",
                         "description": "Verifies the cryptographic binding of a policy to a TDF",
-                        "inputSchema": {"type": "object"},
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "tdf_data": {
+                                    "type": "string",
+                                    "description": "Base64 encoded TDF archive"
+                                },
+                                "policy_key": {
+                                    "type": "string",
+                                    "description": "Policy key for verification"
+                                }
+                            },
+                            "required": ["tdf_data", "policy_key"]
+                        },
                         "schema": {"type": "object"}
                     }
                 ]
@@ -563,7 +570,7 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
                                 };
                             }
                         }
-                        Err(e) => {
+                        Err(_e) => {
                             // If policy is not in our struct format, try legacy approach
                             match serde_json::to_string(&p.policy) {
                                 Ok(policy_str) => {
@@ -1216,7 +1223,7 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
                     }
                 }
             }
-        },
+        }
 
         // Implement attribute definition for hierarchical attributes
         "attribute_define" => {
@@ -1225,13 +1232,13 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
             match params {
                 Ok(p) => {
                     info!("Defining attribute namespace: {}", p.namespace);
-                    
+
                     // Process values
                     let mut attribute_values = Vec::new();
                     for value in &p.values {
                         attribute_values.push(value.clone());
                     }
-                    
+
                     // Process hierarchy if provided
                     let hierarchy_info = if let Some(hierarchy) = p.hierarchy {
                         // Process hierarchical structure
@@ -1241,14 +1248,15 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
                                 level.get("value").and_then(|v| v.as_str()),
                                 level.get("inherits_from").and_then(|v| v.as_str()),
                             ) {
-                                hierarchy_map.insert(level_value.to_string(), inherits_from.to_string());
+                                hierarchy_map
+                                    .insert(level_value.to_string(), inherits_from.to_string());
                             }
                         }
                         Some(hierarchy_map)
                     } else {
                         None
                     };
-                    
+
                     // Build response with attribute info
                     let attribute_def = json!({
                         "namespace": p.namespace,
@@ -1257,7 +1265,7 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
                         "hierarchy": hierarchy_info,
                         "id": Uuid::new_v4().to_string()
                     });
-                    
+
                     RpcResponse {
                         jsonrpc: "2.0".to_string(),
                         id: req.id,
@@ -1281,8 +1289,8 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
                     }
                 }
             }
-        },
-        
+        }
+
         // Implement user attribute assignment
         "user_attributes" => {
             info!("Received user_attributes request");
@@ -1290,7 +1298,7 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
             match params {
                 Ok(p) => {
                     info!("Setting attributes for user: {}", p.user_id);
-                    
+
                     // Process attribute assignments
                     let mut processed_attributes = Vec::new();
                     for attr in &p.attributes {
@@ -1305,7 +1313,7 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
                             }));
                         }
                     }
-                    
+
                     // Store user attributes (in a real implementation, this would be persisted)
                     RpcResponse {
                         jsonrpc: "2.0".to_string(),
@@ -1331,8 +1339,8 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
                     }
                 }
             }
-        },
-        
+        }
+
         // Implement access evaluation
         "access_evaluate" => {
             info!("Received access_evaluate request");
@@ -1340,36 +1348,41 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
             match params {
                 Ok(p) => {
                     info!("Evaluating access based on policy and user attributes");
-                    
+
                     // Evaluate all policy conditions against user attributes
                     // In a real implementation, this would use the actual ABAC evaluation code
-                    
+
                     // For demonstration purposes, we'll perform a simple evaluation
                     let mut results = Vec::new();
                     let mut overall_access = true;
 
                     // If policy has attributes array, evaluate each
                     if let Some(policy_body) = p.policy.get("body") {
-                        if let Some(attributes) = policy_body.get("attributes").and_then(|a| a.as_array()) {
+                        if let Some(attributes) =
+                            policy_body.get("attributes").and_then(|a| a.as_array())
+                        {
                             for attr_policy in attributes {
                                 // Simple condition matching for demonstration
-                                if let Some(condition) = attr_policy.get("attribute").and_then(|a| a.as_str()) {
+                                if let Some(condition) =
+                                    attr_policy.get("attribute").and_then(|a| a.as_str())
+                                {
                                     // Check if user has matching attribute
                                     let satisfied = match p.user_attributes.get("attributes") {
                                         Some(user_attrs) if user_attrs.is_array() => {
                                             user_attrs.as_array().unwrap().iter().any(|ua| {
-                                                ua.get("attribute").and_then(|a| a.as_str()) == Some(condition)
+                                                ua.get("attribute").and_then(|a| a.as_str())
+                                                    == Some(condition)
                                             })
-                                        },
+                                        }
                                         _ => false,
                                     };
-                                    
+
                                     results.push(json!({
                                         "condition": condition,
                                         "satisfied": satisfied,
                                         "reason": if satisfied { "Attribute present" } else { "Missing attribute" }
                                     }));
-                                    
+
                                     if !satisfied {
                                         overall_access = false;
                                     }
@@ -1377,13 +1390,13 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
                             }
                         }
                     }
-                    
+
                     // Consider environmental context if provided
                     if let Some(context) = &p.context {
                         info!("Evaluating with environmental context: {}", context);
                         // In a real implementation, would evaluate context conditions
                     }
-                    
+
                     RpcResponse {
                         jsonrpc: "2.0".to_string(),
                         id: req.id,
@@ -1408,21 +1421,21 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
                     }
                 }
             }
-        },
-        
+        }
+
         // Implement policy binding verification
         "policy_binding_verify" => {
             info!("Received policy_binding_verify request");
             let params: Result<PolicyBindingVerifyParams, _> = serde_json::from_value(req.params);
             match params {
                 Ok(p) => {
-                    info!("Verifying policy binding in TDF");
-                    
+                    info!("Verifying policy binding in TDF with data length: {}", p.tdf_data.len());
+
                     // In a real implementation, would:
                     // 1. Decode the TDF data
                     // 2. Extract the manifest
                     // 3. Verify the policy binding signature using the policy_key
-                    
+
                     // For demonstration, we'll assume valid binding
                     RpcResponse {
                         jsonrpc: "2.0".to_string(),
@@ -1480,6 +1493,65 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
             }
         }
 
+        // Handle MCP-specific tool calls (support for Claude integration)
+        "tools/call" => {
+            info!("Received tools/call request from Claude: {}", 
+                  serde_json::to_string_pretty(&req).unwrap_or_default());
+            
+            if let Value::Object(params) = &req.params {
+                // Get tool name and parameters 
+                let tool_name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                let tool_params = params.get("parameters").cloned().unwrap_or(json!({}));
+                
+                info!("Tool call for name: '{}' with params: {}", 
+                      tool_name, 
+                      serde_json::to_string_pretty(&tool_params).unwrap_or_default());
+                
+                // Extract any prefix if present 
+                let actual_tool_name = if tool_name.starts_with("mcp__opentdf__") {
+                    // Handle Claude MCP format (mcp__opentdf__toolname)
+                    tool_name.strip_prefix("mcp__opentdf__").unwrap_or(tool_name)
+                } else if tool_name.starts_with("opentdf__") {
+                    // Handle standard MCP format (opentdf__toolname)
+                    tool_name.strip_prefix("opentdf__").unwrap_or(tool_name)
+                } else {
+                    // No prefix, use as is
+                    tool_name
+                };
+                
+                info!("Translating tool call '{}' to method", actual_tool_name);
+                
+                // Create internal request - forward all tool calls to their respective methods
+                let internal_req = RpcRequest {
+                    jsonrpc: "2.0".to_string(),
+                    id: req.id.clone(),
+                    method: actual_tool_name.to_string(),
+                    params: tool_params,
+                };
+                
+                // Process with existing handler
+                let response = process_request(internal_req).await;
+                
+                RpcResponse {
+                    jsonrpc: "2.0".to_string(),
+                    id: req.id,
+                    result: response.result,
+                    error: response.error,
+                }
+            } else {
+                error!("Invalid parameters for tools/call");
+                RpcResponse {
+                    jsonrpc: "2.0".to_string(),
+                    id: req.id,
+                    result: None,
+                    error: Some(RpcError {
+                        code: -32602,
+                        message: "Invalid parameters for tools/call".to_string(),
+                    }),
+                }
+            }
+        }
+
         // Unknown method.
         _ => {
             error!("Method not found: '{}'", req.method);
@@ -1494,6 +1566,7 @@ async fn process_request(req: RpcRequest) -> RpcResponse {
             }
         }
     }
+    })
 }
 
 /// Helper function to convert JSON to AttributePolicy
@@ -1531,7 +1604,7 @@ fn convert_to_attribute_policy(value: Value) -> Result<AttributePolicy, String> 
                 "NOT" => {
                     if let Some(condition) = value.get("condition") {
                         let parsed_condition = convert_to_attribute_policy(condition.clone())?;
-                        return Ok(AttributePolicy::not(parsed_condition));
+                        return Ok(!parsed_condition);
                     }
                     return Err("NOT operator requires 'condition' field".to_string());
                 }
