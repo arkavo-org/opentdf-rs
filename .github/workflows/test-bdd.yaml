@@ -15,10 +15,6 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
       
-      - name: Build MCP server
-        working-directory: ./crates/mcp-server
-        run: cargo build --release
-      
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
