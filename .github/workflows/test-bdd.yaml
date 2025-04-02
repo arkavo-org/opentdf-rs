@@ -24,13 +24,13 @@ jobs:
         with:
           node-version: '20'
       
-      - name: Generate test report
+      - name: Run MCP ABAC tests
         working-directory: ./tools
-        run: node generate-bdd-report.js
+        run: node test-mcp.js
       
       - name: Upload test results
         uses: actions/upload-artifact@v4
         with:
-          name: cucumber-report
-          path: tools/reports/
+          name: mcp-test-artifacts
+          path: tools/sample.tdf
           retention-days: 7
