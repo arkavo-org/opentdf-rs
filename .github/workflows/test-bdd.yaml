@@ -5,12 +5,19 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+    
+defaults:
+  run:
+    shell: bash
 
 jobs:
   BDD:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false # To avoid Git auth issues
       
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -48,3 +55,11 @@ jobs:
           name: mcp-test-artifacts
           path: artifacts/
           retention-days: 7
+          
+      - name: Cleanup
+        if: always() # Run even if previous steps fail
+        run: |
+          echo "Cleaning up resources..."
+          # Kill any lingering processes
+          killall -9 opentdf-mcp-server || true
+          killall -9 node || true
