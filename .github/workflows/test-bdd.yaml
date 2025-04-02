@@ -28,9 +28,17 @@ jobs:
         working-directory: ./tools
         run: node test-mcp.js
       
+      - name: Create artifact directory
+        run: mkdir -p artifacts
+        
+      - name: Copy test artifacts
+        run: |
+          cp tools/sample.tdf artifacts/ || echo "No sample.tdf file found"
+          echo "Test completed at $(date)" > artifacts/completion.txt
+        
       - name: Upload test results
         uses: actions/upload-artifact@v4
         with:
           name: mcp-test-artifacts
-          path: tools/sample.tdf
+          path: artifacts/
           retention-days: 7
