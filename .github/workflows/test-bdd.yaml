@@ -20,15 +20,10 @@ jobs:
         with:
           node-version: '20'
       
-      - name: Run MCP ABAC tests with debugging
+      - name: Run MCP ABAC tests
         working-directory: ./tools
-        run: |
-          # Patch test-mcp.js to fix JSON parsing issue
-          sed -i 's/jsonBuffer += output;/if (!jsonBuffer.includes(output.trim())) { jsonBuffer += output; }/g' test-mcp.js
-          
-          # Run with increased timeout
-          node test-mcp.js
-        continue-on-error: true  # Allow test to continue even if it fails
+        run: node test-mcp.js
+        continue-on-error: true  # Continue even if tests time out
         
       - name: Check test output
         run: |

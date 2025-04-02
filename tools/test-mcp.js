@@ -41,46 +41,81 @@ process.on('SIGINT', () => {
 
 // Handle server output
 let jsonBuffer = '';
+let processedResponses = new Set(); // Track responses we've already processed
+
 mcpServer.stdout.on('data', (data) => {
   const output = data.toString();
+  const lines = output.split('\n');
   
-  // If it looks like JSON, add to buffer
-  if (output.trim().startsWith('{')) {
-    jsonBuffer += output;
+  // Process each line separately to handle the duplicate output issue
+  for (const line of lines) {
+    if (!line.trim()) continue;
     
-    try {
-      // Try to parse the accumulated JSON
-      const response = JSON.parse(jsonBuffer);
-      
-      // Log raw response for debugging
-      console.log(`📥 Received raw JSON: ${jsonBuffer.substring(0, 100)}...`);
-      
-      // Reset buffer after successful parse
-      jsonBuffer = '';
-      
-      // Find matching request
-      if (response.id && pendingRequests.has(response.id)) {
-        console.log(`✅ Response received for request ${response.id}`);
-        const request = pendingRequests.get(response.id);
-        pendingRequests.delete(response.id);
-
-        // Process the response based on the request method
-        processResponse(request, response);
-      } else if (response.method === 'server/ready') {
-        console.log('MCP Server ready');
-        // Start the test sequence when server is ready
-        setTimeout(runTests, 1000);
-      } else {
-        console.log(`⚠️ Response has no matching request: ID=${response.id}, Method=${response.method}`);
-        console.log(`⚠️ Current pending request IDs: ${[...pendingRequests.keys()].join(', ')}`);
+    if (line.trim().startsWith('{')) {
+      try {
+        // Try to parse the JSON directly from the line
+        const response = JSON.parse(line.trim());
+        
+        // Create a unique key for deduplication
+        const responseKey = `${response.id}-${response.method || 'unknown'}`;
+        
+        // Skip if we've already processed this response
+        if (processedResponses.has(responseKey)) {
+          continue;
+        }
+        
+        // Mark as processed
+        processedResponses.add(responseKey);
+        
+        // Process the response
+        if (response.id && pendingRequests.has(response.id)) {
+          console.log(`✅ Response received for request ${response.id}`);
+          const request = pendingRequests.get(response.id);
+          pendingRequests.delete(response.id);
+          
+          // Process the response based on the request method
+          processResponse(request, response);
+        } else if (response.method === 'server/ready') {
+          console.log('MCP Server ready');
+          // Start the test sequence when server is ready
+          setTimeout(runTests, 1000);
+        } else if (response.id) {
+          console.log(`⚠️ Response has unknown ID: ${response.id}, Method=${response.method || 'unknown'}`);
+        }
+      } catch (e) {
+        // If direct parsing fails, add to buffer and try to parse
+        jsonBuffer += line;
+        try {
+          const response = JSON.parse(jsonBuffer);
+          jsonBuffer = '';
+          
+          // Create a unique key for deduplication
+          const responseKey = `${response.id}-${response.method || 'unknown'}`;
+          
+          // Skip if we've already processed this response
+          if (processedResponses.has(responseKey)) {
+            continue;
+          }
+          
+          // Mark as processed
+          processedResponses.add(responseKey);
+          
+          // Process the response
+          if (response.id && pendingRequests.has(response.id)) {
+            console.log(`✅ Response received for request ${response.id} (from buffer)`);
+            const request = pendingRequests.get(response.id);
+            pendingRequests.delete(response.id);
+            
+            // Process the response based on the request method
+            processResponse(request, response);
+          }
+        } catch (bufferError) {
+          // JSON is still incomplete, keep collecting
+        }
       }
-    } catch (e) {
-      // JSON is incomplete, continue collecting
-      console.log(`⚠️ JSON parse error on buffer: ${jsonBuffer.substring(0, 50)}...`);
-      console.log(`⚠️ Error: ${e.message}`);
+    } else if (line.trim()) {
+      console.log(`Server log: ${line.trim()}`);
     }
-  } else if (output.trim()) {
-    console.log(`Server log: ${output.trim()}`);
   }
 });
 
