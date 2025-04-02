@@ -1,208 +1,256 @@
 #!/usr/bin/env node
 
 /**
- * OpenTDF MCP Tool Registration Script
+ * OpenTDF MCP Tool Registration Script for Claude Code
  * 
- * This script assists in registering the OpenTDF tools with Claude.
- * It provides the command format that you can use with Claude
- * to register the TDF tools in your session.
+ * This script generates the registration command for OpenTDF tools in Claude Code.
+ * It creates all tools with correct formats to work with Claude Code MCP.
  */
 
 const tools = [
   {
-    name: "opentdf__tdf_create",
-    description: "Creates a new TDF archive with encrypted data and policy binding",
-    input_schema: {
-      type: "object",
-      properties: {
-        data: {
-          type: "string",
-          description: "Base64 encoded data to encrypt and store in the TDF"
-        },
-        kas_url: {
-          type: "string",
-          description: "URL of the Key Access Server"
-        },
-        policy: {
-          type: "object",
-          description: "Policy to bind to the TDF archive"
-        }
-      },
-      required: ["data", "kas_url", "policy"]
-    }
-  },
-  {
-    name: "opentdf__tdf_read",
-    description: "Reads contents from a TDF archive, returning the manifest and payload",
-    input_schema: {
-      type: "object",
-      properties: {
-        tdf_data: {
-          type: "string",
-          description: "Base64 encoded TDF archive data"
-        }
-      },
-      required: ["tdf_data"]
-    }
-  },
-  {
-    name: "opentdf__attribute_define",
-    description: "Defines attribute namespaces with optional hierarchies",
-    input_schema: {
-      type: "object",
-      properties: {
-        namespace: {
-          type: "string",
-          description: "Namespace for the attribute (e.g., 'gov.example')"
-        },
-        name: {
-          type: "string",
-          description: "Name of the attribute within the namespace"
-        },
-        values: {
-          type: "array",
-          items: { type: "string" },
-          description: "Possible values for this attribute"
-        },
-        hierarchy: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              value: { type: "string" },
-              inherits_from: { type: "string" }
+    name: "opentdf:tdf_create",
+    description: "Creates a TDF with encrypted data",
+    schema: {
+      type: "function",
+      parameters: {
+        type: "object",
+        properties: {
+          content: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                data: { type: "string", description: "Base64 encoded data" },
+                kas_url: { type: "string", description: "KAS URL" },
+                policy: { type: "object", description: "Policy object" }
+              },
+              required: ["data", "kas_url", "policy"]
             }
-          },
-          description: "Optional hierarchy defining inheritance relationships between values"
-        }
-      },
-      required: ["namespace", "name", "values"]
-    }
-  },
-  {
-    name: "opentdf__user_attributes",
-    description: "Sets user attributes for testing access control",
-    input_schema: {
-      type: "object",
-      properties: {
-        user_id: {
-          type: "string",
-          description: "Identifier for the user"
+          }
         },
-        attributes: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              namespace: { type: "string" },
-              name: { type: "string" },
-              value: { type: "string" }
-            }
-          },
-          description: "List of attributes to assign to the user"
-        }
-      },
-      required: ["user_id", "attributes"]
+        required: ["content"]
+      }
     }
   },
   {
-    name: "opentdf__policy_create",
+    name: "opentdf:tdf_read",
+    description: "Reads a TDF file",
+    schema: {
+      type: "function",
+      parameters: {
+        type: "object",
+        properties: {
+          content: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                tdf_data: { type: "string", description: "Base64 encoded TDF data" }
+              },
+              required: ["tdf_data"]
+            }
+          }
+        },
+        required: ["content"]
+      }
+    }
+  },
+  {
+    name: "opentdf:attribute_list",
+    description: "Lists all attributes in the system",
+    schema: {
+      type: "function",
+      parameters: {
+        type: "object",
+        properties: {
+          content: {
+            type: "array",
+            items: { type: "string" }
+          }
+        },
+        required: ["content"]
+      }
+    }
+  },
+  {
+    name: "opentdf:namespace_list",
+    description: "Lists all attribute namespaces in the system",
+    schema: {
+      type: "function",
+      parameters: {
+        type: "object",
+        properties: {
+          content: {
+            type: "array",
+            items: { type: "string" }
+          }
+        },
+        required: ["content"]
+      }
+    }
+  },
+  {
+    name: "opentdf:attribute_define",
+    description: "Defines a new attribute",
+    schema: {
+      type: "function",
+      parameters: {
+        type: "object",
+        properties: {
+          content: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                namespaces: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      name: { type: "string" },
+                      attributes: { 
+                        type: "array",
+                        items: { type: "string" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        required: ["content"]
+      }
+    }
+  },
+  {
+    name: "opentdf:policy_create",
     description: "Creates an attribute-based access control policy",
-    input_schema: {
-      type: "object",
-      properties: {
-        attributes: {
-          type: "array",
-          description: "List of attribute conditions for the policy"
+    schema: {
+      type: "function",
+      parameters: {
+        type: "object",
+        properties: {
+          content: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                attributes: { 
+                  type: "array", 
+                  items: { type: "object" },
+                  description: "Array of attribute conditions"
+                },
+                dissemination: {
+                  type: "array",
+                  items: { type: "string" },
+                  description: "Array of recipients"
+                }
+              },
+              required: ["attributes", "dissemination"]
+            }
+          }
         },
-        dissemination: {
-          type: "array",
-          items: { type: "string" },
-          description: "List of user identifiers who can access the data"
-        },
-        valid_from: {
-          type: "string",
-          description: "Optional start time in ISO 8601 format"
-        },
-        valid_to: {
-          type: "string",
-          description: "Optional expiration time in ISO 8601 format"
-        }
-      },
-      required: ["attributes", "dissemination"]
+        required: ["content"]
+      }
     }
   },
   {
-    name: "opentdf__access_evaluate",
-    description: "Evaluates whether a user with attributes can access protected content",
-    input_schema: {
-      type: "object",
-      properties: {
-        policy: {
-          type: "object",
-          description: "The policy to evaluate"
+    name: "opentdf:policy_binding_verify",
+    description: "Verifies the binding of a policy to a TDF",
+    schema: {
+      type: "function",
+      parameters: {
+        type: "object",
+        properties: {
+          content: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                tdf_data: { 
+                  type: "string", 
+                  description: "Base64 encoded TDF data"
+                },
+                policy_key: {
+                  type: "string",
+                  description: "Policy key for verification"
+                }
+              },
+              required: ["tdf_data", "policy_key"]
+            }
+          }
         },
-        user_attributes: {
-          type: "object",
-          description: "User attributes to check against the policy"
-        },
-        context: {
-          type: "object",
-          description: "Optional environmental context attributes"
-        }
-      },
-      required: ["policy", "user_attributes"]
+        required: ["content"]
+      }
     }
   },
   {
-    name: "opentdf__policy_binding_verify",
-    description: "Verifies the cryptographic binding of a policy to a TDF",
-    input_schema: {
-      type: "object",
-      properties: {
-        tdf_data: {
-          type: "string",
-          description: "Base64 encoded TDF archive"
+    name: "opentdf:policy_validate",
+    description: "Validates a policy against a TDF",
+    schema: {
+      type: "function", 
+      parameters: {
+        type: "object",
+        properties: {
+          content: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                policy: { type: "object", description: "Policy to validate" },
+                tdf_data: { type: "string", description: "Base64 encoded TDF data" }
+              },
+              required: ["policy", "tdf_data"]
+            }
+          }
         },
-        policy_key: {
-          type: "string",
-          description: "Policy key for verification"
-        }
-      },
-      required: ["tdf_data", "policy_key"]
+        required: ["content"]
+      }
+    }
+  },
+  {
+    name: "opentdf:access_evaluate",
+    description: "Evaluates user access based on attributes",
+    schema: {
+      type: "function",
+      parameters: {
+        type: "object",
+        properties: {
+          content: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                policy: { type: "object", description: "Policy to evaluate" },
+                user_attributes: { 
+                  type: "object", 
+                  description: "User attributes to check against policy"
+                }
+              },
+              required: ["policy", "user_attributes"]
+            }
+          }
+        },
+        required: ["content"]
+      }
     }
   }
 ];
 
-// Format the tools for Claude's /mcp command
-const claudeRegistrationCommand = `/mcp register ${JSON.stringify(tools)}`;
+// Generate the registration command
+const registrationCommand = `/mcp register ${JSON.stringify(tools)}`;
 
-// Display Claude command
-console.log('Use the following command with Claude to register the OpenTDF tools:');
-console.log('\n' + claudeRegistrationCommand);
+// Output the registration command
+console.log('Run this command in Claude Code to register the OpenTDF tools:');
+console.log('\n' + registrationCommand);
+console.log('\n');
 
-// Display individual tool usage examples
-console.log('\n\nExample usage for individual tools:');
-
-tools.forEach(tool => {
-  const example = {};
-  
-  // Create a generic example for each required property
-  const props = tool.input_schema.properties;
-  const required = tool.input_schema.required || [];
-  
-  for (const prop of required) {
-    const propType = props[prop].type;
-    if (propType === 'string') {
-      example[prop] = 'example';
-    } else if (propType === 'array') {
-      example[prop] = ['example'];
-    } else if (propType === 'object') {
-      example[prop] = { key: 'value' };
-    }
-  }
-  
-  console.log(`\n/mcp ${tool.name} ${JSON.stringify(example)}`);
-});
-
-console.log('\nAfter registering, you can call any of these tools with the appropriate parameters');
+// Show example usage for each tool
+console.log('Examples of how to use the tools:');
+console.log('```');
+console.log('opentdf:namespace_list (MCP)(content: [])');
+console.log('opentdf:attribute_list (MCP)(content: [])');
+console.log('opentdf:attribute_define (MCP)(content: [{"namespaces": [{"name": "gov", "attributes": ["security", "classification", "clearance"]}]}])');
+console.log('```');

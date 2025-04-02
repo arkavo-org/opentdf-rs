@@ -82,11 +82,16 @@ function sendRequest(method, params = {}) {
     pendingRequests.set(id, { resolve, reject });
     mcpServer.stdin.write(JSON.stringify(request) + "\n");
     
-    // Set timeout for request
+    // Set timeout for request - allow 'initialized' to just time out since it's optional
     setTimeout(() => {
       if (pendingRequests.has(id)) {
         pendingRequests.delete(id);
-        reject(new Error(`Request timed out: ${method}`));
+        if (method === 'initialized') {
+          // Just resolve for 'initialized' since we don't really need a response
+          resolve({});
+        } else {
+          reject(new Error(`Request timed out: ${method}`));
+        }
       }
     }, 5000);
   });
@@ -136,6 +141,7 @@ function startPrompt() {
   console.log('  tdf-create <data> - Create a TDF with sample data');
   console.log('  tdf-read <file-path> - Read a TDF file');
   console.log('  define-attr - Define sample hierarchical attributes');
+  console.log('  list-attr - List all defined attributes');
   console.log('  user-attr - Set user attributes');
   console.log('  create-policy - Create a sample policy');
   console.log('  evaluate-access - Test access evaluation');
@@ -206,6 +212,11 @@ function startPrompt() {
               { value: 'confidential', inherits_from: 'public' }
             ]
           });
+          break;
+
+        case 'list-attr':
+          // List all defined attributes
+          await callTool('mcp__opentdf__attribute_list', {});
           break;
           
         case 'user-attr':
