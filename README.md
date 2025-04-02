@@ -16,6 +16,7 @@ OpenTDF-RS enables cryptographic binding of access policies directly to data obj
 - **Hierarchical Attributes**: Support for attributes with inheritance relationships
 - **Time-Based Constraints**: Policies with validity periods
 - **Logical Operators**: AND, OR, NOT combinations for complex policies
+- **Comprehensive Audit Logging**: Detailed records of access attempts and attribute evaluation
 
 ## Attribute-Based Access Control (ABAC)
 
@@ -312,8 +313,18 @@ The MCP server provides the following tools:
 | `policy_validate` | Validates a policy against a TDF archive |
 | `attribute_define` | Defines attribute namespaces with optional hierarchies |
 | `user_attributes` | Sets user attributes for testing access control |
-| `access_evaluate` | Evaluates whether a user with attributes can access protected content |
+| `access_evaluate` | Evaluates whether a user with attributes can access protected content with detailed audit records |
 | `policy_binding_verify` | Verifies the cryptographic binding of a policy to a TDF |
+
+All access attempts and attribute evaluations are comprehensively logged for compliance and auditing purposes. 
+The audit logging system captures detailed information about each operation, including:
+
+- The requesting entity identifiers
+- Complete sets of attributes presented
+- Attribute sources and verification status
+- Detailed evaluation results for each attribute in the policy
+- Final access decisions with timestamps
+- Policy version information
 
 ### Running the MCP Server
 
@@ -350,16 +361,23 @@ Example commands:
 The MCP server supports comprehensive ABAC functionality testing:
 
 ```bash
+# Basic ABAC testing
 node tools/test-mcp.js
+
+# Comprehensive attribute access logging test
+node tools/audit-logging-test.js
 ```
 
-This script demonstrates:
+These scripts demonstrate:
 1. Attribute namespace definition with hierarchies
 2. User attribute assignment
 3. Policy creation with attribute conditions
 4. TDF creation with policy binding
 5. Access evaluation based on attributes
 6. Policy binding verification
+7. Comprehensive audit logging and compliance reporting
+
+The audit logging test generates detailed compliance reports in the `tools/reports` directory. See `tools/audit-guide.md` for more information on the audit logging system.
 
 ## Development
 

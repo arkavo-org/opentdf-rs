@@ -1,7 +1,7 @@
 use chrono::{Duration, Utc};
 use opentdf::{
-    AttributeCondition, AttributeIdentifier, AttributePolicy, AttributeValue, Operator, Policy,
-    PolicyBody, TdfArchive, TdfArchiveBuilder, TdfEncryption, TdfManifest,
+    AttributeIdentifier, AttributePolicy, AttributeValue, Operator, Policy, PolicyBody, TdfArchive,
+    TdfArchiveBuilder, TdfEncryption, TdfManifest,
 };
 use std::collections::HashMap;
 use tempfile::NamedTempFile;
@@ -181,7 +181,7 @@ fn test_complex_abac_policy() -> Result<(), Box<dyn std::error::Error>> {
     manifest.set_policy(&policy)?;
 
     // Verify the policy was set correctly
-    let retrieved_policy = manifest.get_policy()?;
+    let _retrieved_policy = manifest.get_policy()?;
 
     // Create valid attributes but skip the time attribute for the complex test
     let mut valid_attributes = HashMap::new();

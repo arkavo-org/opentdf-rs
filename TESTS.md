@@ -12,6 +12,21 @@ The Model Context Protocol (MCP) approach transforms how we write and execute be
 - AI testing agents can interpret natural language test descriptions and execute them against the actual system
 - Tests automatically adapt as the application evolves
 
+## Running Tests with Claude Integration
+
+OpenTDF-RS provides MCP integration with Claude for executing tests:
+
+```bash
+# Start Claude with MCP server
+claude --mcp="cargo run -p opentdf-mcp-server"
+
+# Then in Claude, run:
+/mcp opentdf attribute_define {"namespace": "gov.example", "name": "clearance", "values": ["public", "confidential", "secret", "top-secret"], "hierarchy": [{"value": "top-secret", "inherits_from": "secret"}, {"value": "secret", "inherits_from": "confidential"}, {"value": "confidential", "inherits_from": "public"}]}
+
+# Alternative: Run test script
+node tools/test-mcp.js
+```
+
 ## Attribute-Based Access Control Tests
 
 ### Basic Attribute Policy Creation
@@ -183,3 +198,5 @@ When a compliance officer generates an access report
 Then the report should include all relevant attribute evaluations
 And provide evidence of proper policy enforcement
 ```
+
+*Implementation Note:* This test has been implemented as a comprehensive JavaScript test script in `tools/audit-logging-test.js`. The script performs multiple access attempts with different user attributes and generates compliance reports in the `tools/reports` directory. Run it with `node tools/audit-logging-test.js` to verify audit logging functionality.

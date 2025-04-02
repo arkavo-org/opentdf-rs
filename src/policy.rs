@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
+use std::ops::Not;
 use thiserror::Error;
 
 /// Attribute-Based Access Control Policy Error
@@ -45,8 +47,15 @@ impl AttributeIdentifier {
         Ok(Self::new(parts[0], parts[1]))
     }
 
-    pub fn to_string(&self) -> String {
+    /// Utility function to get the string representation
+    pub fn as_string(&self) -> String {
         format!("{}:{}", self.namespace, self.name)
+    }
+}
+
+impl fmt::Display for AttributeIdentifier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}", self.namespace, self.name)
     }
 }
 
@@ -197,13 +206,25 @@ impl AttributePolicy {
         AttributePolicy::Logical(LogicalOperator::OR { conditions })
     }
 
-    /// Negate a policy
-    pub fn not(condition: AttributePolicy) -> Self {
+    /// Factory method to create a NOT condition
+    pub fn create_not(condition: AttributePolicy) -> Self {
         AttributePolicy::Logical(LogicalOperator::NOT {
             condition: Box::new(condition),
         })
     }
+}
 
+impl Not for AttributePolicy {
+    type Output = Self;
+
+    fn not(self) -> Self::Output {
+        AttributePolicy::Logical(LogicalOperator::NOT {
+            condition: Box::new(self),
+        })
+    }
+}
+
+impl AttributePolicy {
     /// Evaluate the policy against a set of attributes
     pub fn evaluate(
         &self,
@@ -286,8 +307,8 @@ impl Policy {
 
     /// Check if the policy is currently valid based on its time window
     pub fn is_valid_at(&self, time: DateTime<Utc>) -> bool {
-        let after_start = self.valid_from.map_or(true, |from| time >= from);
-        let before_end = self.valid_to.map_or(true, |to| time <= to);
+        let after_start = self.valid_from.is_none_or(|from| time >= from);
+        let before_end = self.valid_to.is_none_or(|to| time <= to);
         after_start && before_end
     }
 
@@ -579,8 +600,8 @@ mod tests {
         assert!(!and_policy_exact.evaluate(&attributes).unwrap());
         assert!(!or_policy_exact.evaluate(&attributes).unwrap());
 
-        // Test NOT operator
-        let not_policy = AttributePolicy::not(dept_condition);
+        // Test NOT operator using trait implementation
+        let not_policy = !dept_condition.clone();
         assert!(not_policy.evaluate(&attributes).unwrap());
 
         attributes.insert(dept_attr, AttributeValue::String("FINANCE".to_string()));

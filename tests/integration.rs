@@ -3,11 +3,9 @@ use opentdf::{
     AttributeIdentifier, AttributePolicy, AttributeValue, EncryptedPayload, Operator, Policy,
     PolicyBody, TdfArchive, TdfArchiveBuilder, TdfEncryption, TdfManifest,
 };
-use serde_json::json;
 use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
-use uuid::Uuid;
 use zip::ZipArchive;
 
 #[test]
