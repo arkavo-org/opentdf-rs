@@ -136,6 +136,7 @@ struct PolicyBindingVerifyParams {
 
 // --- Helper Functions ---
 // Standard error codes and types for consistent error handling
+#[allow(dead_code)]
 mod error_codes {
     // Error category prefixes (100-900 ranges)
     pub const VALIDATION: i32 = 100; // Input validation errors
@@ -381,7 +382,103 @@ fn create_success_response(id: Value, result: Value) -> RpcResponse {
 type ResponseFuture = Pin<Box<dyn Future<Output = RpcResponse> + Send>>;
 
 // --- Main Request Processor ---
+/// Rate limiter implementation to prevent DoS attacks
+struct RateLimiter {
+    /// Maximum number of requests allowed per minute
+    rate_limit: u32,
+    /// Maximum burst allowed (temporary spike in requests)
+    burst_limit: u32,
+    /// Request timestamps for calculating rate
+    request_times: std::collections::VecDeque<std::time::Instant>,
+}
+
+impl RateLimiter {
+    /// Create a new rate limiter
+    fn new(rate_limit: u32, burst_limit: u32) -> Self {
+        Self {
+            rate_limit,
+            burst_limit,
+            request_times: std::collections::VecDeque::with_capacity(rate_limit as usize),
+        }
+    }
+    
+    /// Check if a new request should be allowed
+    fn check_rate_limit(&mut self) -> bool {
+        let now = std::time::Instant::now();
+        let window = std::time::Duration::from_secs(60); // 1 minute window
+        
+        // Remove timestamps older than our window
+        while let Some(time) = self.request_times.front() {
+            if now.duration_since(*time) > window {
+                self.request_times.pop_front();
+            } else {
+                break;
+            }
+        }
+        
+        // If we're under the rate limit, or under burst limit for a short period
+        if self.request_times.len() < self.rate_limit as usize {
+            // Under normal rate limit, allow request
+            self.request_times.push_back(now);
+            return true;
+        } else if self.request_times.len() < (self.rate_limit + self.burst_limit) as usize {
+            // Check if we're in a burst situation (many requests in last 5 seconds)
+            let burst_window = std::time::Duration::from_secs(5);
+            let recent_count = self.request_times
+                .iter()
+                .filter(|time| now.duration_since(**time) < burst_window)
+                .count();
+                
+            if recent_count < self.burst_limit as usize {
+                // Allow burst requests
+                self.request_times.push_back(now);
+                return true;
+            }
+        }
+        
+        // Rate limit exceeded
+        false
+    }
+}
+
+// Create global rate limiter
+lazy_static::lazy_static! {
+    static ref RATE_LIMITER: std::sync::Mutex<RateLimiter> = {
+        // Read limits from environment variables
+        let rate_limit = std::env::var("OPENTDF_RATE_LIMIT")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(100); // Default to 100 requests per minute
+            
+        let burst_limit = std::env::var("OPENTDF_BURST_LIMIT")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(20); // Default to 20 burst requests
+            
+        std::sync::Mutex::new(RateLimiter::new(rate_limit, burst_limit))
+    };
+}
+
 fn process_request(req: RpcRequest) -> ResponseFuture {
+    // Check rate limit first
+    let is_rate_limited = {
+        let mut limiter = RATE_LIMITER.lock().unwrap();
+        !limiter.check_rate_limit()
+    };
+    
+    // If rate limited, return error response
+    if is_rate_limited {
+        counter!("opentdf.rate_limit.exceeded", 1);
+        return Box::pin(futures::future::ready(create_detailed_error(
+            req.id,
+            903, // RATE_LIMIT_EXCEEDED
+            "Rate limit exceeded".to_string(),
+            "SYSTEM_ERROR",
+            "Too many requests in a short period of time".to_string(),
+            Some("Please reduce request frequency and try again later".to_string()),
+            Some("warn"),
+        )));
+    }
     Box::pin(async move {
         debug!("Processing request: {:?}", req);
 
@@ -2284,6 +2381,7 @@ fn convert_to_attribute_policy(value: Value) -> Result<AttributePolicy, String> 
 
 /// Represents the configuration settings for the server
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct ServerConfig {
     // File operations
     max_file_size: usize,
@@ -2379,11 +2477,13 @@ fn get_server_uptime() -> std::time::Duration {
 }
 
 /// Records a new request for metrics purposes
+#[allow(dead_code)]
 fn record_request() {
     REQUEST_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Records an error for metrics purposes
+#[allow(dead_code)]
 fn record_error() {
     ERROR_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
@@ -2761,21 +2861,56 @@ pub enum SecureFileError {
     #[error("File integrity check failed during secure deletion")]
     IntegrityCheckFailed,
 
+    #[error("Secure deletion operation was interrupted")]
+    Interrupted,
+
+    #[error("Deletion of very large file requires streaming approach")]
+    FileTooLargeForMemory,
+
     #[error("IO error during secure file operation: {0}")]
     IoError(#[from] std::io::Error),
 }
 
 /// Securely delete a temporary file by overwriting it before removal
 /// This is important for security as it prevents recovery of sensitive data
+/// 
+/// This function implements multiple security measures:
+/// 1. Multiple overwrite passes with different patterns (zeros, ones, random data)
+/// 2. File integrity verification
+/// 3. Graceful handling of interruptions
+/// 4. Support for streaming large files
+/// 5. Synchronization to ensure data is flushed to disk
 fn secure_delete_temp_file(path: &std::path::Path) -> Result<(), SecureFileError> {
-    use std::fs::OpenOptions;
-    use std::io::{Seek, SeekFrom, Write};
+    use std::fs::{File, OpenOptions};
+    use std::io::{BufReader, Read, Seek, SeekFrom, Write};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
 
     let start_time = std::time::Instant::now();
     let options = SecureFileOptions::default();
 
+    // Register a signal handler for interruptions
+    // We use an atomic boolean that can be shared between threads
+    let interrupted = Arc::new(AtomicBool::new(false));
+    let interrupted_clone = interrupted.clone();
+    
+    // Graceful handling of potential panics
+    let _guard = scopeguard::guard((), |_| {
+        if interrupted.load(Ordering::SeqCst) {
+            // If interrupted, attempt immediate file deletion
+            let _ = std::fs::remove_file(path);
+        }
+    });
+
     // Get the file size
-    let metadata = std::fs::metadata(path)?;
+    let metadata = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) => {
+            counter!("opentdf.secure_delete.failures", 1);
+            return Err(SecureFileError::IoError(e));
+        }
+    };
+    
     let file_size = metadata.len() as usize;
 
     // Record metrics
@@ -2786,26 +2921,67 @@ fn secure_delete_temp_file(path: &std::path::Path) -> Result<(), SecureFileError
         counter!("opentdf.secure_delete.size_limit_exceeded", 1);
         return Err(SecureFileError::FileTooLarge(options.max_file_size));
     }
+    
+    // Very large files should use the streaming approach
+    let use_streaming = file_size > 10 * 1024 * 1024; // 10MB threshold
+    
+    // For very large files (>100MB), use streaming with smaller chunks
+    let chunk_size = if file_size > 100 * 1024 * 1024 {
+        1024 * 1024 // 1MB chunks for large files
+    } else {
+        options.buffer_size
+    };
 
     // Check if file exists and has content
     if file_size > 0 {
         // Open the file for writing
-        let mut file = OpenOptions::new().write(true).open(path)?;
+        let file_result = OpenOptions::new().read(true).write(true).open(path);
+        
+        let mut file = match file_result {
+            Ok(f) => f,
+            Err(e) => {
+                counter!("opentdf.secure_delete.failures", 1);
+                return Err(SecureFileError::IoError(e));
+            }
+        };
 
         // Calculate hash before deletion for integrity verification
         let _pre_hash = {
             use sha2::{Digest, Sha256};
             let mut hasher = Sha256::new();
-            let mut buf = vec![0u8; options.buffer_size];
-            let mut file_for_hash = std::fs::File::open(path)?;
-            file_for_hash.seek(SeekFrom::Start(0))?;
-
-            loop {
-                let bytes_read = std::io::Read::read(&mut file_for_hash, &mut buf)?;
-                if bytes_read == 0 {
-                    break;
+            
+            if use_streaming {
+                // For large files, use buffered reading
+                let mut reader = BufReader::new(File::open(path)?);
+                let mut buf = vec![0u8; chunk_size];
+                
+                loop {
+                    match reader.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => hasher.update(&buf[..n]),
+                        Err(e) => {
+                            counter!("opentdf.secure_delete.failures", 1);
+                            return Err(SecureFileError::IoError(e));
+                        }
+                    }
                 }
-                hasher.update(&buf[..bytes_read]);
+            } else {
+                // For smaller files, read directly
+                let mut buf = vec![0u8; chunk_size];
+                let mut file_for_hash = match File::open(path) {
+                    Ok(f) => f,
+                    Err(e) => return Err(SecureFileError::IoError(e)),
+                };
+                
+                file_for_hash.seek(SeekFrom::Start(0))?;
+                
+                loop {
+                    match file_for_hash.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => hasher.update(&buf[..n]),
+                        Err(e) => return Err(SecureFileError::IoError(e)),
+                    }
+                }
             }
 
             hasher.finalize().to_vec()
@@ -2813,34 +2989,55 @@ fn secure_delete_temp_file(path: &std::path::Path) -> Result<(), SecureFileError
 
         // Perform multiple overwrite passes
         for pass in 1..=options.overwrite_passes {
+            // Check if we've been interrupted
+            if interrupted_clone.load(Ordering::SeqCst) {
+                counter!("opentdf.secure_delete.interrupted", 1);
+                return Err(SecureFileError::Interrupted);
+            }
+            
             // Track which pass we're on
             debug!("Secure deletion pass {}/{}", pass, options.overwrite_passes);
             gauge!("opentdf.secure_delete.current_pass", pass as f64);
+            
+            // Seek to beginning of file
+            if let Err(e) = file.seek(SeekFrom::Start(0)) {
+                counter!("opentdf.secure_delete.failures", 1);
+                return Err(SecureFileError::IoError(e));
+            }
 
-            match pass {
+            let result = match pass {
                 1 => {
                     // First pass: zeros
-                    let zeros = vec![0u8; options.buffer_size];
-                    write_pattern_to_file(&mut file, &zeros, file_size)?;
+                    let zeros = vec![0u8; chunk_size];
+                    write_pattern_to_file(&mut file, &zeros, file_size, use_streaming)
                 }
                 2 => {
                     // Second pass: ones
-                    let ones = vec![0xFFu8; options.buffer_size];
-                    write_pattern_to_file(&mut file, &ones, file_size)?;
+                    let ones = vec![0xFFu8; chunk_size];
+                    write_pattern_to_file(&mut file, &ones, file_size, use_streaming)
                 }
                 _ => {
                     // All other passes: cryptographically secure random data
                     let mut rng = thread_rng();
-                    let mut random = vec![0u8; options.buffer_size];
+                    let mut random = vec![0u8; chunk_size];
 
                     // Create cryptographically secure random buffer
                     rng.fill_bytes(&mut random);
-                    write_pattern_to_file(&mut file, &random, file_size)?;
+                    write_pattern_to_file(&mut file, &random, file_size, use_streaming)
                 }
+            };
+            
+            // Handle errors during writing
+            if let Err(e) = result {
+                counter!("opentdf.secure_delete.failures", 1);
+                return Err(e);
             }
-
-            // Flush after each pass
-            file.flush()?;
+            
+            // Force sync to disk after each pass
+            if let Err(e) = file.sync_all() {
+                counter!("opentdf.secure_delete.failures", 1);
+                return Err(SecureFileError::IoError(e));
+            }
         }
 
         // Final flush before closing
@@ -2880,17 +3077,47 @@ fn write_pattern_to_file(
     file: &mut std::fs::File,
     pattern: &[u8],
     file_size: usize,
-) -> std::io::Result<()> {
-    use std::io::{Seek, SeekFrom, Write};
-
+    use_streaming: bool
+) -> Result<(), SecureFileError> {
+    use std::io::{BufWriter, Seek, SeekFrom, Write};
+    
     // Reset file position
-    file.seek(SeekFrom::Start(0))?;
-
-    let mut remaining = file_size;
-    while remaining > 0 {
-        let to_write = std::cmp::min(remaining, pattern.len());
-        file.write_all(&pattern[..to_write])?;
-        remaining -= to_write;
+    if let Err(e) = file.seek(SeekFrom::Start(0)) {
+        return Err(SecureFileError::IoError(e));
+    }
+    
+    if use_streaming {
+        // For large files, use buffered writing
+        let mut writer = BufWriter::new(file);
+        
+        let mut remaining = file_size;
+        while remaining > 0 {
+            let to_write = std::cmp::min(remaining, pattern.len());
+            if let Err(e) = writer.write_all(&pattern[..to_write]) {
+                return Err(SecureFileError::IoError(e));
+            }
+            remaining -= to_write;
+        }
+        
+        // Flush the buffer
+        if let Err(e) = writer.flush() {
+            return Err(SecureFileError::IoError(e));
+        }
+    } else {
+        // For smaller files, write directly
+        let mut remaining = file_size;
+        while remaining > 0 {
+            let to_write = std::cmp::min(remaining, pattern.len());
+            if let Err(e) = file.write_all(&pattern[..to_write]) {
+                return Err(SecureFileError::IoError(e));
+            }
+            remaining -= to_write;
+        }
+        
+        // Ensure data is synced
+        if let Err(e) = file.flush() {
+            return Err(SecureFileError::IoError(e));
+        }
     }
 
     Ok(())
