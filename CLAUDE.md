@@ -14,6 +14,7 @@ When starting a new conversation or initializing, please read these files:
 - Run a single test: `cargo test test_name`
 - Run tests with output: `cargo test -- --nocapture`
 - Run clippy lints: `cargo clippy`
+- Fix all clippy warnings: `cargo clippy --fix`
 
 ## Code Style Guidelines
 
@@ -29,6 +30,7 @@ When starting a new conversation or initializing, please read these files:
 - **Security**: Never commit secrets, validate cryptographic operations
 - **Commit Preparation**: Always run `cargo build`, `cargo clippy`, and `cargo fmt` before committing
 - **Dead Code**: Remove unused code rather than using `#[allow(dead_code)]` attributes
+- **Warnings**: Eliminate all compiler warnings before committing code
 
 ## Workflow Guidelines
 
@@ -38,5 +40,27 @@ When starting a new conversation or initializing, please read these files:
 - When adding new dependencies, document their purpose in comments
 - For MCP server development, manually test endpoints with HTTP client tools
 - Verify backwards compatibility when modifying public APIs
+- Fix all compiler warnings before committing
 
-PRs should include tests and documentation for new features.
+## PR Review Process
+
+- Use GitHub CLI (`gh`) for PR reviews: `gh pr review [PR-NUMBER]`
+- PRs should be reviewed across multiple perspectives:
+  - **Product**: Business value, user experience, and strategic alignment
+  - **Development**: Code quality, performance, and adherence to standards
+  - **Quality**: Test coverage, edge cases, and regression risks
+  - **Security**: Vulnerabilities, data handling, and compliance
+  - **DevOps**: CI/CD integration, configuration, and monitoring
+  - **Usability**: API design and interaction patterns
+- All PR reviews should identify specific issues that need to be fixed before merging
+- PRs should include tests and documentation for new features
+- No PR should be merged with pending warnings or clippy issues
+
+## Pre-Commit Checklist
+
+1. Run `cargo fmt` to ensure consistent formatting
+2. Run `cargo clippy` and fix all warnings
+3. Run `cargo test` to verify all tests pass
+4. Run `cargo build` with warnings treated as errors: `RUSTFLAGS="-D warnings" cargo build`
+5. Ensure all new features are documented
+6. Verify that security-sensitive code has been properly reviewed

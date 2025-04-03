@@ -9,6 +9,7 @@ repository = "https://github.com/arkavo-org/opentdf-rs"
 [dependencies]
 opentdf = { path = "../.." }
 tokio = { version = "1.36.0", features = ["full"] }
+futures = "0.3.31"
 serde = { version = "1.0.214", features = ["derive"] }
 serde_json = "1.0.132"
 tracing = "0.1.40"
@@ -16,3 +17,13 @@ tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 uuid = { version = "1.8.0", features = ["v4", "serde"] }
 base64 = "0.22.1"
 tempfile = "3.13.0"
+chrono = { version = "0.4.35", features = ["serde"] }
+sha2 = "0.10.8"
+rand = "0.8.5"
+metrics = "0.21.1"
+metrics-exporter-prometheus = "0.12.1"
+regex = "1.10.3"
+thiserror = "1.0.58"
+lazy_static = "1.4.0"
+serde_with = "3.8.0"
+scopeguard = "1.2.0"
