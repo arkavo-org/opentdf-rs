@@ -1,7 +1,7 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use opentdf::{
-    AttributeIdentifier, AttributePolicy, AttributeValue, Operator, Policy,
-    PolicyBody, TdfArchive, TdfArchiveBuilder, TdfEncryption, TdfManifest,
+    AttributeIdentifier, AttributePolicy, AttributeValue, Operator, Policy, PolicyBody, TdfArchive,
+    TdfArchiveBuilder, TdfEncryption, TdfManifest,
 };
 use std::fs::File;
 use std::io::Read;

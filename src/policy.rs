@@ -226,7 +226,37 @@ impl Not for AttributePolicy {
 
 impl AttributePolicy {
     /// Evaluate the policy against a set of attributes
+    ///
+    /// This implementation provides two evaluation methods:
+    /// 1. Recursive: Simple for shallow policies but may cause stack overflow with deep nesting
+    /// 2. Iterative: Handles arbitrarily deep policy nesting without stack overflow risk
     pub fn evaluate(
+        &self,
+        attributes: &HashMap<AttributeIdentifier, AttributeValue>,
+    ) -> Result<bool, PolicyError> {
+        // For deeply nested policies, use iterative evaluation to avoid stack overflow
+        if self.depth() > 50 {
+            self.evaluate_iterative(attributes)
+        } else {
+            self.evaluate_recursive(attributes)
+        }
+    }
+
+    /// Measure the maximum nesting depth of a policy
+    pub fn depth(&self) -> usize {
+        match self {
+            AttributePolicy::Condition(_) => 1,
+            AttributePolicy::Logical(operator) => match operator {
+                LogicalOperator::AND { conditions } | LogicalOperator::OR { conditions } => {
+                    1 + conditions.iter().map(|c| c.depth()).max().unwrap_or(0)
+                }
+                LogicalOperator::NOT { condition } => 1 + condition.depth(),
+            },
+        }
+    }
+
+    /// Recursive evaluation method - simple but may cause stack overflow with deep nesting
+    fn evaluate_recursive(
         &self,
         attributes: &HashMap<AttributeIdentifier, AttributeValue>,
     ) -> Result<bool, PolicyError> {
@@ -235,7 +265,7 @@ impl AttributePolicy {
             AttributePolicy::Logical(operator) => match operator {
                 LogicalOperator::AND { conditions } => {
                     for condition in conditions {
-                        if !condition.evaluate(attributes)? {
+                        if !condition.evaluate_recursive(attributes)? {
                             return Ok(false);
                         }
                     }
@@ -243,15 +273,130 @@ impl AttributePolicy {
                 }
                 LogicalOperator::OR { conditions } => {
                     for condition in conditions {
-                        if condition.evaluate(attributes)? {
+                        if condition.evaluate_recursive(attributes)? {
                             return Ok(true);
                         }
                     }
                     Ok(false)
                 }
-                LogicalOperator::NOT { condition } => Ok(!condition.evaluate(attributes)?),
+                LogicalOperator::NOT { condition } => {
+                    Ok(!condition.evaluate_recursive(attributes)?)
+                }
             },
         }
+    }
+
+    /// Iterative evaluation method - safely handles arbitrarily deep nested policies
+    /// using a stack-based approach instead of recursion
+    fn evaluate_iterative(
+        &self,
+        attributes: &HashMap<AttributeIdentifier, AttributeValue>,
+    ) -> Result<bool, PolicyError> {
+        // Define evaluation task type for stack
+        enum EvalTask<'a> {
+            Evaluate(&'a AttributePolicy),
+            EvaluateAnd(&'a [AttributePolicy], usize), // conditions, next index
+            EvaluateOr(&'a [AttributePolicy], usize),  // conditions, next index
+            ApplyNot,
+        }
+
+        // Result stack and task stack
+        let mut results = Vec::new();
+        let mut tasks = vec![EvalTask::Evaluate(self)];
+
+        // Process tasks until done
+        while let Some(task) = tasks.pop() {
+            match task {
+                EvalTask::Evaluate(policy) => match policy {
+                    AttributePolicy::Condition(condition) => {
+                        let result = evaluate_condition(condition, attributes)?;
+                        results.push(result);
+                    }
+                    AttributePolicy::Logical(LogicalOperator::AND { conditions }) => {
+                        if conditions.is_empty() {
+                            results.push(true); // Empty AND is true (identity)
+                        } else {
+                            tasks.push(EvalTask::EvaluateAnd(conditions, 0));
+                        }
+                    }
+                    AttributePolicy::Logical(LogicalOperator::OR { conditions }) => {
+                        if conditions.is_empty() {
+                            results.push(false); // Empty OR is false (identity)
+                        } else {
+                            tasks.push(EvalTask::EvaluateOr(conditions, 0));
+                        }
+                    }
+                    AttributePolicy::Logical(LogicalOperator::NOT { condition }) => {
+                        tasks.push(EvalTask::ApplyNot);
+                        tasks.push(EvalTask::Evaluate(condition));
+                    }
+                },
+                EvalTask::EvaluateAnd(conditions, idx) => {
+                    if idx == 0 {
+                        // First condition - start with true
+                        results.push(true);
+                    }
+
+                    // Get current accumulated result
+                    let current_result = *results.last().unwrap();
+
+                    if !current_result {
+                        // Short-circuit: if any previous condition was false, we're done
+                        continue;
+                    }
+
+                    if idx < conditions.len() {
+                        // Push continuation of AND evaluation after this condition
+                        tasks.push(EvalTask::EvaluateAnd(conditions, idx + 1));
+
+                        // Push this condition for evaluation
+                        tasks.push(EvalTask::Evaluate(&conditions[idx]));
+
+                        // Remove the accumulated result (will be rebuilt with next condition)
+                        results.pop();
+                    }
+                }
+                EvalTask::EvaluateOr(conditions, idx) => {
+                    if idx == 0 {
+                        // First condition - start with false
+                        results.push(false);
+                    }
+
+                    // Get current accumulated result
+                    let current_result = *results.last().unwrap();
+
+                    if current_result {
+                        // Short-circuit: if any previous condition was true, we're done
+                        continue;
+                    }
+
+                    if idx < conditions.len() {
+                        // Push continuation of OR evaluation after this condition
+                        tasks.push(EvalTask::EvaluateOr(conditions, idx + 1));
+
+                        // Push this condition for evaluation
+                        tasks.push(EvalTask::Evaluate(&conditions[idx]));
+
+                        // Remove the accumulated result (will be rebuilt with next condition)
+                        results.pop();
+                    }
+                }
+                EvalTask::ApplyNot => {
+                    // Get the result to negate
+                    let result = results.pop().unwrap();
+                    results.push(!result);
+                }
+            }
+        }
+
+        // Final result should be on the stack
+        if results.len() != 1 {
+            return Err(PolicyError::EvaluationError(
+                "Invalid policy evaluation state".to_string(),
+            ));
+        }
+
+        Ok(results[0])
     }
 }
 
@@ -313,10 +458,18 @@ impl Policy {
     }
 
     /// Evaluate the policy against a set of attributes at the current time
+    ///
+    /// This method first validates the policy structure, then checks time validity,
+    /// and finally evaluates each policy condition against the provided attributes.
     pub fn evaluate(
         &self,
         attributes: &HashMap<AttributeIdentifier, AttributeValue>,
     ) -> Result<bool, PolicyError> {
+        // Validate all attributes policies first
+        for policy in &self.body.attributes {
+            validate_policy(policy)?;
+        }
+
         // Check time validity
         if !self.is_valid_at(Utc::now()) {
             return Ok(false);
@@ -338,11 +491,141 @@ impl Policy {
     }
 }
 
+/// Define clearance level hierarchies
+///
+/// This allows for a configurable approach to hierarchical attribute values
+/// instead of hard-coding the values in the evaluation function
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClearanceHierarchy {
+    /// Map of level names to their numeric values (higher = more access)
+    pub levels: HashMap<String, i32>,
+}
+
+impl Default for ClearanceHierarchy {
+    fn default() -> Self {
+        let mut levels = HashMap::new();
+        levels.insert("TOP_SECRET".to_string(), 4);
+        levels.insert("SECRET".to_string(), 3);
+        levels.insert("CONFIDENTIAL".to_string(), 2);
+        levels.insert("PUBLIC".to_string(), 1);
+        Self { levels }
+    }
+}
+
+lazy_static::lazy_static! {
+    /// Global instance of clearance hierarchy
+    pub static ref CLEARANCE_HIERARCHY: ClearanceHierarchy = {
+        // In a production environment, this could be loaded from configuration
+        ClearanceHierarchy::default()
+    };
+}
+
+/// Validate a policy for correctness before evaluation
+/// Returns error if the policy is invalid, with details about the issue
+pub fn validate_policy(policy: &AttributePolicy) -> Result<(), PolicyError> {
+    match policy {
+        AttributePolicy::Condition(condition) => validate_condition(condition),
+        AttributePolicy::Logical(operator) => match operator {
+            LogicalOperator::AND { conditions } | LogicalOperator::OR { conditions } => {
+                for condition in conditions {
+                    validate_policy(condition)?;
+                }
+                Ok(())
+            }
+            LogicalOperator::NOT { condition } => validate_policy(condition),
+        },
+    }
+}
+
+/// Validate a single condition for correctness
+fn validate_condition(condition: &AttributeCondition) -> Result<(), PolicyError> {
+    // For existence operators, value is not required
+    match condition.operator {
+        Operator::Present | Operator::NotPresent => return Ok(()),
+        _ => {}
+    }
+
+    // For other operators, value is required
+    if condition.value.is_none() {
+        return Err(PolicyError::InvalidValueType(format!(
+            "Operator {:?} requires a value",
+            condition.operator
+        )));
+    }
+
+    // Validate value types based on operator
+    if let Some(value) = &condition.value {
+        match condition.operator {
+            // String array operations
+            Operator::AllOf | Operator::AnyOf => {
+                if !matches!(value, AttributeValue::StringArray(_)) {
+                    return Err(PolicyError::InvalidValueType(format!(
+                        "Operator {:?} requires a string array value",
+                        condition.operator
+                    )));
+                }
+            }
+
+            // Array membership operations
+            Operator::In | Operator::NotIn => {
+                if !matches!(
+                    value,
+                    AttributeValue::StringArray(_) | AttributeValue::NumberArray(_)
+                ) {
+                    return Err(PolicyError::InvalidValueType(format!(
+                        "Operator {:?} requires an array value",
+                        condition.operator
+                    )));
+                }
+            }
+
+            // String operations
+            Operator::Contains => {
+                if !matches!(value, AttributeValue::String(_)) {
+                    return Err(PolicyError::InvalidValueType(format!(
+                        "Operator {:?} requires a string value",
+                        condition.operator
+                    )));
+                }
+            }
+
+            // Numeric comparison operations
+            Operator::GreaterThan
+            | Operator::GreaterThanOrEqual
+            | Operator::LessThan
+            | Operator::LessThanOrEqual => {
+                if !matches!(
+                    value,
+                    AttributeValue::Number(_) | AttributeValue::DateTime(_)
+                ) {
+                    return Err(PolicyError::InvalidValueType(format!(
+                        "Operator {:?} requires a numeric or datetime value",
+                        condition.operator
+                    )));
+                }
+            }
+
+            // No type restrictions for these operators
+            Operator::Equals
+            | Operator::NotEquals
+            | Operator::MinimumOf
+            | Operator::MaximumOf
+            | Operator::Present
+            | Operator::NotPresent => {}
+        }
+    }
+
+    Ok(())
+}
+
 /// Helper function to evaluate a single condition against attributes
 fn evaluate_condition(
     condition: &AttributeCondition,
     attributes: &HashMap<AttributeIdentifier, AttributeValue>,
 ) -> Result<bool, PolicyError> {
+    // Validate the condition first
+    validate_condition(condition)?;
+
     // Handle existence checks first
     match condition.operator {
         Operator::Present => return Ok(attributes.contains_key(&condition.attribute)),
@@ -421,69 +704,54 @@ fn evaluate_condition(
             )),
         },
         Operator::MinimumOf => {
-            // Example: clearance level X is minimum of Y means X >= Y in hierarchy
             // Used for hierarchical attributes where higher values include privileges of lower ones
             // Special handling for string values to support hierarchies
             match (attr_value, expected_value) {
                 (AttributeValue::String(a), AttributeValue::String(b)) => {
-                    // For security clearance, implement a basic hierarchy
-                    // In a real implementation, we would have a lookup table for hierarchy levels
+                    // If strings are identical, they're equal in the hierarchy
                     if a == b {
-                        return Ok(true); // Same level meets requirement
+                        return Ok(true);
                     }
 
-                    // Define a simple hierarchy for clearance levels
-                    let level_values = match a.to_uppercase().as_str() {
-                        "TOP_SECRET" => 4,
-                        "SECRET" => 3,
-                        "CONFIDENTIAL" => 2,
-                        "PUBLIC" => 1,
-                        _ => 0, // Unknown levels default to lowest
-                    };
+                    // Normalize strings for hierarchy lookup
+                    let a_upper = a.to_uppercase();
+                    let b_upper = b.to_uppercase();
 
-                    let required_level = match b.to_uppercase().as_str() {
-                        "TOP_SECRET" => 4,
-                        "SECRET" => 3,
-                        "CONFIDENTIAL" => 2,
-                        "PUBLIC" => 1,
-                        _ => 0,
-                    };
+                    // Use the configurable hierarchy
+                    let hierarchy = &*CLEARANCE_HIERARCHY;
+
+                    // Get level values, defaulting to 0 for unknown values
+                    let level_a = hierarchy.levels.get(&a_upper).copied().unwrap_or(0);
+                    let level_b = hierarchy.levels.get(&b_upper).copied().unwrap_or(0);
 
                     // User's level must be >= required level
-                    Ok(level_values >= required_level)
+                    Ok(level_a >= level_b)
                 }
                 _ => compare_numeric(attr_value, expected_value, |a, b| a >= b),
             }
         }
         Operator::MaximumOf => {
-            // Example: clearance level X is maximum of Y means X <= Y in hierarchy
             // Special handling for string values to support hierarchies
             match (attr_value, expected_value) {
                 (AttributeValue::String(a), AttributeValue::String(b)) => {
-                    // For security clearance, implement a basic hierarchy
+                    // If strings are identical, they're equal in the hierarchy
                     if a == b {
-                        return Ok(true); // Same level meets requirement
+                        return Ok(true);
                     }
 
-                    // Define a simple hierarchy for clearance levels
-                    let level_values = match a.to_uppercase().as_str() {
-                        "TOP_SECRET" => 4,
-                        "SECRET" => 3,
-                        "CONFIDENTIAL" => 2,
-                        "PUBLIC" => 1,
-                        _ => 0, // Unknown levels default to lowest
-                    };
+                    // Normalize strings for hierarchy lookup
+                    let a_upper = a.to_uppercase();
+                    let b_upper = b.to_uppercase();
 
-                    let max_level = match b.to_uppercase().as_str() {
-                        "TOP_SECRET" => 4,
-                        "SECRET" => 3,
-                        "CONFIDENTIAL" => 2,
-                        "PUBLIC" => 1,
-                        _ => 0,
-                    };
+                    // Use the configurable hierarchy
+                    let hierarchy = &*CLEARANCE_HIERARCHY;
+
+                    // Get level values, defaulting to 0 for unknown values
+                    let level_a = hierarchy.levels.get(&a_upper).copied().unwrap_or(0);
+                    let level_b = hierarchy.levels.get(&b_upper).copied().unwrap_or(0);
 
                     // User's level must be <= maximum level
-                    Ok(level_values <= max_level)
+                    Ok(level_a <= level_b)
                 }
                 _ => compare_numeric(attr_value, expected_value, |a, b| a <= b),
             }
