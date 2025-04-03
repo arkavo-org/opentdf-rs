@@ -40,13 +40,13 @@ pub struct EncryptionInformation {
     pub policy: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PolicyBinding {
     pub alg: String,
     pub hash: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct KeyAccess {
     #[serde(rename = "type")]
     pub access_type: String,

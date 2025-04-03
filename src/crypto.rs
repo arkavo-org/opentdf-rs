@@ -49,7 +49,7 @@ impl TdfEncryption {
     }
 
     /// Create a TdfEncryption instance with an existing policy key
-    pub fn with_policy_key(policy_key: Vec<u8>) -> Result<Self, EncryptionError> {
+    pub fn with_policy_key(policy_key: &[u8]) -> Result<Self, EncryptionError> {
         if policy_key.len() != 32 {
             return Err(EncryptionError::InvalidKeyLength);
         }
@@ -58,7 +58,7 @@ impl TdfEncryption {
         OsRng.fill_bytes(&mut payload_key);
 
         Ok(Self {
-            policy_key,
+            policy_key: policy_key.to_vec(),
             payload_key,
         })
     }
@@ -102,6 +102,31 @@ impl TdfEncryption {
 
     /// Decrypt data using the policy key to first decrypt the payload key
     pub fn decrypt(
+        &mut self,
+        ciphertext: &[u8],
+        iv: &[u8],
+        encrypted_key: &[u8],
+    ) -> Result<Vec<u8>, EncryptionError> {
+        // First decrypt the payload key using the policy key
+        let policy_cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.policy_key));
+        let nonce = Nonce::from_slice(iv);
+
+        self.payload_key = policy_cipher
+            .decrypt(nonce, encrypted_key)
+            .map_err(EncryptionError::AeadError)?;
+
+        // Then decrypt the actual data using the decrypted payload key
+        let payload_cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.payload_key));
+        let payload_nonce = Nonce::from_slice(iv); // Use the same IV for simplicity
+        let plaintext = payload_cipher
+            .decrypt(payload_nonce, ciphertext)
+            .map_err(EncryptionError::AeadError)?;
+
+        Ok(plaintext)
+    }
+
+    /// Decrypt using the old format with combined IVs (for backward compatibility)
+    pub fn decrypt_legacy(
         policy_key: &[u8],
         encrypted_payload: &EncryptedPayload,
     ) -> Result<Vec<u8>, EncryptionError> {
@@ -156,8 +181,8 @@ mod tests {
         // Encrypt
         let encrypted = tdf.encrypt(data)?;
 
-        // Decrypt
-        let decrypted = TdfEncryption::decrypt(tdf.policy_key(), &encrypted)?;
+        // Decrypt using legacy method
+        let decrypted = TdfEncryption::decrypt_legacy(tdf.policy_key(), &encrypted)?;
 
         assert_eq!(data, decrypted.as_slice());
         Ok(())
@@ -170,7 +195,7 @@ mod tests {
         OsRng.fill_bytes(&mut policy_key);
 
         // Create encryption instance with existing policy key
-        let tdf = TdfEncryption::with_policy_key(policy_key.clone())?;
+        let tdf = TdfEncryption::with_policy_key(&policy_key)?;
 
         // Test data
         let data = b"Test with existing policy key";
@@ -178,8 +203,44 @@ mod tests {
         // Encrypt
         let encrypted = tdf.encrypt(data)?;
 
-        // Decrypt
-        let decrypted = TdfEncryption::decrypt(&policy_key, &encrypted)?;
+        // Decrypt using legacy method
+        let decrypted = TdfEncryption::decrypt_legacy(&policy_key, &encrypted)?;
+
+        assert_eq!(data, decrypted.as_slice());
+        Ok(())
+    }
+
+    #[test]
+    fn test_new_decrypt_method() -> Result<(), EncryptionError> {
+        // Create new encryption instance
+        let tdf = TdfEncryption::new()?;
+        let policy_key = tdf.policy_key().to_vec();
+
+        // Test data
+        let data = b"Testing the new decrypt method";
+
+        // Generate IVs and encrypt directly (avoiding the combined IV issue)
+        let mut payload_iv = vec![0u8; 12]; // 96-bit IV for AES-GCM
+        OsRng.fill_bytes(&mut payload_iv);
+
+        // Encrypt payload directly
+        let payload_cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&tdf.payload_key()));
+        let nonce = Nonce::from_slice(&payload_iv);
+        let ciphertext = payload_cipher
+            .encrypt(nonce, data.as_ref())
+            .map_err(EncryptionError::AeadError)?;
+
+        // Encrypt the payload key
+        let policy_cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&policy_key));
+        let encrypted_key = policy_cipher
+            .encrypt(nonce, tdf.payload_key())
+            .map_err(EncryptionError::AeadError)?;
+
+        // Create a new instance with the same policy key
+        let mut decryptor = TdfEncryption::with_policy_key(&policy_key)?;
+
+        // Use the new decrypt method
+        let decrypted = decryptor.decrypt(&ciphertext, &payload_iv, &encrypted_key)?;
 
         assert_eq!(data, decrypted.as_slice());
         Ok(())
@@ -188,7 +249,7 @@ mod tests {
     #[test]
     fn test_invalid_policy_key_length() {
         // Try to create with invalid key length
-        let result = TdfEncryption::with_policy_key(vec![0u8; 16]);
+        let result = TdfEncryption::with_policy_key(&vec![0u8; 16]);
         assert!(matches!(result, Err(EncryptionError::InvalidKeyLength)));
     }
 

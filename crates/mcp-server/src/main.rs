@@ -13,10 +13,10 @@ use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use uuid::Uuid;
 
-// Assuming opentdf types are correctly imported
+// Import opentdf types
 use opentdf::{
     AttributeCondition, AttributeIdentifier, AttributePolicy, AttributeValue, Operator, Policy,
-    PolicyBody, TdfArchiveBuilder, TdfEncryption, TdfManifest,
+    PolicyBody, TdfArchive, TdfArchiveBuilder, TdfEncryption, TdfManifest,
 };
 
 // --- Struct Definitions ---
@@ -170,17 +170,17 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                          "initialize": { "description": "Initializes the MCP server.", "usage": "Internal MCP handshake OR JSON-RPC method 'initialize'" },
                          "listTools": { "description": "Lists available tools.", "usage": "Internal MCP handshake OR JSON-RPC method 'listTools'/'tools/list'" },
                          "tdf_create": { "description": "Creates a TDF archive.", "usage": "/mcp opentdf tdf_create PARAMS | JSON-RPC 'tdf_create'" },
-                         "tdf_read": { "description": "Reads TDF archive (placeholder).", "usage": "/mcp opentdf tdf_read PARAMS | JSON-RPC 'tdf_read'" },
+                         "tdf_read": { "description": "Reads and extracts data from TDF archives.", "usage": "/mcp opentdf tdf_read PARAMS | JSON-RPC 'tdf_read'" },
                          "encrypt": { "description": "Encrypts data.", "usage": "/mcp opentdf encrypt PARAMS | JSON-RPC 'encrypt'" },
-                         "decrypt": { "description": "Decrypts data (placeholder).", "usage": "/mcp opentdf decrypt PARAMS | JSON-RPC 'decrypt'" },
+                         "decrypt": { "description": "Decrypts data using provided keys.", "usage": "/mcp opentdf decrypt PARAMS | JSON-RPC 'decrypt'" },
                          "policy_create": { "description": "Creates a policy object.", "usage": "/mcp opentdf policy_create PARAMS | JSON-RPC 'policy_create'" },
                          "policy_validate": { "description": "Validates policy against TDF (placeholder).", "usage": "/mcp opentdf policy_validate PARAMS | JSON-RPC 'policy_validate'" },
                          "attribute_define": { "description": "Defines attributes/namespaces.", "usage": "/mcp opentdf attribute_define PARAMS | JSON-RPC 'attribute_define'" },
                          "attribute_list": { "description": "Lists attributes (example data).", "usage": "/mcp opentdf attribute_list {} | JSON-RPC 'attribute_list'" },
                          "namespace_list": { "description": "Lists namespaces (example data).", "usage": "/mcp opentdf namespace_list {} | JSON-RPC 'namespace_list'" },
                          "user_attributes": { "description": "Sets user attributes.", "usage": "/mcp opentdf user_attributes PARAMS | JSON-RPC 'user_attributes'" },
-                         "access_evaluate": { "description": "Evaluates access (placeholder).", "usage": "/mcp opentdf access_evaluate PARAMS | JSON-RPC 'access_evaluate'" },
-                         "policy_binding_verify": { "description": "Verifies policy binding (placeholder).", "usage": "/mcp opentdf policy_binding_verify PARAMS | JSON-RPC 'policy_binding_verify'" }
+                         "access_evaluate": { "description": "Evaluates access against policy and attributes.", "usage": "/mcp opentdf access_evaluate PARAMS | JSON-RPC 'access_evaluate'" },
+                         "policy_binding_verify": { "description": "Verifies cryptographic binding of policy to TDF.", "usage": "/mcp opentdf policy_binding_verify PARAMS | JSON-RPC 'policy_binding_verify'" }
                     }
                 });
                 create_success_response(req.id, help_info)
@@ -192,17 +192,17 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                 // Define tool schemas concisely for brevity here, assume full definitions exist
                 let tool_schemas = json!({
                     "tdf_create": {"description": "Creates TDF","schema": {"type": "object","properties": {"data": {"type": "string"},"kas_url": {"type": "string"},"policy": {"type": "object"}},"required": ["data", "kas_url", "policy"]}},
-                    "tdf_read": {"description": "Reads TDF (placeholder)","schema": {"type": "object","properties": {"tdf_data": {"type": "string"}},"required": ["tdf_data"]}},
+                    "tdf_read": {"description": "Reads TDF archives","schema": {"type": "object","properties": {"tdf_data": {"type": "string"}},"required": ["tdf_data"]}},
                     "encrypt": {"description": "Encrypts data","schema": {"type": "object","properties": {"data": {"type": "string"}},"required": ["data"]}},
-                    "decrypt": {"description": "Decrypts data (placeholder)","schema": {"type": "object","properties": {"encrypted_data": {"type": "string"},"iv": {"type": "string"},"encrypted_key": {"type": "string"},"policy_key": {"type": "string"}},"required": ["encrypted_data", "iv", "encrypted_key", "policy_key"]}},
+                    "decrypt": {"description": "Decrypts data","schema": {"type": "object","properties": {"encrypted_data": {"type": "string"},"iv": {"type": "string"},"encrypted_key": {"type": "string"},"policy_key": {"type": "string"}},"required": ["encrypted_data", "iv", "encrypted_key", "policy_key"]}},
                     "policy_create": {"description": "Creates policy","schema": {"type": "object","properties": {"attributes": {"type": "array"},"dissemination": {"type": "array", "items": {"type": "string"}}},"required": ["attributes"]}},
                     "policy_validate": {"description": "Validates policy (placeholder)","schema": {"type": "object","properties": {"policy": {"type": "object"},"tdf_data": {"type": "string"}},"required": ["policy", "tdf_data"]}},
                     "attribute_define": {"description": "Defines attributes","schema": {"type": "object","oneOf": [{"properties": {"namespace": {"type": "string"},"name": {"type": "string"},"values": {"type": "array"}},"required": ["namespace", "name", "values"]},{"properties": {"namespaces": {"type": "array"}},"required": ["namespaces"]},{"properties": {"attributes": {"type": "array"}},"required": ["attributes"]},{"properties": {"content": {"type": "array"}},"required": ["content"]}]}},
                     "attribute_list": {"description": "Lists attributes (example)","schema": {"type": "object"}},
                     "namespace_list": {"description": "Lists namespaces (example)","schema": {"type": "object"}},
                     "user_attributes": {"description": "Sets user attributes","schema": {"type": "object","properties": {"user_id": {"type": "string"},"attributes": {"type": "array"}},"required": ["user_id", "attributes"]}},
-                    "access_evaluate": {"description": "Evaluates access (placeholder)","schema": {"type": "object","properties": {"policy": {"type": "object"},"user_attributes": {"type": "object"}},"required": ["policy", "user_attributes"]}},
-                    "policy_binding_verify": {"description": "Verifies binding (placeholder)","schema": {"type": "object","properties": {"tdf_data": {"type": "string"},"policy_key": {"type": "string"}},"required": ["tdf_data", "policy_key"]}}
+                    "access_evaluate": {"description": "Evaluates access against policy and attributes","schema": {"type": "object","properties": {"policy": {"type": "object"},"user_attributes": {"type": "object"}},"required": ["policy", "user_attributes"]}},
+                    "policy_binding_verify": {"description": "Verifies cryptographic binding of policy to TDF","schema": {"type": "object","properties": {"tdf_data": {"type": "string"},"policy_key": {"type": "string"}},"required": ["tdf_data", "policy_key"]}}
                 });
 
                 let mut tools_object = Map::new(); // Use serde_json::Map
@@ -247,17 +247,17 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                 // Reuse the same schema definitions from initialize
                 let tool_schemas = json!({
                     "tdf_create": {"description": "Creates TDF","schema": {"type": "object","properties": {"data": {"type": "string"},"kas_url": {"type": "string"},"policy": {"type": "object"}},"required": ["data", "kas_url", "policy"]}},
-                    "tdf_read": {"description": "Reads TDF (placeholder)","schema": {"type": "object","properties": {"tdf_data": {"type": "string"}},"required": ["tdf_data"]}},
+                    "tdf_read": {"description": "Reads TDF archives","schema": {"type": "object","properties": {"tdf_data": {"type": "string"}},"required": ["tdf_data"]}},
                     "encrypt": {"description": "Encrypts data","schema": {"type": "object","properties": {"data": {"type": "string"}},"required": ["data"]}},
-                    "decrypt": {"description": "Decrypts data (placeholder)","schema": {"type": "object","properties": {"encrypted_data": {"type": "string"},"iv": {"type": "string"},"encrypted_key": {"type": "string"},"policy_key": {"type": "string"}},"required": ["encrypted_data", "iv", "encrypted_key", "policy_key"]}},
+                    "decrypt": {"description": "Decrypts data","schema": {"type": "object","properties": {"encrypted_data": {"type": "string"},"iv": {"type": "string"},"encrypted_key": {"type": "string"},"policy_key": {"type": "string"}},"required": ["encrypted_data", "iv", "encrypted_key", "policy_key"]}},
                     "policy_create": {"description": "Creates policy","schema": {"type": "object","properties": {"attributes": {"type": "array"},"dissemination": {"type": "array", "items": {"type": "string"}}},"required": ["attributes"]}},
                     "policy_validate": {"description": "Validates policy (placeholder)","schema": {"type": "object","properties": {"policy": {"type": "object"},"tdf_data": {"type": "string"}},"required": ["policy", "tdf_data"]}},
                     "attribute_define": {"description": "Defines attributes","schema": {"type": "object","oneOf": [{"properties": {"namespace": {"type": "string"},"name": {"type": "string"},"values": {"type": "array"}},"required": ["namespace", "name", "values"]},{"properties": {"namespaces": {"type": "array"}},"required": ["namespaces"]},{"properties": {"attributes": {"type": "array"}},"required": ["attributes"]},{"properties": {"content": {"type": "array"}},"required": ["content"]}]}},
                     "attribute_list": {"description": "Lists attributes (example)","schema": {"type": "object"}},
                     "namespace_list": {"description": "Lists namespaces (example)","schema": {"type": "object"}},
                     "user_attributes": {"description": "Sets user attributes","schema": {"type": "object","properties": {"user_id": {"type": "string"},"attributes": {"type": "array"}},"required": ["user_id", "attributes"]}},
-                    "access_evaluate": {"description": "Evaluates access (placeholder)","schema": {"type": "object","properties": {"policy": {"type": "object"},"user_attributes": {"type": "object"}},"required": ["policy", "user_attributes"]}},
-                    "policy_binding_verify": {"description": "Verifies binding (placeholder)","schema": {"type": "object","properties": {"tdf_data": {"type": "string"},"policy_key": {"type": "string"}},"required": ["tdf_data", "policy_key"]}}
+                    "access_evaluate": {"description": "Evaluates access against policy and attributes","schema": {"type": "object","properties": {"policy": {"type": "object"},"user_attributes": {"type": "object"}},"required": ["policy", "user_attributes"]}},
+                    "policy_binding_verify": {"description": "Verifies cryptographic binding of policy to TDF","schema": {"type": "object","properties": {"tdf_data": {"type": "string"},"policy_key": {"type": "string"}},"required": ["tdf_data", "policy_key"]}}
                 });
 
                 let mut tools_array = Vec::new(); // Keep as array here
@@ -522,74 +522,128 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                 match serde_json::from_value::<DecryptParams>(req.params) {
                     Ok(p) => {
                         debug!("Parsed decrypt params: {:?}", p);
-                        // Decode params (validation only for now)
+
+                        // Step 1: Decode all parameters
                         let encrypted_data = match base64::engine::general_purpose::STANDARD
                             .decode(&p.encrypted_data)
                         {
                             Ok(d) => d,
                             Err(e) => {
+                                error!("Invalid base64 encrypted data: {}", e);
                                 return create_error_response(
                                     req.id,
                                     -32602,
                                     format!("Invalid base64 encrypted data: {}", e),
-                                )
+                                );
                             }
                         };
+
                         let iv = match base64::engine::general_purpose::STANDARD.decode(&p.iv) {
                             Ok(d) => d,
                             Err(e) => {
+                                error!("Invalid base64 IV: {}", e);
                                 return create_error_response(
                                     req.id,
                                     -32602,
                                     format!("Invalid base64 IV: {}", e),
-                                )
+                                );
                             }
                         };
+
                         let encrypted_key = match base64::engine::general_purpose::STANDARD
                             .decode(&p.encrypted_key)
                         {
                             Ok(d) => d,
                             Err(e) => {
+                                error!("Invalid base64 encrypted key: {}", e);
                                 return create_error_response(
                                     req.id,
                                     -32602,
                                     format!("Invalid base64 encrypted key: {}", e),
-                                )
+                                );
                             }
                         };
+
                         let policy_key =
                             match base64::engine::general_purpose::STANDARD.decode(&p.policy_key) {
                                 Ok(d) => d,
                                 Err(e) => {
+                                    error!("Invalid base64 policy key: {}", e);
                                     return create_error_response(
                                         req.id,
                                         -32602,
                                         format!("Invalid base64 policy key: {}", e),
-                                    )
+                                    );
                                 }
                             };
 
-                        // Generate a hash of the policy key (use it to avoid dead code warning)
+                        // Step 2: Calculate policy key hash for verification
                         let mut hasher = sha2::Sha256::new();
                         hasher.update(&policy_key);
                         let policy_key_hash =
                             base64::engine::general_purpose::STANDARD.encode(hasher.finalize());
                         debug!("Calculated policy key hash: {}", policy_key_hash);
 
-                        warn!("Decrypt endpoint is currently a placeholder.");
-                        debug!(
-                            "Would decrypt {} bytes with IV {} bytes, key {} bytes",
-                            encrypted_data.len(),
-                            iv.len(),
-                            encrypted_key.len()
-                        );
+                        // Step 3: Check if policy_key_hash from params matches calculated hash (if provided)
+                        if !p.policy_key_hash.is_empty() && p.policy_key_hash != policy_key_hash {
+                            warn!(
+                                "Policy key hash mismatch: Expected {}, got {}",
+                                p.policy_key_hash, policy_key_hash
+                            );
+                            // We don't return an error here as this check is optional
+                        }
+
+                        // Step 4: Create TdfEncryption instance (or reuse if possible)
+                        let mut tdf_encryption = match TdfEncryption::with_policy_key(&policy_key) {
+                            Ok(enc) => enc,
+                            Err(e) => {
+                                error!("Failed to initialize TdfEncryption with policy key: {}", e);
+                                return create_error_response(
+                                    req.id,
+                                    -32000,
+                                    format!(
+                                        "Failed to initialize encryption with policy key: {}",
+                                        e
+                                    ),
+                                );
+                            }
+                        };
+
+                        // Step 5: Decrypt the data
+                        let decryption_start = std::time::Instant::now();
 
                         let decrypted_data =
-                            b"Placeholder decrypted data - Decryption not implemented".to_vec();
-                        info!("Returning placeholder decrypted data.");
+                            match tdf_encryption.decrypt(&encrypted_data, &iv, &encrypted_key) {
+                                Ok(data) => data,
+                                Err(e) => {
+                                    error!("Failed to decrypt data: {}", e);
+                                    return create_error_response(
+                                        req.id,
+                                        -32000,
+                                        format!("Failed to decrypt data: {}", e),
+                                    );
+                                }
+                            };
+
+                        let decryption_duration = decryption_start.elapsed();
+
+                        info!(
+                            "Successfully decrypted {} bytes in {:.2?}",
+                            decrypted_data.len(),
+                            decryption_duration
+                        );
+
+                        // Step 6: Return decrypted data encoded in base64
                         create_success_response(
                             req.id,
-                            json!({"data": base64::engine::general_purpose::STANDARD.encode(&decrypted_data)}),
+                            json!({
+                                "data": base64::engine::general_purpose::STANDARD.encode(&decrypted_data),
+                                "metrics": {
+                                    "decryption_time_ms": decryption_duration.as_millis(),
+                                    "original_size": encrypted_data.len(),
+                                    "decrypted_size": decrypted_data.len()
+                                }
+                            }),
                         )
                     }
                     Err(e) => create_error_response(
@@ -605,26 +659,145 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                 match serde_json::from_value::<TdfReadParams>(req.params) {
                     Ok(p) => {
                         debug!("Parsed tdf_read params: {:?}", p);
-                        let _ = match base64::engine::general_purpose::STANDARD.decode(&p.tdf_data)
-                        {
-                            Ok(data) => data,
+
+                        // Step 1: Decode TDF data from base64
+                        let tdf_bytes =
+                            match base64::engine::general_purpose::STANDARD.decode(&p.tdf_data) {
+                                Ok(data) => data,
+                                Err(e) => {
+                                    error!("Invalid base64 TDF data: {}", e);
+                                    return create_error_response(
+                                        req.id,
+                                        -32602,
+                                        format!("Invalid base64 TDF data: {}", e),
+                                    );
+                                }
+                            };
+
+                        // Step 2: Create a temporary file to store the TDF
+                        let temp_file = match tempfile::NamedTempFile::new() {
+                            Ok(file) => file,
                             Err(e) => {
+                                error!("Failed to create temporary file: {}", e);
                                 return create_error_response(
                                     req.id,
-                                    -32602,
-                                    format!("Invalid base64 TDF data: {}", e),
-                                )
+                                    -32000,
+                                    format!("Failed to create temporary file: {}", e),
+                                );
                             }
                         };
-                        warn!("tdf_read endpoint is currently a placeholder.");
-                        let manifest =
-                            json!({"placeholder": "manifest", "warning": "Not read from archive"});
-                        let payload =
-                            b"Placeholder encrypted payload - Reading not implemented".to_vec();
-                        info!("Returning placeholder manifest and payload for tdf_read.");
+
+                        // Step 3: Write the TDF bytes to the temporary file
+                        let temp_path = temp_file.path().to_owned();
+                        if let Err(e) = std::fs::write(&temp_path, &tdf_bytes) {
+                            error!("Failed to write TDF data to temporary file: {}", e);
+                            return create_error_response(
+                                req.id,
+                                -32000,
+                                format!("Failed to write TDF data to temporary file: {}", e),
+                            );
+                        }
+
+                        // Step 4: Open the TDF archive
+                        let mut archive = match TdfArchive::open(&temp_path) {
+                            Ok(archive) => archive,
+                            Err(e) => {
+                                error!("Failed to open TDF archive: {}", e);
+                                return create_error_response(
+                                    req.id,
+                                    -32000,
+                                    format!("Failed to open TDF archive: {}", e),
+                                );
+                            }
+                        };
+
+                        // Step 5: Extract the entry (assuming first entry for now)
+                        let entry = match archive.by_index() {
+                            Ok(entry) => entry,
+                            Err(e) => {
+                                error!("Failed to read TDF entry: {}", e);
+                                return create_error_response(
+                                    req.id,
+                                    -32000,
+                                    format!("Failed to read TDF entry: {}", e),
+                                );
+                            }
+                        };
+
+                        // Step 6: Extract manifest and encrypted payload
+                        let manifest = entry.manifest;
+                        let payload = entry.payload;
+                        let payload_base64 =
+                            base64::engine::general_purpose::STANDARD.encode(&payload);
+
+                        // Step 7: Get policy from manifest if available
+                        let policy = match manifest.get_policy() {
+                            Ok(policy) => Some(policy),
+                            Err(e) => {
+                                warn!("Failed to parse policy from manifest: {}", e);
+                                None
+                            }
+                        };
+
+                        // Step 8: Prepare response payload
+                        let manifest_json = match serde_json::to_value(&manifest) {
+                            Ok(json) => json,
+                            Err(e) => {
+                                error!("Failed to serialize manifest: {}", e);
+                                return create_error_response(
+                                    req.id,
+                                    -32000,
+                                    format!("Failed to serialize manifest: {}", e),
+                                );
+                            }
+                        };
+
+                        // Step 9: Clean up the temporary file
+                        let _ = std::fs::remove_file(&temp_path);
+
+                        let payload_info = json!({
+                            "encrypted": true,
+                            "size": payload.len(),
+                            "algorithm": manifest.encryption_information.method.algorithm.clone(),
+                            "iv": manifest.encryption_information.method.iv.clone(),
+                            "key_access": {
+                                "wrapped_key": manifest.encryption_information.key_access[0].wrapped_key.clone(),
+                                "url": manifest.encryption_information.key_access[0].url.clone(),
+                                "policy_binding": {
+                                    "alg": manifest.encryption_information.key_access[0].policy_binding.alg.clone(),
+                                    "hash": manifest.encryption_information.key_access[0].policy_binding.hash.clone()
+                                }
+                            }
+                        });
+
+                        let policy_json = match policy {
+                            Some(p) => match serde_json::to_value(&p) {
+                                Ok(json) => json,
+                                Err(e) => {
+                                    warn!("Failed to serialize policy: {}", e);
+                                    json!(null)
+                                }
+                            },
+                            None => json!(null),
+                        };
+
+                        info!(
+                            "Successfully read TDF with {} bytes of encrypted payload",
+                            payload.len()
+                        );
+
                         create_success_response(
                             req.id,
-                            json!({"manifest": manifest, "payload": base64::engine::general_purpose::STANDARD.encode(&payload)}),
+                            json!({
+                                "manifest": manifest_json,
+                                "payload": payload_base64,
+                                "payload_info": payload_info,
+                                "policy": policy_json,
+                                "metadata": {
+                                    "mime_type": manifest.payload.mime_type,
+                                    "tdf_spec_version": manifest.payload.tdf_spec_version
+                                }
+                            }),
                         )
                     }
                     Err(e) => create_error_response(
@@ -1281,32 +1454,154 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                 match serde_json::from_value::<PolicyBindingVerifyParams>(req.params) {
                     Ok(p) => {
                         debug!("Parsed policy_binding_verify params: {:?}", p);
-                        warn!("policy_binding_verify endpoint is placeholder.");
-                        // Use tdf_data field to avoid dead code warning
-                        let tdf_data_len = p.tdf_data.len();
-                        debug!("TDF data length for verification: {} bytes", tdf_data_len);
 
-                        let policy_key_hash =
-                            match base64::engine::general_purpose::STANDARD.decode(&p.policy_key) {
-                                Ok(b) => {
-                                    let mut h = sha2::Sha256::new();
-                                    h.update(&b);
-                                    base64::engine::general_purpose::STANDARD.encode(h.finalize())
+                        // Step 1: Decode the TDF data
+                        let tdf_bytes =
+                            match base64::engine::general_purpose::STANDARD.decode(&p.tdf_data) {
+                                Ok(data) => data,
+                                Err(e) => {
+                                    error!("Invalid base64 TDF data: {}", e);
+                                    return create_error_response(
+                                        req.id,
+                                        -32602,
+                                        format!("Invalid base64 TDF data: {}", e),
+                                    );
                                 }
-                                Err(_) => "Invalid Key".to_string(),
                             };
-                        let binding_valid = !p.policy_key.is_empty();
-                        info!("Placeholder verification result (valid={})", binding_valid);
+
+                        // Step 2: Decode the policy key
+                        let policy_key =
+                            match base64::engine::general_purpose::STANDARD.decode(&p.policy_key) {
+                                Ok(key) => key,
+                                Err(e) => {
+                                    error!("Invalid base64 policy key: {}", e);
+                                    return create_error_response(
+                                        req.id,
+                                        -32602,
+                                        format!("Invalid base64 policy key: {}", e),
+                                    );
+                                }
+                            };
+
+                        // Create a unique temporary file for the TDF
+                        let temp_file = match tempfile::NamedTempFile::new() {
+                            Ok(file) => file,
+                            Err(e) => {
+                                error!("Failed to create temporary file: {}", e);
+                                return create_error_response(
+                                    req.id,
+                                    -32000,
+                                    format!("Failed to create temporary file: {}", e),
+                                );
+                            }
+                        };
+
+                        // Write the TDF bytes to the temporary file
+                        let temp_path = temp_file.path().to_owned();
+                        if let Err(e) = std::fs::write(&temp_path, &tdf_bytes) {
+                            error!("Failed to write TDF data to temporary file: {}", e);
+                            return create_error_response(
+                                req.id,
+                                -32000,
+                                format!("Failed to write TDF data to temporary file: {}", e),
+                            );
+                        }
+
+                        // Open the TDF archive
+                        let mut archive = match TdfArchive::open(&temp_path) {
+                            Ok(archive) => archive,
+                            Err(e) => {
+                                error!("Failed to open TDF archive: {}", e);
+                                return create_error_response(
+                                    req.id,
+                                    -32000,
+                                    format!("Failed to open TDF archive: {}", e),
+                                );
+                            }
+                        };
+
+                        // Get the first entry
+                        let entry = match archive.by_index() {
+                            Ok(entry) => entry,
+                            Err(e) => {
+                                error!("Failed to read TDF entry: {}", e);
+                                return create_error_response(
+                                    req.id,
+                                    -32000,
+                                    format!("Failed to read TDF entry: {}", e),
+                                );
+                            }
+                        };
+
+                        // Extract the manifest and policy
+                        let manifest = entry.manifest;
+                        let policy = match manifest.get_policy() {
+                            Ok(policy) => policy,
+                            Err(e) => {
+                                error!("Failed to extract policy from TDF: {}", e);
+                                return create_error_response(
+                                    req.id,
+                                    -32000,
+                                    format!("Failed to extract policy from TDF: {}", e),
+                                );
+                            }
+                        };
+
+                        // Get the stored policy binding hash from the manifest
+                        let stored_binding_hash = manifest.encryption_information.key_access[0]
+                            .policy_binding
+                            .hash
+                            .clone();
+
+                        // Create a new binding hash with the provided policy key
+                        let mut test_key_access =
+                            manifest.encryption_information.key_access[0].clone();
+                        let binding_result =
+                            test_key_access.generate_policy_binding(&policy, &policy_key);
+
+                        if let Err(e) = binding_result {
+                            error!("Failed to generate test policy binding: {}", e);
+                            return create_error_response(
+                                req.id,
+                                -32000,
+                                format!("Failed to generate test policy binding: {}", e),
+                            );
+                        }
+
+                        // Get the generated hash
+                        let generated_hash = test_key_access.policy_binding.hash;
+
+                        // Compare the hashes
+                        let binding_valid = stored_binding_hash == generated_hash;
+
+                        // Generate policy key hash for logging/info
+                        let mut hasher = sha2::Sha256::new();
+                        hasher.update(&policy_key);
+                        let policy_key_hash =
+                            base64::engine::general_purpose::STANDARD.encode(hasher.finalize());
+                        let policy_key_hash_prefix =
+                            policy_key_hash.chars().take(16).collect::<String>();
+
+                        // Clean up the temporary file
+                        let _ = std::fs::remove_file(&temp_path);
+
+                        info!(
+                            binding_valid = binding_valid,
+                            policy_uuid = policy.uuid,
+                            "Policy binding verification result"
+                        );
+
                         create_success_response(
                             req.id,
                             json!({
                                 "binding_valid": binding_valid,
                                 "binding_info": {
-                                    "algorithm": "HS256 (Mocked)",
-                                    "policy_key_provided": !p.policy_key.is_empty(),
-                                    "policy_key_hash_prefix": policy_key_hash.chars().take(16).collect::<String>(),
-                                    "timestamp": Utc::now().to_rfc3339(),
-                                    "warning": "Verification logic placeholder."
+                                    "algorithm": manifest.encryption_information.key_access[0].policy_binding.alg,
+                                    "policy_uuid": policy.uuid,
+                                    "stored_hash": stored_binding_hash,
+                                    "generated_hash": generated_hash,
+                                    "policy_key_hash_prefix": policy_key_hash_prefix,
+                                    "timestamp": Utc::now().to_rfc3339()
                                 }
                             }),
                         )

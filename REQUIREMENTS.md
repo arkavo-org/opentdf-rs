@@ -104,7 +104,7 @@ P3 - Future consideration*
 ## Future Considerations
 - [P2] Expand KAS (Key Access Server) integration capabilities
 - [P2] Add support for additional encryption algorithms
-- [P2] ✅ Implement attribute-based access control (PR #7)
+- [P2] ✅ Implement attribute-based access control with policy binding verification, access evaluation, and TDF reading (PR #7)
 - [P2] Extend payload formats beyond basic file types
 - [P3] Integrate advanced testing capabilities including security fuzz testing via MCP
 - [P3] Enhance AI/LLM integration capabilities with advanced authentication methods
