@@ -43,6 +43,16 @@ struct RpcResponse {
 struct RpcError {
     code: i32,
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<ErrorData>,
+}
+
+#[derive(Serialize, Debug)]
+struct ErrorData {
+    error_type: String,
+    details: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    suggestion: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -125,14 +135,79 @@ struct PolicyBindingVerifyParams {
 // --- Struct Definitions End ---
 
 // --- Helper Functions ---
+// Error type constants
+const ERROR_TYPE_VALIDATION: &str = "VALIDATION_ERROR";
+const ERROR_TYPE_CRYPTO: &str = "CRYPTO_ERROR";
+const ERROR_TYPE_POLICY: &str = "POLICY_ERROR";
+const ERROR_TYPE_TDF: &str = "TDF_ERROR";
+const ERROR_TYPE_IO: &str = "IO_ERROR";
+const ERROR_TYPE_ATTRIBUTE: &str = "ATTRIBUTE_ERROR";
+const ERROR_TYPE_PERMISSION: &str = "PERMISSION_ERROR";
+const ERROR_TYPE_SYSTEM: &str = "SYSTEM_ERROR";
+
 fn create_error_response(id: Value, code: i32, message: String) -> RpcResponse {
     error!("Responding with error: code={}, message={}", code, message);
     RpcResponse {
         jsonrpc: "2.0".to_string(),
         id,
         result: None,
-        error: Some(RpcError { code, message }),
+        error: Some(RpcError { 
+            code, 
+            message,
+            data: None
+        }),
     }
+}
+
+fn create_detailed_error(
+    id: Value, 
+    code: i32, 
+    message: String, 
+    error_type: &str, 
+    details: String,
+    suggestion: Option<String>
+) -> RpcResponse {
+    error!("Responding with detailed error: code={}, type={}, message={}", 
+           code, error_type, message);
+    
+    RpcResponse {
+        jsonrpc: "2.0".to_string(),
+        id,
+        result: None,
+        error: Some(RpcError { 
+            code, 
+            message,
+            data: Some(ErrorData {
+                error_type: error_type.to_string(),
+                details,
+                suggestion,
+            }),
+        }),
+    }
+}
+
+/// Log a security event with full audit details
+fn log_security_event(
+    event_type: &str,
+    user_id: Option<&str>,
+    object_id: Option<&str>,
+    outcome: &str,
+    details: &str,
+    context: Option<&Value>
+) {
+    let timestamp = Utc::now().to_rfc3339();
+    
+    // Create structured event for security audit trail
+    info!(
+        timestamp = timestamp,
+        event_type = event_type,
+        user_id = user_id.unwrap_or("unknown"),
+        object_id = object_id.unwrap_or("none"),
+        outcome = outcome,
+        details = details,
+        context = context.map(|c| c.to_string()).unwrap_or_default(),
+        "SECURITY_EVENT"
+    );
 }
 
 fn create_success_response(id: Value, result: Value) -> RpcResponse {
@@ -440,7 +515,11 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                         let tdf_data_bytes = match std::fs::read(&temp_path) {
                             Ok(data) => data,
                             Err(e) => {
-                                let _ = std::fs::remove_file(&temp_path);
+                                if let Err(e) = secure_delete_temp_file(&temp_path) {
+                                    warn!("Failed to securely delete temporary file: {}", e);
+                                    // Fall back to regular deletion if secure deletion fails
+                                    let _ = std::fs::remove_file(&temp_path);
+                                }
                                 return create_error_response(
                                     req.id,
                                     -32000,
@@ -448,7 +527,11 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                                 );
                             }
                         };
-                        let _ = std::fs::remove_file(&temp_path);
+                        if let Err(e) = secure_delete_temp_file(&temp_path) {
+                            warn!("Failed to securely delete temporary file: {}", e);
+                            // Fall back to regular deletion if secure deletion fails
+                            let _ = std::fs::remove_file(&temp_path);
+                        }
                         let tdf_base64 =
                             base64::engine::general_purpose::STANDARD.encode(&tdf_data_bytes);
                         let id = Uuid::new_v4().to_string();
@@ -666,10 +749,13 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                                 Ok(data) => data,
                                 Err(e) => {
                                     error!("Invalid base64 TDF data: {}", e);
-                                    return create_error_response(
+                                    return create_detailed_error(
                                         req.id,
                                         -32602,
-                                        format!("Invalid base64 TDF data: {}", e),
+                                        "Invalid TDF data format".to_string(),
+                                        ERROR_TYPE_VALIDATION,
+                                        format!("The provided TDF data is not valid base64: {}", e),
+                                        Some("Ensure your TDF data is properly base64-encoded before sending".to_string())
                                     );
                                 }
                             };
@@ -679,10 +765,13 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                             Ok(file) => file,
                             Err(e) => {
                                 error!("Failed to create temporary file: {}", e);
-                                return create_error_response(
+                                return create_detailed_error(
                                     req.id,
                                     -32000,
-                                    format!("Failed to create temporary file: {}", e),
+                                    "File system operation error".to_string(),
+                                    ERROR_TYPE_IO,
+                                    format!("Failed to create temporary file for TDF processing: {}", e),
+                                    Some("Check system permissions and available disk space".to_string())
                                 );
                             }
                         };
@@ -753,7 +842,11 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                         };
 
                         // Step 9: Clean up the temporary file
-                        let _ = std::fs::remove_file(&temp_path);
+                        if let Err(e) = secure_delete_temp_file(&temp_path) {
+                            warn!("Failed to securely delete temporary file: {}", e);
+                            // Fall back to regular deletion if secure deletion fails
+                            let _ = std::fs::remove_file(&temp_path);
+                        }
 
                         let payload_info = json!({
                             "encrypted": true,
@@ -1420,6 +1513,22 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                             }));
                         }
 
+                        // Log comprehensive security event for audit trail
+                        log_security_event(
+                            "access_evaluation",
+                            Some(user_id),
+                            Some(policy_uuid),
+                            if evaluation_result { "granted" } else { "denied" },
+                            &format!("Policy evaluation completed in {}ms", evaluation_duration.as_millis()),
+                            Some(&json!({
+                                "attributes_evaluated": attribute_map.len(),
+                                "condition_results": condition_results,
+                                "evaluation_time": Utc::now().to_rfc3339(),
+                                "evaluation_duration_ms": evaluation_duration.as_millis(),
+                                "context_attributes": p.context.clone()
+                            }))
+                        );
+                        
                         info!(
                             policy_uuid = policy_uuid,
                             user_id = user_id,
@@ -1582,9 +1691,30 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                         let policy_key_hash_prefix =
                             policy_key_hash.chars().take(16).collect::<String>();
 
-                        // Clean up the temporary file
-                        let _ = std::fs::remove_file(&temp_path);
+                        // Clean up the temporary file - use secure deletion
+                        if let Err(e) = secure_delete_temp_file(&temp_path) {
+                            warn!("Failed to securely delete temporary file: {}", e);
+                            // Fall back to regular deletion if secure deletion fails
+                            let _ = std::fs::remove_file(&temp_path);
+                        }
 
+                        // Log security event for policy binding verification
+                        log_security_event(
+                            "policy_binding_verification",
+                            None, // No specific user associated with this operation
+                            Some(&policy.uuid),
+                            if binding_valid { "valid" } else { "invalid" },
+                            &format!("Policy binding cryptographic verification {}", 
+                                     if binding_valid { "succeeded" } else { "failed" }),
+                            Some(&json!({
+                                "binding_algorithm": manifest.encryption_information.key_access[0].policy_binding.alg,
+                                "verification_timestamp": Utc::now().to_rfc3339(),
+                                "stored_hash": stored_binding_hash,
+                                "generated_hash": generated_hash,
+                                "policy_key_hash_prefix": policy_key_hash_prefix,
+                            }))
+                        );
+                        
                         info!(
                             binding_valid = binding_valid,
                             policy_uuid = policy.uuid,
@@ -1730,9 +1860,8 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                         method: actual_tool_name.to_string(),
                         params: processed_params,
                     };
-                    let response = process_request(internal_req).await; // Call the specific tool handler
-                                                                        // ... logging and return ...
-                    response
+                                // Call the specific tool handler and return the response directly
+                    process_request(internal_req).await
                 } else {
                     // Original req.params wasn't an object
                     error!("Invalid structure for tools/call parameters: req.params was not an object.");
@@ -2072,5 +2201,76 @@ async fn main() {
         }
     }
     info!("OpenTDF MCP Server shutting down.");
+}
+// --- Secure File Deletion ---
+/// Securely delete a temporary file by overwriting it before removal
+/// This is important for security as it prevents recovery of sensitive data
+fn secure_delete_temp_file(path: &std::path::Path) -> std::io::Result<()> {
+    use std::fs::OpenOptions;
+    use std::io::{Seek, SeekFrom, Write};
+    
+    // Get the file size
+    let metadata = std::fs::metadata(path)?;
+    let file_size = metadata.len() as usize;
+    
+    if file_size > 0 {
+        // Open the file for writing
+        let mut file = OpenOptions::new().write(true).open(path)?;
+        
+        // Create a buffer of zeros to overwrite the file
+        let buffer_size = std::cmp::min(file_size, 8192); // Use 8KB buffer or file size if smaller
+        let zeros = vec![0u8; buffer_size];
+        
+        // Overwrite the file with zeros
+        let mut remaining = file_size;
+        while remaining > 0 {
+            let to_write = std::cmp::min(remaining, buffer_size);
+            file.write_all(&zeros[..to_write])?;
+            remaining -= to_write;
+        }
+        
+        // Flush to ensure all writes are completed
+        file.flush()?;
+        
+        // Also overwrite with ones (alternating pattern for additional security)
+        file.seek(SeekFrom::Start(0))?;
+        let ones = vec![0xFFu8; buffer_size];
+        
+        let mut remaining = file_size;
+        while remaining > 0 {
+            let to_write = std::cmp::min(remaining, buffer_size);
+            file.write_all(&ones[..to_write])?;
+            remaining -= to_write;
+        }
+        
+        // Flush again
+        file.flush()?;
+        
+        // Final random overwrite for good measure
+        file.seek(SeekFrom::Start(0))?;
+        let mut random = vec![0u8; buffer_size];
+        // Fill buffer with a simple "random" pattern (not cryptographically secure but sufficient)
+        for (i, byte) in random.iter_mut().enumerate().take(buffer_size) {
+            *byte = ((i * 37) % 256) as u8;
+        }
+        
+        let mut remaining = file_size;
+        while remaining > 0 {
+            let to_write = std::cmp::min(remaining, buffer_size);
+            file.write_all(&random[..to_write])?;
+            remaining -= to_write;
+        }
+        
+        // Final flush before closing
+        file.flush()?;
+        
+        // Close the file explicitly
+        drop(file);
+    }
+    
+    // Finally remove the file
+    std::fs::remove_file(path)?;
+    
+    Ok(())
 }
 // --- End of Main Function ---
