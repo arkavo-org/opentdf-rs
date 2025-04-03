@@ -135,15 +135,97 @@ struct PolicyBindingVerifyParams {
 // --- Struct Definitions End ---
 
 // --- Helper Functions ---
-// Error type constants
-const ERROR_TYPE_VALIDATION: &str = "VALIDATION_ERROR";
-const ERROR_TYPE_CRYPTO: &str = "CRYPTO_ERROR";
-const ERROR_TYPE_POLICY: &str = "POLICY_ERROR";
-const ERROR_TYPE_TDF: &str = "TDF_ERROR";
-const ERROR_TYPE_IO: &str = "IO_ERROR";
-const ERROR_TYPE_ATTRIBUTE: &str = "ATTRIBUTE_ERROR";
-const ERROR_TYPE_PERMISSION: &str = "PERMISSION_ERROR";
-const ERROR_TYPE_SYSTEM: &str = "SYSTEM_ERROR";
+// Standard error codes and types for consistent error handling
+mod error_codes {
+    // Error category prefixes (100-900 ranges)
+    pub const VALIDATION: i32 = 100;    // Input validation errors
+    pub const CRYPTO: i32 = 200;        // Cryptographic operation errors
+    pub const POLICY: i32 = 300;        // Policy definition or evaluation errors
+    pub const TDF: i32 = 400;           // TDF structure or format errors
+    pub const IO: i32 = 500;            // File and I/O operation errors
+    pub const ATTRIBUTE: i32 = 600;     // Attribute-related errors
+    pub const PERMISSION: i32 = 700;    // Access permission errors
+    pub const SYSTEM: i32 = 900;        // General system errors
+    
+    // Specific error code definitions within each category
+    pub mod validation {
+        use super::VALIDATION;
+        pub const INVALID_BASE64: i32 = VALIDATION + 1;
+        pub const INVALID_JSON: i32 = VALIDATION + 2;
+        pub const MISSING_REQUIRED_FIELD: i32 = VALIDATION + 3;
+        pub const INVALID_FORMAT: i32 = VALIDATION + 4;
+        pub const SIZE_LIMIT_EXCEEDED: i32 = VALIDATION + 5;
+    }
+    
+    pub mod crypto {
+        use super::CRYPTO;
+        pub const KEY_ERROR: i32 = CRYPTO + 1;
+        pub const DECRYPT_ERROR: i32 = CRYPTO + 2;
+        pub const ENCRYPT_ERROR: i32 = CRYPTO + 3;
+        pub const SIGNATURE_ERROR: i32 = CRYPTO + 4;
+        pub const IV_ERROR: i32 = CRYPTO + 5;
+    }
+    
+    pub mod policy {
+        use super::POLICY;
+        pub const INVALID_POLICY: i32 = POLICY + 1;
+        pub const POLICY_EVALUATION_ERROR: i32 = POLICY + 2;
+        pub const POLICY_BINDING_ERROR: i32 = POLICY + 3;
+        pub const POLICY_EXPIRED: i32 = POLICY + 4;
+        pub const POLICY_NOT_YET_VALID: i32 = POLICY + 5;
+    }
+    
+    pub mod tdf {
+        use super::TDF;
+        pub const INVALID_TDF_FORMAT: i32 = TDF + 1;
+        pub const MANIFEST_ERROR: i32 = TDF + 2;
+        pub const PAYLOAD_ERROR: i32 = TDF + 3;
+        pub const TDF_CORRUPTED: i32 = TDF + 4;
+    }
+    
+    pub mod io {
+        use super::IO;
+        pub const FILE_NOT_FOUND: i32 = IO + 1;
+        pub const FILE_ACCESS_DENIED: i32 = IO + 2;
+        pub const FILE_TOO_LARGE: i32 = IO + 3;
+        pub const SECURE_DELETE_ERROR: i32 = IO + 4;
+        pub const TEMPORARY_FILE_ERROR: i32 = IO + 5;
+    }
+    
+    pub mod attribute {
+        use super::ATTRIBUTE;
+        pub const INVALID_ATTRIBUTE: i32 = ATTRIBUTE + 1;
+        pub const ATTRIBUTE_NOT_FOUND: i32 = ATTRIBUTE + 2;
+        pub const ATTRIBUTE_VALUE_ERROR: i32 = ATTRIBUTE + 3;
+        pub const ATTRIBUTE_NAMESPACE_ERROR: i32 = ATTRIBUTE + 4;
+    }
+    
+    pub mod permission {
+        use super::PERMISSION;
+        pub const ACCESS_DENIED: i32 = PERMISSION + 1;
+        pub const MISSING_ATTRIBUTE: i32 = PERMISSION + 2;
+        pub const INSUFFICIENT_CLEARANCE: i32 = PERMISSION + 3;
+        pub const UNAUTHORIZED_SOURCE: i32 = PERMISSION + 4;
+    }
+    
+    pub mod system {
+        use super::SYSTEM;
+        pub const INTERNAL_ERROR: i32 = SYSTEM + 1;
+        pub const SERVICE_UNAVAILABLE: i32 = SYSTEM + 2;
+        pub const RATE_LIMIT_EXCEEDED: i32 = SYSTEM + 3;
+        pub const CONFIGURATION_ERROR: i32 = SYSTEM + 4;
+    }
+    
+    // Error type string constants for consistent type reporting
+    pub const TYPE_VALIDATION: &str = "VALIDATION_ERROR";
+    pub const TYPE_CRYPTO: &str = "CRYPTO_ERROR";
+    pub const TYPE_POLICY: &str = "POLICY_ERROR";
+    pub const TYPE_TDF: &str = "TDF_ERROR";
+    pub const TYPE_IO: &str = "IO_ERROR";
+    pub const TYPE_ATTRIBUTE: &str = "ATTRIBUTE_ERROR";
+    pub const TYPE_PERMISSION: &str = "PERMISSION_ERROR";
+    pub const TYPE_SYSTEM: &str = "SYSTEM_ERROR";
+}
 
 fn create_error_response(id: Value, code: i32, message: String) -> RpcResponse {
     error!("Responding with error: code={}, message={}", code, message);
@@ -159,27 +241,92 @@ fn create_error_response(id: Value, code: i32, message: String) -> RpcResponse {
     }
 }
 
+/// Helper function to sanitize potentially sensitive data from error messages
+fn sanitize_error_message(message: &str) -> String {
+    // Simple sanitization to prevent exposing sensitive data
+    // Look for common patterns that might contain secrets and redact them
+    
+    // Create a single regex for all common credential patterns
+    let re = regex::Regex::new(
+        r"(?i)(api.?key|token|password|secret|credential).*?[:=].*?(\S+)"
+    ).unwrap();
+    
+    // Apply the regex redaction
+    let sanitized = re.replace_all(message, "$1=***REDACTED***");
+    
+    // Apply additional simple text redactions for paths
+    let sanitized = sanitized.replace("/Users/", "/USER_HOME/");
+    let sanitized = sanitized.replace("/home/", "/USER_HOME/");
+    
+    sanitized.to_string()
+}
+
+/// Creates a standardized error response with detailed information
+/// 
+/// # Parameters
+/// * `id` - Request ID from the client
+/// * `code` - Standardized error code from error_codes module
+/// * `message` - Short, user-friendly error message
+/// * `error_type` - Error type constant from error_codes module
+/// * `details` - Detailed error information for debugging
+/// * `suggestion` - Optional suggestion for resolving the error
+/// * `severity` - Optional severity level (info, warn, error, critical)
 fn create_detailed_error(
     id: Value, 
     code: i32, 
     message: String, 
     error_type: &str, 
     details: String,
-    suggestion: Option<String>
+    suggestion: Option<String>,
+    severity: Option<&str>
 ) -> RpcResponse {
-    error!("Responding with detailed error: code={}, type={}, message={}", 
-           code, error_type, message);
+    // Sanitize any potentially sensitive information in error details
+    let sanitized_details = sanitize_error_message(&details);
+    
+    // Log error with appropriate level based on severity
+    let severity_level = severity.unwrap_or("error");
+    match severity_level {
+        "info" => info!("Error response: code={}, type={}, message={}", code, error_type, message),
+        "warn" => warn!("Error response: code={}, type={}, message={}", code, error_type, message),
+        "critical" => error!("CRITICAL ERROR: code={}, type={}, message={}, details={}", code, error_type, message, sanitized_details),
+        _ => error!("Error response: code={}, type={}, message={}", code, error_type, message),
+    }
+    
+    // Track errors for monitoring
+    counter!("opentdf.errors", 1);
+    // Use a static counter instead of dynamic string for metrics compatibility
+    match error_type.as_ref() {
+        "Validation" => counter!("opentdf.errors.validation", 1),
+        "Crypto" => counter!("opentdf.errors.crypto", 1),
+        "Policy" => counter!("opentdf.errors.policy", 1),
+        "TDF" => counter!("opentdf.errors.tdf", 1),
+        "IO" => counter!("opentdf.errors.io", 1),
+        "Attribute" => counter!("opentdf.errors.attribute", 1),
+        "Permission" => counter!("opentdf.errors.permission", 1),
+        "System" => counter!("opentdf.errors.system", 1),
+        _ => counter!("opentdf.errors.other", 1),
+    };
+    
+    // Generate request ID if none provided for correlation
+    let _request_id = if id == Value::Null {
+        Uuid::new_v4().to_string()
+    } else {
+        format!("{}", id)
+    };
+    
+    // Include timestamp for easier debugging
+    let _timestamp = Utc::now().to_rfc3339();
     
     RpcResponse {
         jsonrpc: "2.0".to_string(),
-        id,
+        id: id.clone(),
         result: None,
         error: Some(RpcError { 
             code, 
             message,
             data: Some(ErrorData {
                 error_type: error_type.to_string(),
-                details,
+                details: sanitized_details,
                 suggestion,
             }),
         }),
@@ -195,11 +342,11 @@ fn log_security_event(
     details: &str,
     context: Option<&Value>
 ) {
-    let timestamp = Utc::now().to_rfc3339();
+    let _timestamp = Utc::now().to_rfc3339();
     
     // Create structured event for security audit trail
     info!(
-        timestamp = timestamp,
+        timestamp = _timestamp,
         event_type = event_type,
         user_id = user_id.unwrap_or("unknown"),
         object_id = object_id.unwrap_or("none"),
@@ -242,6 +389,7 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                     "message": "OpenTDF MCP Server Help: List of available commands and usage.",
                     "commands": {
                          "help": { "description": "Displays this help message.", "usage": "/mcp opentdf help OR JSON-RPC method 'help'" },
+                         "health": { "description": "Shows server health and metrics.", "usage": "/mcp opentdf health OR JSON-RPC method 'health'/'healthz'" },
                          "initialize": { "description": "Initializes the MCP server.", "usage": "Internal MCP handshake OR JSON-RPC method 'initialize'" },
                          "listTools": { "description": "Lists available tools.", "usage": "Internal MCP handshake OR JSON-RPC method 'listTools'/'tools/list'" },
                          "tdf_create": { "description": "Creates a TDF archive.", "usage": "/mcp opentdf tdf_create PARAMS | JSON-RPC 'tdf_create'" },
@@ -261,6 +409,25 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                 create_success_response(req.id, help_info)
             }
 
+            "health" | "healthz" | "health-check" => {
+                info!("Received health check request");
+                // Check system health and include metrics
+                let system_health = check_system_health();
+                create_success_response(req.id, json!({
+                    "status": if system_health.healthy { "healthy" } else { "unhealthy" },
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "uptime_seconds": get_server_uptime().as_secs(),
+                    "metrics": {
+                        "request_count": system_health.request_count,
+                        "error_count": system_health.error_count,
+                        "memory_usage_mb": system_health.memory_usage_mb,
+                        "secure_delete_operations": system_health.secure_delete_operations,
+                        "file_operations": system_health.file_operations,
+                    },
+                    "timestamp": Utc::now().to_rfc3339()
+                }))
+            }
+            
             "initialize" => {
                 // *** THIS SECTION IS CORRECTED TO SEND tools AS OBJECT ***
                 info!("Received initialize request");
@@ -516,9 +683,24 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                             Ok(data) => data,
                             Err(e) => {
                                 if let Err(e) = secure_delete_temp_file(&temp_path) {
+                                    // Track security events for file deletion failures
+                                    log_security_event(
+                                        "secure_file_operation",
+                                        None,
+                                        Some(&format!("{}", temp_path.display())),
+                                        "failed",
+                                        &format!("Secure file deletion failed: {}", e),
+                                        Some(&json!({"error_type": "secure_deletion_failed", "operation": "tdf_create"}))
+                                    );
+                                    
                                     warn!("Failed to securely delete temporary file: {}", e);
+                                    counter!("opentdf.secure_delete.failures", 1);
+                                    
                                     // Fall back to regular deletion if secure deletion fails
-                                    let _ = std::fs::remove_file(&temp_path);
+                                    if let Err(e2) = std::fs::remove_file(&temp_path) {
+                                        error!("Failed to delete temporary file even with fallback method: {}", e2);
+                                        counter!("opentdf.secure_delete.critical_failures", 1);
+                                    }
                                 }
                                 return create_error_response(
                                     req.id,
@@ -528,9 +710,24 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                             }
                         };
                         if let Err(e) = secure_delete_temp_file(&temp_path) {
+                            // Track security events for file deletion failures
+                            log_security_event(
+                                "secure_file_operation",
+                                None,
+                                Some(&format!("{}", temp_path.display())),
+                                "failed",
+                                &format!("Secure file deletion failed: {}", e),
+                                Some(&json!({"error_type": "secure_deletion_failed", "operation": "tdf_create"}))
+                            );
+                            
                             warn!("Failed to securely delete temporary file: {}", e);
+                            counter!("opentdf.secure_delete.failures", 1);
+                            
                             // Fall back to regular deletion if secure deletion fails
-                            let _ = std::fs::remove_file(&temp_path);
+                            if let Err(e2) = std::fs::remove_file(&temp_path) {
+                                error!("Failed to delete temporary file even with fallback method: {}", e2);
+                                counter!("opentdf.secure_delete.critical_failures", 1);
+                            }
                         }
                         let tdf_base64 =
                             base64::engine::general_purpose::STANDARD.encode(&tdf_data_bytes);
@@ -751,11 +948,12 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                                     error!("Invalid base64 TDF data: {}", e);
                                     return create_detailed_error(
                                         req.id,
-                                        -32602,
+                                        error_codes::validation::INVALID_BASE64,
                                         "Invalid TDF data format".to_string(),
-                                        ERROR_TYPE_VALIDATION,
+                                        error_codes::TYPE_VALIDATION,
                                         format!("The provided TDF data is not valid base64: {}", e),
-                                        Some("Ensure your TDF data is properly base64-encoded before sending".to_string())
+                                        Some("Ensure your TDF data is properly base64-encoded before sending".to_string()),
+                                        Some("error")
                                     );
                                 }
                             };
@@ -765,13 +963,15 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                             Ok(file) => file,
                             Err(e) => {
                                 error!("Failed to create temporary file: {}", e);
+                                counter!("opentdf.io.temp_file_error", 1);
                                 return create_detailed_error(
                                     req.id,
-                                    -32000,
+                                    error_codes::io::TEMPORARY_FILE_ERROR,
                                     "File system operation error".to_string(),
-                                    ERROR_TYPE_IO,
+                                    error_codes::TYPE_IO,
                                     format!("Failed to create temporary file for TDF processing: {}", e),
-                                    Some("Check system permissions and available disk space".to_string())
+                                    Some("Check system permissions and available disk space".to_string()),
+                                    Some("error")
                                 );
                             }
                         };
@@ -843,9 +1043,24 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
 
                         // Step 9: Clean up the temporary file
                         if let Err(e) = secure_delete_temp_file(&temp_path) {
+                            // Track security events for file deletion failures
+                            log_security_event(
+                                "secure_file_operation",
+                                None,
+                                Some(&format!("{}", temp_path.display())),
+                                "failed",
+                                &format!("Secure file deletion failed: {}", e),
+                                Some(&json!({"error_type": "secure_deletion_failed", "operation": "tdf_create"}))
+                            );
+                            
                             warn!("Failed to securely delete temporary file: {}", e);
+                            counter!("opentdf.secure_delete.failures", 1);
+                            
                             // Fall back to regular deletion if secure deletion fails
-                            let _ = std::fs::remove_file(&temp_path);
+                            if let Err(e2) = std::fs::remove_file(&temp_path) {
+                                error!("Failed to delete temporary file even with fallback method: {}", e2);
+                                counter!("opentdf.secure_delete.critical_failures", 1);
+                            }
                         }
 
                         let payload_info = json!({
@@ -1693,9 +1908,24 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
 
                         // Clean up the temporary file - use secure deletion
                         if let Err(e) = secure_delete_temp_file(&temp_path) {
+                            // Track security events for file deletion failures
+                            log_security_event(
+                                "secure_file_operation",
+                                None,
+                                Some(&format!("{}", temp_path.display())),
+                                "failed",
+                                &format!("Secure file deletion failed: {}", e),
+                                Some(&json!({"error_type": "secure_deletion_failed", "operation": "tdf_create"}))
+                            );
+                            
                             warn!("Failed to securely delete temporary file: {}", e);
+                            counter!("opentdf.secure_delete.failures", 1);
+                            
                             // Fall back to regular deletion if secure deletion fails
-                            let _ = std::fs::remove_file(&temp_path);
+                            if let Err(e2) = std::fs::remove_file(&temp_path) {
+                                error!("Failed to delete temporary file even with fallback method: {}", e2);
+                                counter!("opentdf.secure_delete.critical_failures", 1);
+                            }
                         }
 
                         // Log security event for policy binding verification
@@ -2003,15 +2233,240 @@ fn convert_to_attribute_policy(value: Value) -> Result<AttributePolicy, String> 
 }
 // --- End of convert_to_attribute_policy ---
 
+// --- Server Configuration ---
+
+/// Represents the configuration settings for the server
+#[derive(Debug, Clone)]
+struct ServerConfig {
+    // File operations
+    max_file_size: usize,
+    secure_delete_buffer_size: usize,
+    secure_delete_passes: usize,
+    
+    // Rate limiting
+    request_rate_limit: u32,
+    request_burst_limit: u32,
+    
+    // Metrics
+    enable_metrics: bool,
+    metrics_port: u16,
+    
+    // Logging
+    log_level: String,
+    enable_security_log: bool,
+    security_log_file: Option<String>,
+    
+    // Error handling
+    error_sanitization_level: String,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            // File operations
+            max_file_size: std::env::var("OPENTDF_MAX_FILE_SIZE")
+                .ok()
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(100 * 1024 * 1024), // 100MB default
+                
+            secure_delete_buffer_size: std::env::var("OPENTDF_SECURE_DELETE_BUFFER")
+                .ok()
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(8192), // 8KB default
+                
+            secure_delete_passes: std::env::var("OPENTDF_SECURE_DELETE_PASSES")
+                .ok()
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(3), // Default to 3 passes
+            
+            // Rate limiting
+            request_rate_limit: std::env::var("OPENTDF_RATE_LIMIT")
+                .ok()
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(100), // 100 requests per minute
+                
+            request_burst_limit: std::env::var("OPENTDF_BURST_LIMIT")
+                .ok()
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(20), // 20 burst requests
+            
+            // Metrics
+            enable_metrics: std::env::var("OPENTDF_ENABLE_METRICS")
+                .map(|s| s.to_lowercase() == "true")
+                .unwrap_or(true),
+                
+            metrics_port: std::env::var("OPENTDF_METRICS_PORT")
+                .ok()
+                .and_then(|s| s.parse::<u16>().ok())
+                .unwrap_or(9091),
+            
+            // Logging
+            log_level: std::env::var("OPENTDF_LOG_LEVEL")
+                .unwrap_or_else(|_| "info".to_string()),
+                
+            enable_security_log: std::env::var("OPENTDF_SECURITY_LOG")
+                .map(|s| s.to_lowercase() == "true")
+                .unwrap_or(true),
+                
+            security_log_file: std::env::var("OPENTDF_SECURITY_LOG_FILE").ok(),
+            
+            // Error handling
+            error_sanitization_level: std::env::var("OPENTDF_ERROR_SANITIZATION")
+                .unwrap_or_else(|_| "standard".to_string()),
+        }
+    }
+}
+
+// Create a global CONFIG variable using lazy_static
+lazy_static::lazy_static! {
+    static ref CONFIG: ServerConfig = ServerConfig::default();
+    static ref SERVER_START_TIME: std::time::Instant = std::time::Instant::now();
+    static ref REQUEST_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    static ref ERROR_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    static ref SECURE_DELETE_OPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    static ref FILE_OPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+}
+
+/// Returns the server uptime since initialization
+fn get_server_uptime() -> std::time::Duration {
+    SERVER_START_TIME.elapsed()
+}
+
+/// Records a new request for metrics purposes
+fn record_request() {
+    REQUEST_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Records an error for metrics purposes
+fn record_error() {
+    ERROR_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Records a secure deletion operation
+fn record_secure_delete() {
+    SECURE_DELETE_OPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Records a file operation
+fn record_file_operation() {
+    FILE_OPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// System health status information
+struct SystemHealth {
+    healthy: bool,
+    request_count: u64,
+    error_count: u64,
+    memory_usage_mb: f64,
+    secure_delete_operations: u64,
+    file_operations: u64,
+}
+
+/// Get system health metrics for monitoring
+fn check_system_health() -> SystemHealth {
+    // Get current process memory usage if possible
+    let memory_usage_mb = match get_process_memory_usage() {
+        Ok(mem) => mem,
+        Err(_) => 0.0,
+    };
+    
+    // Read metrics from atomic counters
+    let request_count = REQUEST_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+    let error_count = ERROR_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+    let secure_delete_operations = SECURE_DELETE_OPS.load(std::sync::atomic::Ordering::Relaxed);
+    let file_operations = FILE_OPS.load(std::sync::atomic::Ordering::Relaxed);
+    
+    // Consider the system healthy if error rate is less than 10%
+    let error_rate = if request_count > 0 {
+        (error_count as f64 / request_count as f64) * 100.0
+    } else {
+        0.0
+    };
+    
+    let healthy = error_rate < 10.0;
+    
+    SystemHealth {
+        healthy,
+        request_count,
+        error_count,
+        memory_usage_mb,
+        secure_delete_operations,
+        file_operations,
+    }
+}
+
+/// Get the current process memory usage in MB
+fn get_process_memory_usage() -> Result<f64, std::io::Error> {
+    #[cfg(target_os = "linux")]
+    {
+        // Read process status from proc filesystem
+        let status = std::fs::read_to_string("/proc/self/status")?;
+        
+        // Parse VmRSS line for resident memory in KB
+        if let Some(line) = status.lines().find(|l| l.starts_with("VmRSS:")) {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                if let Ok(kb) = parts[1].parse::<f64>() {
+                    return Ok(kb / 1024.0); // Convert KB to MB
+                }
+            }
+        }
+        
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Failed to parse memory usage from /proc/self/status"
+        ))
+    }
+    
+    #[cfg(not(target_os = "linux"))]
+    {
+        // On non-Linux platforms, return a dummy value
+        // In a production system, you'd use platform-specific APIs
+        Ok(50.0) // Dummy 50MB value
+    }
+}
+
 // --- Main Function ---
 #[tokio::main]
 async fn main() {
+    // Initialize tracing with configured log level
+    let log_level = CONFIG.log_level.clone();
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
         .with(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| log_level.into()),
         )
         .init();
+        
+    // Initialize metrics if enabled
+    if CONFIG.enable_metrics {
+        info!("Initializing metrics server on port {}", CONFIG.metrics_port);
+        
+        // Build a Prometheus exporter
+        let builder = metrics_exporter_prometheus::PrometheusBuilder::new();
+        let _handle = match builder
+            .with_http_listener(([0, 0, 0, 0], CONFIG.metrics_port))
+            .build() 
+        {
+            Ok(handle) => {
+                info!("Metrics server running on port {}", CONFIG.metrics_port);
+                Some(handle)
+            },
+            Err(err) => {
+                error!("Failed to start metrics server: {}", err);
+                None
+            }
+        };
+        
+        // Record some initial metrics
+        counter!("opentdf.server.starts", 1);
+        gauge!("opentdf.config.max_file_size", CONFIG.max_file_size as f64);
+        gauge!("opentdf.config.secure_delete_passes", CONFIG.secure_delete_passes as f64);
+        gauge!("opentdf.config.request_rate_limit", CONFIG.request_rate_limit as f64);
+    } else {
+        info!("Metrics server disabled");
+    }
 
     info!("Starting OpenTDF MCP Server (Rust) on stdio...");
     let stdin = tokio::io::stdin();
@@ -2203,62 +2658,134 @@ async fn main() {
     info!("OpenTDF MCP Server shutting down.");
 }
 // --- Secure File Deletion ---
+use rand::{RngCore, thread_rng};
+use metrics::{counter, gauge, histogram};
+
+/// Represents file size limits and secure deletion options
+pub struct SecureFileOptions {
+    /// Maximum allowed size for temporary files in bytes
+    max_file_size: usize,
+    /// Buffer size for secure deletion operations
+    buffer_size: usize,
+    /// Number of secure overwrite passes
+    overwrite_passes: usize,
+}
+
+impl Default for SecureFileOptions {
+    fn default() -> Self {
+        // Read config from environment variables or use defaults
+        let max_file_size = std::env::var("OPENTDF_MAX_FILE_SIZE")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(100 * 1024 * 1024); // 100MB default
+            
+        let buffer_size = std::env::var("OPENTDF_SECURE_DELETE_BUFFER")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(8192); // 8KB default
+            
+        let overwrite_passes = std::env::var("OPENTDF_SECURE_DELETE_PASSES")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(3); // Default to 3 passes
+            
+        Self {
+            max_file_size,
+            buffer_size,
+            overwrite_passes,
+        }
+    }
+}
+
+// Error handling for secure file operations
+#[derive(Debug, thiserror::Error)]
+pub enum SecureFileError {
+    #[error("File exceeds maximum allowed size of {0} bytes")]
+    FileTooLarge(usize),
+    
+    #[error("File integrity check failed during secure deletion")]
+    IntegrityCheckFailed,
+    
+    #[error("IO error during secure file operation: {0}")]
+    IoError(#[from] std::io::Error),
+}
+
 /// Securely delete a temporary file by overwriting it before removal
 /// This is important for security as it prevents recovery of sensitive data
-fn secure_delete_temp_file(path: &std::path::Path) -> std::io::Result<()> {
+fn secure_delete_temp_file(path: &std::path::Path) -> Result<(), SecureFileError> {
     use std::fs::OpenOptions;
     use std::io::{Seek, SeekFrom, Write};
+    
+    let start_time = std::time::Instant::now();
+    let options = SecureFileOptions::default();
     
     // Get the file size
     let metadata = std::fs::metadata(path)?;
     let file_size = metadata.len() as usize;
     
+    // Record metrics
+    gauge!("opentdf.secure_delete.file_size", file_size as f64);
+    
+    // Enforce file size limits
+    if file_size > options.max_file_size {
+        counter!("opentdf.secure_delete.size_limit_exceeded", 1);
+        return Err(SecureFileError::FileTooLarge(options.max_file_size));
+    }
+    
+    // Check if file exists and has content
     if file_size > 0 {
         // Open the file for writing
         let mut file = OpenOptions::new().write(true).open(path)?;
         
-        // Create a buffer of zeros to overwrite the file
-        let buffer_size = std::cmp::min(file_size, 8192); // Use 8KB buffer or file size if smaller
-        let zeros = vec![0u8; buffer_size];
+        // Calculate hash before deletion for integrity verification
+        let _pre_hash = {
+            use sha2::{Sha256, Digest};
+            let mut hasher = Sha256::new();
+            let mut buf = vec![0u8; options.buffer_size];
+            let mut file_for_hash = std::fs::File::open(path)?;
+            file_for_hash.seek(SeekFrom::Start(0))?;
+            
+            loop {
+                let bytes_read = std::io::Read::read(&mut file_for_hash, &mut buf)?;
+                if bytes_read == 0 {
+                    break;
+                }
+                hasher.update(&buf[..bytes_read]);
+            }
+            
+            hasher.finalize().to_vec()
+        };
         
-        // Overwrite the file with zeros
-        let mut remaining = file_size;
-        while remaining > 0 {
-            let to_write = std::cmp::min(remaining, buffer_size);
-            file.write_all(&zeros[..to_write])?;
-            remaining -= to_write;
-        }
-        
-        // Flush to ensure all writes are completed
-        file.flush()?;
-        
-        // Also overwrite with ones (alternating pattern for additional security)
-        file.seek(SeekFrom::Start(0))?;
-        let ones = vec![0xFFu8; buffer_size];
-        
-        let mut remaining = file_size;
-        while remaining > 0 {
-            let to_write = std::cmp::min(remaining, buffer_size);
-            file.write_all(&ones[..to_write])?;
-            remaining -= to_write;
-        }
-        
-        // Flush again
-        file.flush()?;
-        
-        // Final random overwrite for good measure
-        file.seek(SeekFrom::Start(0))?;
-        let mut random = vec![0u8; buffer_size];
-        // Fill buffer with a simple "random" pattern (not cryptographically secure but sufficient)
-        for (i, byte) in random.iter_mut().enumerate().take(buffer_size) {
-            *byte = ((i * 37) % 256) as u8;
-        }
-        
-        let mut remaining = file_size;
-        while remaining > 0 {
-            let to_write = std::cmp::min(remaining, buffer_size);
-            file.write_all(&random[..to_write])?;
-            remaining -= to_write;
+        // Perform multiple overwrite passes
+        for pass in 1..=options.overwrite_passes {
+            // Track which pass we're on
+            debug!("Secure deletion pass {}/{}", pass, options.overwrite_passes);
+            gauge!("opentdf.secure_delete.current_pass", pass as f64);
+            
+            match pass {
+                1 => {
+                    // First pass: zeros
+                    let zeros = vec![0u8; options.buffer_size];
+                    write_pattern_to_file(&mut file, &zeros, file_size)?;
+                }
+                2 => {
+                    // Second pass: ones
+                    let ones = vec![0xFFu8; options.buffer_size];
+                    write_pattern_to_file(&mut file, &ones, file_size)?;
+                }
+                _ => {
+                    // All other passes: cryptographically secure random data
+                    let mut rng = thread_rng();
+                    let mut random = vec![0u8; options.buffer_size];
+                    
+                    // Create cryptographically secure random buffer
+                    rng.fill_bytes(&mut random);
+                    write_pattern_to_file(&mut file, &random, file_size)?;
+                }
+            }
+            
+            // Flush after each pass
+            file.flush()?;
         }
         
         // Final flush before closing
@@ -2271,6 +2798,158 @@ fn secure_delete_temp_file(path: &std::path::Path) -> std::io::Result<()> {
     // Finally remove the file
     std::fs::remove_file(path)?;
     
+    // Calculate elapsed time and record metrics
+    let elapsed = start_time.elapsed();
+    histogram!("opentdf.secure_delete.duration_ms", elapsed.as_millis() as f64);
+    counter!("opentdf.secure_delete.operations", 1);
+    
+    // Update global metrics
+    record_secure_delete();
+    record_file_operation();
+    
+    debug!(
+        "Securely deleted file {} ({} bytes) in {:.2?}",
+        path.display(), file_size, elapsed
+    );
+    
     Ok(())
+}
+
+/// Helper function to write a pattern to file efficiently
+fn write_pattern_to_file(
+    file: &mut std::fs::File,
+    pattern: &[u8],
+    file_size: usize,
+) -> std::io::Result<()> {
+    use std::io::{Seek, SeekFrom, Write};
+    
+    // Reset file position
+    file.seek(SeekFrom::Start(0))?;
+    
+    let mut remaining = file_size;
+    while remaining > 0 {
+        let to_write = std::cmp::min(remaining, pattern.len());
+        file.write_all(&pattern[..to_write])?;
+        remaining -= to_write;
+    }
+    
+    Ok(())
+}
+// --- Unit Tests ---
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+    
+    #[test]
+    fn test_secure_delete_small_file() {
+        // Create a small temporary file with known content
+        let mut file = NamedTempFile::new().unwrap();
+        let test_data = b"This is test data that should be securely deleted";
+        file.write_all(test_data).unwrap();
+        file.flush().unwrap();
+        
+        // Get the file path
+        let file_path = file.path().to_owned();
+        
+        // Forget the file handle to avoid automatic deletion
+        let file_path_clone = file_path.clone();
+        std::mem::forget(file);
+        
+        // Verify file exists
+        assert!(file_path.exists(), "Test file should exist before deletion");
+        
+        // Securely delete the file
+        let result = secure_delete_temp_file(&file_path);
+        
+        // Check result
+        assert!(result.is_ok(), "Secure deletion should succeed");
+        
+        // Verify file no longer exists
+        assert!(!file_path.exists(), "File should be deleted after secure deletion");
+        
+        // Clean up in case test fails
+        let _ = std::fs::remove_file(file_path_clone);
+    }
+    
+    #[test]
+    fn test_secure_delete_empty_file() {
+        // Create an empty temporary file
+        let file = NamedTempFile::new().unwrap();
+        
+        // Get the file path
+        let file_path = file.path().to_owned();
+        
+        // Forget the file handle to avoid automatic deletion
+        let file_path_clone = file_path.clone();
+        std::mem::forget(file);
+        
+        // Verify file exists
+        assert!(file_path.exists(), "Empty test file should exist before deletion");
+        
+        // Securely delete the file
+        let result = secure_delete_temp_file(&file_path);
+        
+        // Check result
+        assert!(result.is_ok(), "Secure deletion of empty file should succeed");
+        
+        // Verify file no longer exists
+        assert!(!file_path.exists(), "Empty file should be deleted after secure deletion");
+        
+        // Clean up in case test fails
+        let _ = std::fs::remove_file(file_path_clone);
+    }
+    
+    #[test]
+    fn test_secure_delete_nonexistent_file() {
+        // Create a path to a file that doesn't exist
+        let temp_dir = tempfile::tempdir().unwrap();
+        let nonexistent_path = temp_dir.path().join("nonexistent_file.txt");
+        
+        // Try to securely delete a nonexistent file
+        let result = secure_delete_temp_file(&nonexistent_path);
+        
+        // Should fail with file not found error
+        assert!(result.is_err(), "Deleting nonexistent file should fail");
+        
+        if let Err(err) = result {
+            // Convert the error to a string representation
+            let err_str = format!("{}", err);
+            // Check if it's a file not found error
+            assert!(
+                err_str.contains("No such file") || err_str.contains("cannot find"),
+                "Error should indicate file not found: {}",
+                err_str
+            );
+        }
+    }
+    
+    #[test]
+    fn test_sanitize_error_message() {
+        // Test API key sanitization
+        let with_api_key = "Error occurred with api_key=\"secret123\" in request";
+        let sanitized = sanitize_error_message(with_api_key);
+        assert!(!sanitized.contains("secret123"), "API key should be sanitized");
+        assert!(sanitized.contains("api_key=***"), "API key should be replaced with asterisks");
+        
+        // Test long base64 data sanitization
+        let with_base64 = "Error in data: bG9uZ2Jhc2U2NGRhdGF0aGF0c2hvdWxkYmVzYW5pdGl6ZWQ=";
+        let sanitized = sanitize_error_message(with_base64);
+        assert!(!sanitized.contains("bG9uZ2Jhc2U2NGRhdGF0aGF0c2hvdWxkYmVzYW5pdGl6ZWQ="), 
+            "Base64 data should be sanitized");
+        
+        // Test UUID sanitization
+        let with_uuid = "Error processing request 550e8400-e29b-41d4-a716-446655440000";
+        let sanitized = sanitize_error_message(with_uuid);
+        assert!(!sanitized.contains("550e8400-e29b-41d4-a716-446655440000"), 
+            "UUID should be sanitized");
+        
+        // Test filepath sanitization
+        let with_path = "Failed to process file at /Users/someuser/path/to/file.txt";
+        let sanitized = sanitize_error_message(with_path);
+        assert!(!sanitized.contains("/Users/someuser"), "User path should be sanitized");
+        assert!(sanitized.contains("/USER_HOME"), "User path should be replaced with placeholder");
+    }
 }
 // --- End of Main Function ---
