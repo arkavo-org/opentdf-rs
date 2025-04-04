@@ -415,7 +415,7 @@ impl RateLimiter {
     /// Check if a new request should be allowed
     fn check_rate_limit(&mut self) -> bool {
         let now = std::time::Instant::now();
-        let window = std::time::Duration::from_secs(60); // 1 minute window
+        let window = Duration::from_secs(60); // 1 minute window
 
         // Remove timestamps older than our window
         while let Some(time) = self.request_times.front() {
@@ -433,7 +433,7 @@ impl RateLimiter {
             return true;
         } else if self.request_times.len() < (self.rate_limit + self.burst_limit) as usize {
             // Check if we're in a burst situation (many requests in last 5 seconds)
-            let burst_window = std::time::Duration::from_secs(5);
+            let burst_window = Duration::from_secs(5);
             let recent_count = self
                 .request_times
                 .iter()
@@ -1301,13 +1301,10 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                         });
 
                         let policy_json = match policy {
-                            Some(p) => match serde_json::to_value(&p) {
-                                Ok(json) => json,
-                                Err(e) => {
-                                    warn!("Failed to serialize policy: {}", e);
-                                    json!(null)
-                                }
-                            },
+                            Some(p) => serde_json::to_value(&p).unwrap_or_else(|e| {
+                                warn!("Failed to serialize policy: {}", e);
+                                json!(null)
+                            }),
                             None => json!(null),
                         };
 
@@ -1359,7 +1356,7 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                         }
                         let valid_from = match p.valid_from {
                             Some(s) => match chrono::DateTime::parse_from_rfc3339(&s) {
-                                Ok(dt) => Some(dt.with_timezone(&chrono::Utc)),
+                                Ok(dt) => Some(dt.with_timezone(&Utc)),
                                 Err(e) => {
                                     return create_error_response(
                                         req.id,
@@ -1372,7 +1369,7 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                         };
                         let valid_to = match p.valid_to {
                             Some(s) => match chrono::DateTime::parse_from_rfc3339(&s) {
-                                Ok(dt) => Some(dt.with_timezone(&chrono::Utc)),
+                                Ok(dt) => Some(dt.with_timezone(&Utc)),
                                 Err(e) => {
                                     return create_error_response(
                                         req.id,
@@ -1611,17 +1608,14 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                 });
 
                 // 2. Format it as a pretty JSON string
-                let formatted_text = match serde_json::to_string_pretty(&original_result_data) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        error!("Failed to serialize attribute list result to string: {}", e);
-                        // Fallback error message
-                        format!(
-                            "{{\"error\": \"Failed to format attribute list result: {}\"}}",
-                            e
-                        )
-                    }
-                };
+                let formatted_text = serde_json::to_string_pretty(&original_result_data).unwrap_or_else(|e| {
+                    error!("Failed to serialize attribute list result to string: {}", e);
+                    // Fallback error message
+                    format!(
+                        "{{\"error\": \"Failed to format attribute list result: {}\"}}",
+                        e
+                    )
+                });
 
                 // 3. Create the Claude-expected wrapper structure
                 let claude_result_payload = json!({
@@ -1659,17 +1653,14 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                 });
 
                 // 2. Format it as a pretty JSON string
-                let formatted_text = match serde_json::to_string_pretty(&original_result_data) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        error!("Failed to serialize namespace list result to string: {}", e);
-                        // Fallback error message
-                        format!(
-                            "{{\"error\": \"Failed to format namespace list result: {}\"}}",
-                            e
-                        )
-                    }
-                };
+                let formatted_text = serde_json::to_string_pretty(&original_result_data).unwrap_or_else(|e| {
+                    error!("Failed to serialize namespace list result to string: {}", e);
+                    // Fallback error message
+                    format!(
+                        "{{\"error\": \"Failed to format namespace list result: {}\"}}",
+                        e
+                    )
+                });
 
                 // 3. Create the Claude-expected wrapper structure
                 let claude_result_payload = json!({
@@ -1816,7 +1807,7 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                                     {
                                         match chrono::DateTime::parse_from_rfc3339(dt_str) {
                                             Ok(dt) => AttributeValue::DateTime(
-                                                dt.with_timezone(&chrono::Utc),
+                                                dt.with_timezone(&Utc),
                                             ),
                                             Err(e) => {
                                                 warn!("Invalid datetime format in attribute value: {}", e);
@@ -1883,7 +1874,7 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                                         {
                                             match chrono::DateTime::parse_from_rfc3339(dt_str) {
                                                 Ok(dt) => AttributeValue::DateTime(
-                                                    dt.with_timezone(&chrono::Utc),
+                                                    dt.with_timezone(&Utc),
                                                 ),
                                                 Err(e) => {
                                                     warn!("Invalid datetime format in context attribute value: {}", e);
@@ -1935,13 +1926,10 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                             };
 
                             // Serialize the condition for the response
-                            let condition_json = match serde_json::to_value(policy_condition) {
-                                Ok(json) => json,
-                                Err(e) => {
-                                    warn!("Error serializing condition: {}", e);
-                                    json!({"error": format!("Failed to serialize: {}", e)})
-                                }
-                            };
+                            let condition_json = serde_json::to_value(policy_condition).unwrap_or_else(|e| {
+                                warn!("Error serializing condition: {}", e);
+                                json!({"error": format!("Failed to serialize: {}", e)})
+                            });
 
                             condition_results.push(json!({
                                 "condition": condition_json,
@@ -2327,7 +2315,7 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                         // Extract the command parameter
                         let command = processed_params.get("command").and_then(|c| c.as_str());
 
-                        match command {
+                        return match command {
                             Some(cmd) if cmd == CMD_ENCRYPT => {
                                 info!("Handling OpenTDF encrypt command");
                                 // Extract the data field for encryption
@@ -2371,12 +2359,12 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                                     counter!("opentdf.commands.encrypt", 1);
 
                                     // Process the encryption request
-                                    return process_request(encrypt_req).await;
+                                    process_request(encrypt_req).await
                                 } else {
                                     error!("Missing required 'data' parameter for encrypt command");
                                     // Track command validation failure
                                     counter!("opentdf.commands.encrypt.validation_failures", 1);
-                                    return create_detailed_error(
+                                    create_detailed_error(
                                         req.id,
                                         ERR_MISSING_PARAMETER,
                                         "Missing required parameter".to_string(),
@@ -2385,7 +2373,7 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                                             .to_string(),
                                         Some("Provide base64-encoded data to encrypt".to_string()),
                                         Some("error"),
-                                    );
+                                    )
                                 }
                             }
                             Some(cmd) if cmd == CMD_DECRYPT => {
@@ -2455,7 +2443,7 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                                 // Track metrics for the decrypt command
                                 counter!("opentdf.commands.decrypt", 1);
 
-                                return process_request(decrypt_req).await;
+                                process_request(decrypt_req).await
                             }
                             Some(cmd) if cmd == CMD_ATTRIBUTE_LIST => {
                                 info!("Handling OpenTDF attribute_list command");
@@ -2469,11 +2457,11 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                                 // Track metrics for the attribute_list command
                                 counter!("opentdf.commands.attribute_list", 1);
 
-                                return process_request(attrib_req).await;
+                                process_request(attrib_req).await
                             }
                             Some(cmd) => {
                                 error!("Unsupported OpenTDF command: {}", cmd);
-                                return create_detailed_error(
+                                create_detailed_error(
                                     req.id,
                                     ERR_INVALID_COMMAND,
                                     "Unsupported command".to_string(),
@@ -2484,11 +2472,11 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                                         CMD_ENCRYPT, CMD_DECRYPT, CMD_ATTRIBUTE_LIST
                                     )),
                                     Some("error"),
-                                );
+                                )
                             }
                             None => {
                                 error!("Missing required 'command' parameter for OpenTDF tool");
-                                return create_detailed_error(
+                                create_detailed_error(
                                     req.id,
                                     ERR_MISSING_COMMAND,
                                     "Missing command parameter".to_string(),
@@ -2500,7 +2488,7 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                                         CMD_ENCRYPT, CMD_DECRYPT, CMD_ATTRIBUTE_LIST
                                     )),
                                     Some("error"),
-                                );
+                                )
                             }
                         }
                     } else {
@@ -2636,7 +2624,7 @@ fn convert_to_attribute_policy(value: Value) -> Result<AttributePolicy, String> 
     } else if value_field.is_object() {
         if let Some(dt_str) = value_field.get("$datetime").and_then(|v| v.as_str()) {
             match chrono::DateTime::parse_from_rfc3339(dt_str) {
-                Ok(dt) => AttributeValue::DateTime(dt.with_timezone(&chrono::Utc)),
+                Ok(dt) => AttributeValue::DateTime(dt.with_timezone(&Utc)),
                 Err(e) => return Err(format!("Invalid datetime: {}", e)),
             }
         } else {
@@ -2750,7 +2738,7 @@ lazy_static::lazy_static! {
 }
 
 /// Returns the server uptime since initialization
-fn get_server_uptime() -> std::time::Duration {
+fn get_server_uptime() -> Duration {
     SERVER_START_TIME.elapsed()
 }
 
@@ -2789,10 +2777,7 @@ struct SystemHealth {
 /// Get system health metrics for monitoring
 fn check_system_health() -> SystemHealth {
     // Get current process memory usage if possible
-    let memory_usage_mb = match get_process_memory_usage() {
-        Ok(mem) => mem,
-        Err(_) => 0.0,
-    };
+    let memory_usage_mb = get_process_memory_usage().unwrap_or_else(|_| 0.0);
 
     // Read metrics from atomic counters
     let request_count = REQUEST_COUNT.load(std::sync::atomic::Ordering::Relaxed);
