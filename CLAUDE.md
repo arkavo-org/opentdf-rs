@@ -9,6 +9,8 @@ When starting a new conversation or initializing, please read these files:
 ## Build/Test Commands
 
 - Build: `cargo build`
+- Build MCP server for debug: `cargo build -p opentdf-mcp-server`
+- Build MCP server for release: `cargo build -p opentdf-mcp-server --release`
 - Format code: `cargo fmt`
 - Run all tests: `cargo test`
 - Run a single test: `cargo test test_name`

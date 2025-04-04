@@ -454,7 +454,7 @@ async function runTests() {
       try {
         bindingResult = await sendRequest('policy_binding_verify', {
           tdf_data: tdfResult.tdf_data,
-          policy_key: 'dummy_policy_key_for_test'
+          policy_key: 'dGVzdA=='
         });
         
         console.log(`   ✅ Policy binding verified: ${bindingResult?.binding_valid ? 'Valid ✓' : 'Invalid ✗'}`);

@@ -541,47 +541,87 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
             }
 
             "initialize" => {
-                // *** THIS SECTION IS CORRECTED TO SEND tools AS OBJECT ***
                 info!("Received initialize request");
-                // Define tool schemas concisely for brevity here, assume full definitions exist
-                let tool_schemas = json!({
-                    "tdf_create": {"description": "Creates TDF","schema": {"type": "object","properties": {"data": {"type": "string"},"kas_url": {"type": "string"},"policy": {"type": "object"}},"required": ["data", "kas_url", "policy"]}},
-                    "tdf_read": {"description": "Reads TDF archives","schema": {"type": "object","properties": {"tdf_data": {"type": "string"}},"required": ["tdf_data"]}},
-                    "encrypt": {"description": "Encrypts data","schema": {"type": "object","properties": {"data": {"type": "string"}},"required": ["data"]}},
-                    "decrypt": {"description": "Decrypts data","schema": {"type": "object","properties": {"encrypted_data": {"type": "string"},"iv": {"type": "string"},"encrypted_key": {"type": "string"},"policy_key": {"type": "string"}},"required": ["encrypted_data", "iv", "encrypted_key", "policy_key"]}},
-                    "policy_create": {"description": "Creates policy","schema": {"type": "object","properties": {"attributes": {"type": "array"},"dissemination": {"type": "array", "items": {"type": "string"}}},"required": ["attributes"]}},
-                    "policy_validate": {"description": "Validates policy (placeholder)","schema": {"type": "object","properties": {"policy": {"type": "object"},"tdf_data": {"type": "string"}},"required": ["policy", "tdf_data"]}},
-                    "attribute_define": {"description": "Defines attributes","schema": {"type": "object","oneOf": [{"properties": {"namespace": {"type": "string"},"name": {"type": "string"},"values": {"type": "array"}},"required": ["namespace", "name", "values"]},{"properties": {"namespaces": {"type": "array"}},"required": ["namespaces"]},{"properties": {"attributes": {"type": "array"}},"required": ["attributes"]},{"properties": {"content": {"type": "array"}},"required": ["content"]}]}},
-                    "attribute_list": {"description": "Lists attributes (example)","schema": {"type": "object"}},
-                    "namespace_list": {"description": "Lists namespaces (example)","schema": {"type": "object"}},
-                    "user_attributes": {"description": "Sets user attributes","schema": {"type": "object","properties": {"user_id": {"type": "string"},"attributes": {"type": "array"}},"required": ["user_id", "attributes"]}},
-                    "access_evaluate": {"description": "Evaluates access against policy and attributes","schema": {"type": "object","properties": {"policy": {"type": "object"},"user_attributes": {"type": "object"}},"required": ["policy", "user_attributes"]}},
-                    "policy_binding_verify": {"description": "Verifies cryptographic binding of policy to TDF","schema": {"type": "object","properties": {"tdf_data": {"type": "string"},"policy_key": {"type": "string"}},"required": ["tdf_data", "policy_key"]}}
-                });
-
-                let mut tools_object = Map::new(); // Use serde_json::Map
-                if let Value::Object(tool_map) = &tool_schemas {
-                    for (tool_name, tool_def) in tool_map {
-                        if let Value::Object(def) = tool_def {
-                            let description = def
-                                .get("description")
-                                .and_then(|d| d.as_str())
-                                .unwrap_or("");
-                            let schema = def
-                                .get("schema")
-                                .cloned()
-                                .unwrap_or_else(|| json!({"type": "object"}));
-                            tools_object.insert(
-                                tool_name.clone(),
-                                json!({
-                                    "description": description,
-                                    "inputSchema": schema.clone(),
-                                    "schema": schema
-                                }),
-                            );
+                // Create a simplified tools manifest with a single OpenTDF tool
+                let mut tools_object = Map::new();
+                
+                // Create a single OpenTDF tool with command-based operations
+                tools_object.insert(
+                    "OpenTDF".to_string(), 
+                    json!({
+                        "description": "OpenTDF cryptographic operations for Trusted Data Format",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "command": {
+                                    "type": "string",
+                                    "enum": ["encrypt", "decrypt", "attribute_list"],
+                                    "description": "The operation to perform"
+                                },
+                                "data": {
+                                    "type": "string",
+                                    "description": "Base64-encoded data to encrypt (for encrypt command)"
+                                },
+                                "encrypted_data": {
+                                    "type": "string",
+                                    "description": "Base64-encoded encrypted data (for decrypt command)"
+                                },
+                                "iv": {
+                                    "type": "string",
+                                    "description": "Base64-encoded initialization vector (for decrypt command)"
+                                },
+                                "encrypted_key": {
+                                    "type": "string", 
+                                    "description": "Base64-encoded encrypted key (for decrypt command)"
+                                },
+                                "policy_key": {
+                                    "type": "string",
+                                    "description": "Base64-encoded policy key (for decrypt command)"
+                                }
+                            },
+                            "required": ["command"],
+                            "allOf": [
+                                {
+                                    "if": {
+                                        "properties": { "command": { "enum": ["encrypt"] } }
+                                    },
+                                    "then": {
+                                        "required": ["data"]
+                                    }
+                                },
+                                {
+                                    "if": {
+                                        "properties": { "command": { "enum": ["decrypt"] } }
+                                    },
+                                    "then": {
+                                        "required": ["encrypted_data", "iv", "encrypted_key", "policy_key"]
+                                    }
+                                }
+                            ]
+                        },
+                        "outputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "result": {
+                                    "type": "string",
+                                    "description": "Operation result (success/failure)"
+                                },
+                                "data": {
+                                    "type": "string",
+                                    "description": "Base64-encoded processed data"
+                                },
+                                "metadata": {
+                                    "type": "object",
+                                    "description": "Additional operation metadata"
+                                },
+                                "attributes": {
+                                    "type": "array",
+                                    "description": "List of attributes (for attribute_list command)"
+                                }
+                            }
                         }
-                    }
-                }
+                    })
+                );
 
                 let response_payload = json!({
                     "serverInfo": {"name": "opentdf-mcp-rust","version": "1.1.4"}, // Version updated
@@ -596,45 +636,86 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
             }
 
             "listTools" | "tools/list" => {
-                // *** This should STILL return an ARRAY ***
                 info!("Received listTools request for method '{}'", req.method);
-                // Reuse the same schema definitions from initialize
-                let tool_schemas = json!({
-                    "tdf_create": {"description": "Creates TDF","schema": {"type": "object","properties": {"data": {"type": "string"},"kas_url": {"type": "string"},"policy": {"type": "object"}},"required": ["data", "kas_url", "policy"]}},
-                    "tdf_read": {"description": "Reads TDF archives","schema": {"type": "object","properties": {"tdf_data": {"type": "string"}},"required": ["tdf_data"]}},
-                    "encrypt": {"description": "Encrypts data","schema": {"type": "object","properties": {"data": {"type": "string"}},"required": ["data"]}},
-                    "decrypt": {"description": "Decrypts data","schema": {"type": "object","properties": {"encrypted_data": {"type": "string"},"iv": {"type": "string"},"encrypted_key": {"type": "string"},"policy_key": {"type": "string"}},"required": ["encrypted_data", "iv", "encrypted_key", "policy_key"]}},
-                    "policy_create": {"description": "Creates policy","schema": {"type": "object","properties": {"attributes": {"type": "array"},"dissemination": {"type": "array", "items": {"type": "string"}}},"required": ["attributes"]}},
-                    "policy_validate": {"description": "Validates policy (placeholder)","schema": {"type": "object","properties": {"policy": {"type": "object"},"tdf_data": {"type": "string"}},"required": ["policy", "tdf_data"]}},
-                    "attribute_define": {"description": "Defines attributes","schema": {"type": "object","oneOf": [{"properties": {"namespace": {"type": "string"},"name": {"type": "string"},"values": {"type": "array"}},"required": ["namespace", "name", "values"]},{"properties": {"namespaces": {"type": "array"}},"required": ["namespaces"]},{"properties": {"attributes": {"type": "array"}},"required": ["attributes"]},{"properties": {"content": {"type": "array"}},"required": ["content"]}]}},
-                    "attribute_list": {"description": "Lists attributes (example)","schema": {"type": "object"}},
-                    "namespace_list": {"description": "Lists namespaces (example)","schema": {"type": "object"}},
-                    "user_attributes": {"description": "Sets user attributes","schema": {"type": "object","properties": {"user_id": {"type": "string"},"attributes": {"type": "array"}},"required": ["user_id", "attributes"]}},
-                    "access_evaluate": {"description": "Evaluates access against policy and attributes","schema": {"type": "object","properties": {"policy": {"type": "object"},"user_attributes": {"type": "object"}},"required": ["policy", "user_attributes"]}},
-                    "policy_binding_verify": {"description": "Verifies cryptographic binding of policy to TDF","schema": {"type": "object","properties": {"tdf_data": {"type": "string"},"policy_key": {"type": "string"}},"required": ["tdf_data", "policy_key"]}}
-                });
-
-                let mut tools_array = Vec::new(); // Keep as array here
-                if let Value::Object(tool_map) = &tool_schemas {
-                    for (tool_name, tool_def) in tool_map {
-                        if let Value::Object(def) = tool_def {
-                            let description = def
-                                .get("description")
-                                .and_then(|d| d.as_str())
-                                .unwrap_or("");
-                            let schema = def
-                                .get("schema")
-                                .cloned()
-                                .unwrap_or_else(|| json!({"type": "object"}));
-                            tools_array.push(json!({ // Push object with name inside
-                                "name": tool_name,
-                                "description": description,
-                                "inputSchema": schema.clone(),
-                                "schema": schema
-                            }));
+                
+                // Create a single OpenTDF tool in array format for listTools response
+                let mut tools_array = Vec::new();
+                
+                // Add the OpenTDF tool to the array
+                tools_array.push(json!({
+                    "name": "OpenTDF",
+                    "description": "OpenTDF cryptographic operations for Trusted Data Format",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "command": {
+                                "type": "string",
+                                "enum": ["encrypt", "decrypt", "attribute_list"],
+                                "description": "The operation to perform"
+                            },
+                            "data": {
+                                "type": "string",
+                                "description": "Base64-encoded data to encrypt (for encrypt command)"
+                            },
+                            "encrypted_data": {
+                                "type": "string",
+                                "description": "Base64-encoded encrypted data (for decrypt command)"
+                            },
+                            "iv": {
+                                "type": "string",
+                                "description": "Base64-encoded initialization vector (for decrypt command)"
+                            },
+                            "encrypted_key": {
+                                "type": "string", 
+                                "description": "Base64-encoded encrypted key (for decrypt command)"
+                            },
+                            "policy_key": {
+                                "type": "string",
+                                "description": "Base64-encoded policy key (for decrypt command)"
+                            }
+                        },
+                        "required": ["command"],
+                        "allOf": [
+                            {
+                                "if": {
+                                    "properties": { "command": { "enum": ["encrypt"] } }
+                                },
+                                "then": {
+                                    "required": ["data"]
+                                }
+                            },
+                            {
+                                "if": {
+                                    "properties": { "command": { "enum": ["decrypt"] } }
+                                },
+                                "then": {
+                                    "required": ["encrypted_data", "iv", "encrypted_key", "policy_key"]
+                                }
+                            }
+                        ]
+                    },
+                    "outputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "result": {
+                                "type": "string",
+                                "description": "Operation result (success/failure)"
+                            },
+                            "data": {
+                                "type": "string",
+                                "description": "Base64-encoded processed data"
+                            },
+                            "metadata": {
+                                "type": "object",
+                                "description": "Additional operation metadata"
+                            },
+                            "attributes": {
+                                "type": "array",
+                                "description": "List of attributes (for attribute_list command)"
+                            }
                         }
                     }
-                }
+                }));
                 info!(
                     "Sending tools/list response with tools ARRAY ({} tools)",
                     tools_array.len()
@@ -2229,14 +2310,121 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                         serde_json::to_string(&processed_params).unwrap_or_default()
                     );
 
-                    let internal_req = RpcRequest {
-                        jsonrpc: "2.0".to_string(),
-                        id: req.id.clone(), // Use the original request ID
-                        method: actual_tool_name.to_string(),
-                        params: processed_params,
-                    };
-                    // Call the specific tool handler and return the response directly
-                    process_request(internal_req).await
+                    // Handle the OpenTDF unified tool specifically
+                    if actual_tool_name == "OpenTDF" {
+                        info!("Processing OpenTDF unified tool call");
+                        
+                        // Extract the command parameter
+                        let command = processed_params
+                            .get("command")
+                            .and_then(|c| c.as_str());
+                            
+                        match command {
+                            Some("encrypt") => {
+                                info!("Handling OpenTDF encrypt command");
+                                // Extract the data field for encryption
+                                let data = processed_params.get("data").and_then(|d| d.as_str());
+                                
+                                if let Some(data_val) = data {
+                                    // Create encryption parameters
+                                    let encrypt_params = json!({
+                                        "data": data_val
+                                    });
+                                    
+                                    // Create a new request with correct method
+                                    let encrypt_req = RpcRequest {
+                                        jsonrpc: "2.0".to_string(),
+                                        id: req.id.clone(),
+                                        method: "encrypt".to_string(),
+                                        params: encrypt_params,
+                                    };
+                                    
+                                    // Process the encryption request
+                                    return process_request(encrypt_req).await;
+                                } else {
+                                    error!("Missing required 'data' parameter for encrypt command");
+                                    return create_error_response(
+                                        req.id,
+                                        -32602,
+                                        "Missing required 'data' parameter for encrypt command".to_string(),
+                                    );
+                                }
+                            },
+                            Some("decrypt") => {
+                                info!("Handling OpenTDF decrypt command");
+                                
+                                // Extract required fields for decryption
+                                let encrypted_data = processed_params.get("encrypted_data").and_then(|d| d.as_str());
+                                let iv = processed_params.get("iv").and_then(|d| d.as_str());
+                                let encrypted_key = processed_params.get("encrypted_key").and_then(|d| d.as_str());
+                                let policy_key = processed_params.get("policy_key").and_then(|d| d.as_str());
+                                
+                                // Verify all required fields are present
+                                if encrypted_data.is_none() || iv.is_none() || encrypted_key.is_none() || policy_key.is_none() {
+                                    error!("Missing required parameters for decrypt command");
+                                    return create_error_response(
+                                        req.id,
+                                        -32602,
+                                        "Missing one or more required parameters (encrypted_data, iv, encrypted_key, policy_key) for decrypt command".to_string(),
+                                    );
+                                }
+                                
+                                // Create parameters for the decrypt method
+                                let decrypt_params = json!({
+                                    "encrypted_data": encrypted_data,
+                                    "iv": iv,
+                                    "encrypted_key": encrypted_key,
+                                    "policy_key": policy_key,
+                                    "policy_key_hash": "" // Adding empty to match existing API
+                                });
+                                
+                                let decrypt_req = RpcRequest {
+                                    jsonrpc: "2.0".to_string(),
+                                    id: req.id.clone(),
+                                    method: "decrypt".to_string(),
+                                    params: decrypt_params,
+                                };
+                                return process_request(decrypt_req).await;
+                            },
+                            Some("attribute_list") => {
+                                info!("Handling OpenTDF attribute_list command");
+                                
+                                let attrib_req = RpcRequest {
+                                    jsonrpc: "2.0".to_string(),
+                                    id: req.id.clone(),
+                                    method: "attribute_list".to_string(),
+                                    params: json!({}), // No parameters needed for attribute_list
+                                };
+                                return process_request(attrib_req).await;
+                            },
+                            Some(cmd) => {
+                                error!("Unsupported OpenTDF command: {}", cmd);
+                                return create_error_response(
+                                    req.id,
+                                    -32601,
+                                    format!("Unsupported OpenTDF command: {}. Supported commands are: encrypt, decrypt, attribute_list", cmd),
+                                );
+                            },
+                            None => {
+                                error!("Missing required 'command' parameter for OpenTDF tool");
+                                return create_error_response(
+                                    req.id,
+                                    -32602,
+                                    "Missing required 'command' parameter for OpenTDF tool".to_string(),
+                                );
+                            }
+                        }
+                    } else {
+                        // For other tools, use the direct method calling approach
+                        let internal_req = RpcRequest {
+                            jsonrpc: "2.0".to_string(),
+                            id: req.id.clone(), // Use the original request ID
+                            method: actual_tool_name.to_string(),
+                            params: processed_params,
+                        };
+                        // Call the specific tool handler and return the response directly
+                        process_request(internal_req).await
+                    }
                 } else {
                     // Original req.params wasn't an object
                     error!("Invalid structure for tools/call parameters: req.params was not an object.");
@@ -2630,21 +2818,111 @@ async fn main() {
     let mut stdout = tokio::io::stdout();
     let mut line_buffer = String::new();
 
-    let ready_msg =
-        json!({"jsonrpc": "2.0", "method": "server/ready", "params": {"status": "ready"}});
-    let ready_str = serde_json::to_string(&ready_msg).expect("Failed to serialize ready message");
-    info!("Sending server/ready notification.");
+    // Create and output a simplified tools manifest with a single OpenTDF tool
+    let mut tools_object = Map::new();
+    
+    // Create a single OpenTDF tool with command-based operations
+    tools_object.insert(
+        "OpenTDF".to_string(), 
+        json!({
+            "description": "OpenTDF cryptographic operations for Trusted Data Format",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "enum": ["encrypt", "decrypt", "attribute_list"],
+                        "description": "The operation to perform"
+                    },
+                    "data": {
+                        "type": "string",
+                        "description": "Base64-encoded data to encrypt (for encrypt command)"
+                    },
+                    "encrypted_data": {
+                        "type": "string",
+                        "description": "Base64-encoded encrypted data (for decrypt command)"
+                    },
+                    "iv": {
+                        "type": "string",
+                        "description": "Base64-encoded initialization vector (for decrypt command)"
+                    },
+                    "encrypted_key": {
+                        "type": "string", 
+                        "description": "Base64-encoded encrypted key (for decrypt command)"
+                    },
+                    "policy_key": {
+                        "type": "string",
+                        "description": "Base64-encoded policy key (for decrypt command)"
+                    }
+                },
+                "required": ["command"],
+                "allOf": [
+                    {
+                        "if": {
+                            "properties": { "command": { "enum": ["encrypt"] } }
+                        },
+                        "then": {
+                            "required": ["data"]
+                        }
+                    },
+                    {
+                        "if": {
+                            "properties": { "command": { "enum": ["decrypt"] } }
+                        },
+                        "then": {
+                            "required": ["encrypted_data", "iv", "encrypted_key", "policy_key"]
+                        }
+                    }
+                ]
+            },
+            "outputSchema": {
+                "type": "object",
+                "properties": {
+                    "result": {
+                        "type": "string",
+                        "description": "Operation result (success/failure)"
+                    },
+                    "data": {
+                        "type": "string",
+                        "description": "Base64-encoded processed data"
+                    },
+                    "metadata": {
+                        "type": "object",
+                        "description": "Additional operation metadata"
+                    },
+                    "attributes": {
+                        "type": "array",
+                        "description": "List of attributes (for attribute_list command)"
+                    }
+                }
+            }
+        })
+    );
+
+    let tools_manifest = json!({
+        "type": "manifest",
+        "tools": Value::Object(tools_object),
+        "serverInfo": {"name": "opentdf-mcp-rust", "version": "1.1.4"},
+        "protocolVersion": "2024-11-05"
+    });
+    
+    let manifest_str = serde_json::to_string(&tools_manifest).expect("Failed to serialize tools manifest");
+    info!("Sending tools manifest as first output.");
     if let Err(e) = stdout
-        .write_all(format!("{}\r\n", ready_str).as_bytes())
+        .write_all(format!("{}\r\n", manifest_str).as_bytes())
         .await
     {
-        error!("Fatal: Failed to write ready message: {}", e);
+        error!("Fatal: Failed to write tools manifest: {}", e);
         return;
     }
     if let Err(e) = stdout.flush().await {
-        error!("Fatal: Failed to flush after ready message: {}", e);
+        error!("Fatal: Failed to flush after tools manifest: {}", e);
         return;
     }
+
+    // We've removed the explicit ready message as it's not expected by LibreChat
+    // The manifest output is sufficient for initialization
+    info!("Server initialized with manifest output.");
 
     info!("MCP Server listening on stdio for JSON-RPC messages...");
 
