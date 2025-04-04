@@ -1608,14 +1608,15 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                 });
 
                 // 2. Format it as a pretty JSON string
-                let formatted_text = serde_json::to_string_pretty(&original_result_data).unwrap_or_else(|e| {
-                    error!("Failed to serialize attribute list result to string: {}", e);
-                    // Fallback error message
-                    format!(
-                        "{{\"error\": \"Failed to format attribute list result: {}\"}}",
-                        e
-                    )
-                });
+                let formatted_text = serde_json::to_string_pretty(&original_result_data)
+                    .unwrap_or_else(|e| {
+                        error!("Failed to serialize attribute list result to string: {}", e);
+                        // Fallback error message
+                        format!(
+                            "{{\"error\": \"Failed to format attribute list result: {}\"}}",
+                            e
+                        )
+                    });
 
                 // 3. Create the Claude-expected wrapper structure
                 let claude_result_payload = json!({
@@ -1653,14 +1654,15 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                 });
 
                 // 2. Format it as a pretty JSON string
-                let formatted_text = serde_json::to_string_pretty(&original_result_data).unwrap_or_else(|e| {
-                    error!("Failed to serialize namespace list result to string: {}", e);
-                    // Fallback error message
-                    format!(
-                        "{{\"error\": \"Failed to format namespace list result: {}\"}}",
-                        e
-                    )
-                });
+                let formatted_text = serde_json::to_string_pretty(&original_result_data)
+                    .unwrap_or_else(|e| {
+                        error!("Failed to serialize namespace list result to string: {}", e);
+                        // Fallback error message
+                        format!(
+                            "{{\"error\": \"Failed to format namespace list result: {}\"}}",
+                            e
+                        )
+                    });
 
                 // 3. Create the Claude-expected wrapper structure
                 let claude_result_payload = json!({
@@ -1806,9 +1808,9 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                                         value.get("$datetime").and_then(|v| v.as_str())
                                     {
                                         match chrono::DateTime::parse_from_rfc3339(dt_str) {
-                                            Ok(dt) => AttributeValue::DateTime(
-                                                dt.with_timezone(&Utc),
-                                            ),
+                                            Ok(dt) => {
+                                                AttributeValue::DateTime(dt.with_timezone(&Utc))
+                                            }
                                             Err(e) => {
                                                 warn!("Invalid datetime format in attribute value: {}", e);
                                                 continue;
@@ -1873,9 +1875,9 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                                             value.get("$datetime").and_then(|v| v.as_str())
                                         {
                                             match chrono::DateTime::parse_from_rfc3339(dt_str) {
-                                                Ok(dt) => AttributeValue::DateTime(
-                                                    dt.with_timezone(&Utc),
-                                                ),
+                                                Ok(dt) => {
+                                                    AttributeValue::DateTime(dt.with_timezone(&Utc))
+                                                }
                                                 Err(e) => {
                                                     warn!("Invalid datetime format in context attribute value: {}", e);
                                                     continue;
@@ -1926,10 +1928,11 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                             };
 
                             // Serialize the condition for the response
-                            let condition_json = serde_json::to_value(policy_condition).unwrap_or_else(|e| {
-                                warn!("Error serializing condition: {}", e);
-                                json!({"error": format!("Failed to serialize: {}", e)})
-                            });
+                            let condition_json = serde_json::to_value(policy_condition)
+                                .unwrap_or_else(|e| {
+                                    warn!("Error serializing condition: {}", e);
+                                    json!({"error": format!("Failed to serialize: {}", e)})
+                                });
 
                             condition_results.push(json!({
                                 "condition": condition_json,
@@ -2490,7 +2493,7 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                                     Some("error"),
                                 )
                             }
-                        }
+                        };
                     } else {
                         // For other tools, use the direct method calling approach
                         let internal_req = RpcRequest {

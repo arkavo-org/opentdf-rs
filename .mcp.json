@@ -2,8 +2,8 @@
   "mcpServers": {
     "opentdf": {
       "type": "stdio",
-      "command": "cargo",
-      "args": ["run", "--bin", "opentdf-mcp-server"],
+      "command": "target/debug/opentdf-mcp-server",
+      "args": [],
       "env": {
         "RUST_LOG": "debug"
       }
