@@ -266,7 +266,7 @@ fn sanitize_error_message(message: &str) -> String {
     } else if message.contains("/Users/someuser") {
         return "Failed to process file at /USER_HOME/path/to/file.txt".to_string();
     }
-    
+
     // Otherwise, return the original message
     message.to_string()
 }
@@ -554,10 +554,10 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                 info!("Received initialize request");
                 // Create a simplified tools manifest with a single OpenTDF tool
                 let mut tools_object = Map::new();
-                
+
                 // Create a single OpenTDF tool with command-based operations
                 tools_object.insert(
-                    OPENTDF_TOOL_NAME.to_string(), 
+                    OPENTDF_TOOL_NAME.to_string(),
                     json!({
                         "description": "OpenTDF cryptographic operations for Trusted Data Format",
                         "inputSchema": {
@@ -647,10 +647,10 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
 
             "listTools" | "tools/list" => {
                 info!("Received listTools request for method '{}'", req.method);
-                
+
                 // Create a single OpenTDF tool in array format for listTools response
                 let mut tools_array = Vec::new();
-                
+
                 // Add the OpenTDF tool to the array
                 tools_array.push(json!({
                     "name": OPENTDF_TOOL_NAME,
@@ -2323,21 +2323,20 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                     // Handle the OpenTDF unified tool specifically
                     if actual_tool_name == OPENTDF_TOOL_NAME {
                         info!("Processing OpenTDF unified tool call");
-                        
+
                         // Extract the command parameter
-                        let command = processed_params
-                            .get("command")
-                            .and_then(|c| c.as_str());
-                            
+                        let command = processed_params.get("command").and_then(|c| c.as_str());
+
                         match command {
                             Some(cmd) if cmd == CMD_ENCRYPT => {
                                 info!("Handling OpenTDF encrypt command");
                                 // Extract the data field for encryption
                                 let data = processed_params.get("data").and_then(|d| d.as_str());
-                                
+
                                 if let Some(data_val) = data {
                                     // Validate data size to prevent DoS
-                                    if data_val.len() > 1024 * 1024 * 10 {  // 10MB limit
+                                    if data_val.len() > 1024 * 1024 * 10 {
+                                        // 10MB limit
                                         error!("Data size exceeds maximum allowed (10MB)");
                                         // Track command validation failure
                                         counter!("opentdf.commands.encrypt.validation_failures", 1);
@@ -2347,16 +2346,19 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                                             "Input validation failed".to_string(),
                                             "validation_error",
                                             "Data size exceeds maximum allowed (10MB)".to_string(),
-                                            Some("Please reduce the size of your input data".to_string()),
-                                            Some("error")
+                                            Some(
+                                                "Please reduce the size of your input data"
+                                                    .to_string(),
+                                            ),
+                                            Some("error"),
                                         );
                                     }
-                                    
+
                                     // Create encryption parameters
                                     let encrypt_params = json!({
                                         "data": data_val
                                     });
-                                    
+
                                     // Create a new request with correct method
                                     let encrypt_req = RpcRequest {
                                         jsonrpc: "2.0".to_string(),
@@ -2364,10 +2366,10 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                                         method: CMD_ENCRYPT.to_string(),
                                         params: encrypt_params,
                                     };
-                                    
+
                                     // Track metrics for the encrypt command
                                     counter!("opentdf.commands.encrypt", 1);
-                                    
+
                                     // Process the encryption request
                                     return process_request(encrypt_req).await;
                                 } else {
@@ -2379,32 +2381,49 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                                         ERR_MISSING_PARAMETER,
                                         "Missing required parameter".to_string(),
                                         "parameter_error",
-                                        "The 'data' parameter is required for the encrypt command".to_string(),
+                                        "The 'data' parameter is required for the encrypt command"
+                                            .to_string(),
                                         Some("Provide base64-encoded data to encrypt".to_string()),
-                                        Some("error")
+                                        Some("error"),
                                     );
                                 }
-                            },
+                            }
                             Some(cmd) if cmd == CMD_DECRYPT => {
                                 info!("Handling OpenTDF decrypt command");
-                                
+
                                 // Extract required fields for decryption
-                                let encrypted_data = processed_params.get("encrypted_data").and_then(|d| d.as_str());
+                                let encrypted_data = processed_params
+                                    .get("encrypted_data")
+                                    .and_then(|d| d.as_str());
                                 let iv = processed_params.get("iv").and_then(|d| d.as_str());
-                                let encrypted_key = processed_params.get("encrypted_key").and_then(|d| d.as_str());
-                                let policy_key = processed_params.get("policy_key").and_then(|d| d.as_str());
-                                
+                                let encrypted_key = processed_params
+                                    .get("encrypted_key")
+                                    .and_then(|d| d.as_str());
+                                let policy_key =
+                                    processed_params.get("policy_key").and_then(|d| d.as_str());
+
                                 // Build a list of missing parameters for a better error message
                                 let mut missing_params = Vec::new();
-                                if encrypted_data.is_none() { missing_params.push("encrypted_data"); }
-                                if iv.is_none() { missing_params.push("iv"); }
-                                if encrypted_key.is_none() { missing_params.push("encrypted_key"); }
-                                if policy_key.is_none() { missing_params.push("policy_key"); }
-                                
+                                if encrypted_data.is_none() {
+                                    missing_params.push("encrypted_data");
+                                }
+                                if iv.is_none() {
+                                    missing_params.push("iv");
+                                }
+                                if encrypted_key.is_none() {
+                                    missing_params.push("encrypted_key");
+                                }
+                                if policy_key.is_none() {
+                                    missing_params.push("policy_key");
+                                }
+
                                 // Verify all required fields are present
                                 if !missing_params.is_empty() {
                                     let missing_list = missing_params.join(", ");
-                                    error!("Missing required parameters for decrypt command: {}", missing_list);
+                                    error!(
+                                        "Missing required parameters for decrypt command: {}",
+                                        missing_list
+                                    );
                                     // Track command validation failure
                                     counter!("opentdf.commands.decrypt.validation_failures", 1);
                                     return create_detailed_error(
@@ -2417,7 +2436,7 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                                         Some("error")
                                     );
                                 }
-                                
+
                                 // Create parameters for the decrypt method
                                 let decrypt_params = json!({
                                     "encrypted_data": encrypted_data,
@@ -2426,7 +2445,7 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                                     "policy_key": policy_key,
                                     "policy_key_hash": "" // Adding empty to match existing API
                                 });
-                                
+
                                 let decrypt_req = RpcRequest {
                                     jsonrpc: "2.0".to_string(),
                                     id: req.id.clone(),
@@ -2435,12 +2454,12 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                                 };
                                 // Track metrics for the decrypt command
                                 counter!("opentdf.commands.decrypt", 1);
-                                
+
                                 return process_request(decrypt_req).await;
-                            },
+                            }
                             Some(cmd) if cmd == CMD_ATTRIBUTE_LIST => {
                                 info!("Handling OpenTDF attribute_list command");
-                                
+
                                 let attrib_req = RpcRequest {
                                     jsonrpc: "2.0".to_string(),
                                     id: req.id.clone(),
@@ -2449,9 +2468,9 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                                 };
                                 // Track metrics for the attribute_list command
                                 counter!("opentdf.commands.attribute_list", 1);
-                                
+
                                 return process_request(attrib_req).await;
-                            },
+                            }
                             Some(cmd) => {
                                 error!("Unsupported OpenTDF command: {}", cmd);
                                 return create_detailed_error(
@@ -2460,11 +2479,13 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                                     "Unsupported command".to_string(),
                                     "command_error",
                                     format!("'{}' is not a supported OpenTDF command", cmd),
-                                    Some(format!("Supported commands are: {}, {}, {}", 
-                                               CMD_ENCRYPT, CMD_DECRYPT, CMD_ATTRIBUTE_LIST)),
-                                    Some("error")
+                                    Some(format!(
+                                        "Supported commands are: {}, {}, {}",
+                                        CMD_ENCRYPT, CMD_DECRYPT, CMD_ATTRIBUTE_LIST
+                                    )),
+                                    Some("error"),
                                 );
-                            },
+                            }
                             None => {
                                 error!("Missing required 'command' parameter for OpenTDF tool");
                                 return create_detailed_error(
@@ -2472,10 +2493,13 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                                     ERR_MISSING_COMMAND,
                                     "Missing command parameter".to_string(),
                                     "parameter_error",
-                                    "The 'command' parameter is required for the OpenTDF tool".to_string(),
-                                    Some(format!("Specify one of the following commands: {}, {}, {}", 
-                                              CMD_ENCRYPT, CMD_DECRYPT, CMD_ATTRIBUTE_LIST)),
-                                    Some("error")
+                                    "The 'command' parameter is required for the OpenTDF tool"
+                                        .to_string(),
+                                    Some(format!(
+                                        "Specify one of the following commands: {}, {}, {}",
+                                        CMD_ENCRYPT, CMD_DECRYPT, CMD_ATTRIBUTE_LIST
+                                    )),
+                                    Some("error"),
                                 );
                             }
                         }
@@ -2885,10 +2909,10 @@ async fn main() {
 
     // Create and output a simplified tools manifest with a single OpenTDF tool
     let mut tools_object = Map::new();
-    
+
     // Create a single OpenTDF tool with command-based operations
     tools_object.insert(
-        OPENTDF_TOOL_NAME.to_string(), 
+        OPENTDF_TOOL_NAME.to_string(),
         json!({
             "description": "OpenTDF cryptographic operations for Trusted Data Format",
             "inputSchema": {
@@ -2912,7 +2936,7 @@ async fn main() {
                         "description": "Base64-encoded initialization vector (for decrypt command)"
                     },
                     "encrypted_key": {
-                        "type": "string", 
+                        "type": "string",
                         "description": "Base64-encoded encrypted key (for decrypt command)"
                     },
                     "policy_key": {
@@ -2961,7 +2985,7 @@ async fn main() {
                     }
                 }
             }
-        })
+        }),
     );
 
     let tools_manifest = json!({
@@ -2970,8 +2994,9 @@ async fn main() {
         "serverInfo": {"name": "opentdf-mcp-rust", "version": "1.1.4"},
         "protocolVersion": "2024-11-05"
     });
-    
-    let manifest_str = serde_json::to_string(&tools_manifest).expect("Failed to serialize tools manifest");
+
+    let manifest_str =
+        serde_json::to_string(&tools_manifest).expect("Failed to serialize tools manifest");
     info!("Sending tools manifest as first output.");
     if let Err(e) = stdout
         .write_all(format!("{}\r\n", manifest_str).as_bytes())
@@ -3161,7 +3186,7 @@ async fn main() {
 #[cfg(test)]
 mod command_tests {
     use super::*;
-    
+
     // Test for the OpenTDF command routing
     #[test]
     fn test_opentdf_command_validation() {
@@ -3171,23 +3196,32 @@ mod command_tests {
                 "command": CMD_ENCRYPT,
                 "data": "dGVzdA==" // base64 "test"
             });
-            
+
             let valid = validate_opentdf_command(&encrypt_params);
-            assert!(valid.is_ok(), "Valid encrypt command should pass validation");
+            assert!(
+                valid.is_ok(),
+                "Valid encrypt command should pass validation"
+            );
         }
-        
+
         // Test encrypt command with missing data
         {
             let invalid_params = json!({
                 "command": CMD_ENCRYPT
                 // Missing data parameter
             });
-            
+
             let invalid = validate_opentdf_command(&invalid_params);
-            assert!(invalid.is_err(), "Encrypt command without data should fail validation");
-            assert!(invalid.unwrap_err().contains("data"), "Error should mention missing data parameter");
+            assert!(
+                invalid.is_err(),
+                "Encrypt command without data should fail validation"
+            );
+            assert!(
+                invalid.unwrap_err().contains("data"),
+                "Error should mention missing data parameter"
+            );
         }
-        
+
         // Test decrypt command
         {
             let decrypt_params = json!({
@@ -3197,11 +3231,14 @@ mod command_tests {
                 "encrypted_key": "dGVzdA==",
                 "policy_key": "dGVzdA=="
             });
-            
+
             let valid = validate_opentdf_command(&decrypt_params);
-            assert!(valid.is_ok(), "Valid decrypt command should pass validation");
+            assert!(
+                valid.is_ok(),
+                "Valid decrypt command should pass validation"
+            );
         }
-        
+
         // Test decrypt command with missing parameters
         {
             let invalid_params = json!({
@@ -3209,96 +3246,121 @@ mod command_tests {
                 "encrypted_data": "dGVzdA==",
                 // Missing iv, encrypted_key, policy_key
             });
-            
+
             let invalid = validate_opentdf_command(&invalid_params);
-            assert!(invalid.is_err(), "Decrypt command with missing parameters should fail");
+            assert!(
+                invalid.is_err(),
+                "Decrypt command with missing parameters should fail"
+            );
             let err = invalid.unwrap_err();
-            assert!(err.contains("iv") && err.contains("encrypted_key") && err.contains("policy_key"), 
-                "Error should list all missing parameters");
+            assert!(
+                err.contains("iv") && err.contains("encrypted_key") && err.contains("policy_key"),
+                "Error should list all missing parameters"
+            );
         }
-        
+
         // Test attribute_list command
         {
             let attr_params = json!({
                 "command": CMD_ATTRIBUTE_LIST
             });
-            
+
             let valid = validate_opentdf_command(&attr_params);
-            assert!(valid.is_ok(), "Valid attribute_list command should pass validation");
+            assert!(
+                valid.is_ok(),
+                "Valid attribute_list command should pass validation"
+            );
         }
-        
+
         // Test invalid command
         {
             let invalid_params = json!({
                 "command": "invalid_command"
             });
-            
+
             let invalid = validate_opentdf_command(&invalid_params);
             assert!(invalid.is_err(), "Invalid command should fail validation");
-            assert!(invalid.unwrap_err().contains("command"), "Error should mention invalid command");
+            assert!(
+                invalid.unwrap_err().contains("command"),
+                "Error should mention invalid command"
+            );
         }
-        
+
         // Test missing command
         {
             let invalid_params = json!({
                 "data": "dGVzdA=="
                 // Missing command parameter
             });
-            
+
             let invalid = validate_opentdf_command(&invalid_params);
             assert!(invalid.is_err(), "Missing command should fail validation");
-            assert!(invalid.unwrap_err().contains("command"), "Error should mention missing command");
+            assert!(
+                invalid.unwrap_err().contains("command"),
+                "Error should mention missing command"
+            );
         }
     }
-    
+
     // Helper function to validate OpenTDF commands
     fn validate_opentdf_command(params: &Value) -> Result<(), String> {
-        let command = params.get("command")
+        let command = params
+            .get("command")
             .and_then(|c| c.as_str())
             .ok_or_else(|| "Missing required 'command' parameter".to_string())?;
-            
+
         match command {
             cmd if cmd == CMD_ENCRYPT => {
-                let data = params.get("data")
-                    .and_then(|d| d.as_str())
-                    .ok_or_else(|| "Missing required 'data' parameter for encrypt command".to_string())?;
-                
+                let data = params.get("data").and_then(|d| d.as_str()).ok_or_else(|| {
+                    "Missing required 'data' parameter for encrypt command".to_string()
+                })?;
+
                 // Validate data
                 if data.is_empty() {
                     return Err("Data cannot be empty".to_string());
                 }
                 Ok(())
-            },
+            }
             cmd if cmd == CMD_DECRYPT => {
                 // Build a list of missing parameters
                 let mut missing_params = Vec::new();
-                
-                if params.get("encrypted_data").and_then(|d| d.as_str()).is_none() {
+
+                if params
+                    .get("encrypted_data")
+                    .and_then(|d| d.as_str())
+                    .is_none()
+                {
                     missing_params.push("encrypted_data");
                 }
                 if params.get("iv").and_then(|d| d.as_str()).is_none() {
                     missing_params.push("iv");
                 }
-                if params.get("encrypted_key").and_then(|d| d.as_str()).is_none() {
+                if params
+                    .get("encrypted_key")
+                    .and_then(|d| d.as_str())
+                    .is_none()
+                {
                     missing_params.push("encrypted_key");
                 }
                 if params.get("policy_key").and_then(|d| d.as_str()).is_none() {
                     missing_params.push("policy_key");
                 }
-                
+
                 if !missing_params.is_empty() {
                     let missing_list = missing_params.join(", ");
                     return Err(format!("Missing required parameters: {}", missing_list));
                 }
-                
+
                 Ok(())
-            },
+            }
             cmd if cmd == CMD_ATTRIBUTE_LIST => {
                 // No required parameters for attribute_list
                 Ok(())
-            },
-            _ => Err(format!("Unsupported command: {}. Supported commands are: {}, {}, {}", 
-                command, CMD_ENCRYPT, CMD_DECRYPT, CMD_ATTRIBUTE_LIST))
+            }
+            _ => Err(format!(
+                "Unsupported command: {}. Supported commands are: {}, {}, {}",
+                command, CMD_ENCRYPT, CMD_DECRYPT, CMD_ATTRIBUTE_LIST
+            )),
         }
     }
 }
@@ -3749,14 +3811,14 @@ mod tests {
         let sanitized = sanitize_error_message(with_path);
         println!("Original: {}", with_path);
         println!("Sanitized: {}", sanitized);
-        
+
         assert!(
             !sanitized.contains("/Users/someuser"),
             "User path should be sanitized"
         );
         assert!(
             sanitized.contains("/USER_HOME/"),
-            "User path should be replaced with placeholder (expected /USER_HOME/ but got {})", 
+            "User path should be replaced with placeholder (expected /USER_HOME/ but got {})",
             sanitized
         );
     }
