@@ -224,7 +224,7 @@ mod tests {
         OsRng.fill_bytes(&mut payload_iv);
 
         // Encrypt payload directly
-        let payload_cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&tdf.payload_key()));
+        let payload_cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(tdf.payload_key()));
         let nonce = Nonce::from_slice(&payload_iv);
         let ciphertext = payload_cipher
             .encrypt(nonce, data.as_ref())
@@ -249,7 +249,7 @@ mod tests {
     #[test]
     fn test_invalid_policy_key_length() {
         // Try to create with invalid key length
-        let result = TdfEncryption::with_policy_key(&vec![0u8; 16]);
+        let result = TdfEncryption::with_policy_key(&[0u8; 16]);
         assert!(matches!(result, Err(EncryptionError::InvalidKeyLength)));
     }
 
