@@ -17,6 +17,8 @@ OpenTDF-RS enables cryptographic binding of access policies directly to data obj
 - **Time-Based Constraints**: Policies with validity periods
 - **Logical Operators**: AND, OR, NOT combinations for complex policies
 - **Comprehensive Audit Logging**: Detailed records of access attempts and attribute evaluation
+- **KAS (Key Access Service) Integration**: Full rewrap protocol support for production deployments
+- **MCP Server with KAS Support**: AI agents can decrypt TDF files using KAS
 
 ## Attribute-Based Access Control (ABAC)
 
@@ -295,6 +297,140 @@ let contractor_check = AttributePolicy::condition(
 let employees_only = !contractor_check;
 ```
 
+## KAS (Key Access Service) Integration
+
+OpenTDF-RS includes full support for the KAS v2 rewrap protocol, enabling production-ready TDF decryption with centralized key management and access control.
+
+### Overview
+
+The KAS protocol allows:
+- **Centralized key management**: KAS securely stores and manages encryption keys
+- **Access control enforcement**: KAS validates policies and user attributes before releasing keys
+- **Audit logging**: All key access attempts are logged for compliance
+- **Zero Trust**: Keys are never stored with encrypted data
+
+### Protocol Flow
+
+```
+1. Client generates ephemeral EC key pair (P-256)
+2. Client builds rewrap request with TDF manifest
+3. Client signs request with JWT (ES256)
+4. Client POSTs to KAS /v2/rewrap endpoint
+5. KAS validates policy and user attributes
+6. KAS returns wrapped key + session public key
+7. Client unwraps key: ECDH → HKDF → AES-GCM decrypt
+8. Client decrypts TDF payload
+```
+
+### Basic Usage
+
+Enable the KAS feature in your `Cargo.toml`:
+
+```toml
+[dependencies]
+opentdf = { version = "0.3.0", features = ["kas"] }
+```
+
+#### Decrypt TDF with KAS
+
+```rust
+use opentdf::{TdfArchive, kas::KasClient};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Create KAS client
+    let kas_client = KasClient::new(
+        "http://kas.example.com/kas",
+        "your-oauth-token-here"
+    )?;
+
+    // Open and decrypt TDF in one call
+    let plaintext = TdfArchive::open_and_decrypt(
+        "encrypted-file.tdf",
+        &kas_client
+    ).await?;
+
+    println!("Decrypted: {}", String::from_utf8_lossy(&plaintext));
+    Ok(())
+}
+```
+
+#### Manual Decryption
+
+For more control over the decryption process:
+
+```rust
+use opentdf::{TdfArchive, kas::KasClient};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Create KAS client
+    let kas_client = KasClient::new(
+        "http://kas.example.com/kas",
+        "your-oauth-token-here"
+    )?;
+
+    // Open TDF archive
+    let mut archive = TdfArchive::open("encrypted-file.tdf")?;
+    let entry = archive.by_index()?;
+
+    // Decrypt using KAS
+    let plaintext = entry.decrypt_with_kas(&kas_client).await?;
+
+    // Access manifest and policy
+    let policy = entry.manifest.get_policy()?;
+    println!("Policy: {:?}", policy);
+
+    Ok(())
+}
+```
+
+### Testing with Real KAS
+
+Integration tests are available that work with a real KAS server:
+
+```bash
+# Set environment variables
+export KAS_URL="http://10.0.0.138:8080/kas"
+export KAS_OAUTH_TOKEN="your-token-here"
+
+# Run KAS integration tests
+cargo test --features kas --test kas_integration -- --ignored --nocapture
+```
+
+### KAS Error Handling
+
+The KAS client provides detailed error information:
+
+```rust
+use opentdf::kas::{KasClient, KasError};
+
+match kas_client.rewrap_standard_tdf(&manifest).await {
+    Ok(key) => println!("Successfully unwrapped key"),
+    Err(KasError::AccessDenied(reason)) => {
+        eprintln!("Access denied: {}", reason);
+    }
+    Err(KasError::AuthenticationFailed) => {
+        eprintln!("Invalid OAuth token");
+    }
+    Err(KasError::HttpError(msg)) => {
+        eprintln!("HTTP error: {}", msg);
+    }
+    Err(e) => {
+        eprintln!("KAS error: {}", e);
+    }
+}
+```
+
+### Interoperability
+
+The Rust KAS client is fully interoperable with:
+- **OpenTDFKit** (Swift): iOS/macOS applications
+- **platform/sdk** (Go): Backend services
+- **OpenTDF Platform**: Production KAS deployments
+
+TDF files created by any SDK can be decrypted by opentdf-rs using KAS, and vice versa.
+
 ## MCP Server
 
 OpenTDF-RS includes an implementation of the Model Context Protocol (MCP) server, allowing AI assistants and other tools to interact with TDF capabilities via a standardized API.
@@ -306,7 +442,7 @@ The MCP server provides the following tools:
 | Tool Name | Description |
 |-----------|-------------|
 | `tdf_create` | Creates a new TDF archive with encrypted data |
-| `tdf_read` | Reads contents from a TDF archive |
+| `tdf_read` | Reads contents from a TDF archive. Supports optional KAS decryption with `kas_url` and `kas_token` parameters |
 | `encrypt` | Encrypts data using TDF encryption methods |
 | `decrypt` | Decrypts TDF-encrypted data |
 | `policy_create` | Creates a new policy for TDF encryption |
@@ -349,11 +485,18 @@ This starts Claude with the MCP server, allowing you to use TDF capabilities dir
 Example commands:
 
 ```
+# Create TDF
 /mcp opentdf tdf_create {"data": "SGVsbG8gV29ybGQh", "kas_url": "https://kas.example.com", "policy": {"uuid": "sample-uuid", "body": {"attributes": [{"attribute": "gov.example:clearance", "operator": "MinimumOf", "value": "secret"}], "dissem": ["user@example.com"]}}}
 ```
 
 ```
+# Read TDF (without decryption)
 /mcp opentdf tdf_read {"tdf_data": "<base64-encoded-tdf-data>"}
+```
+
+```
+# Read and decrypt TDF using KAS
+/mcp opentdf tdf_read {"tdf_data": "<base64-encoded-tdf-data>", "kas_url": "http://10.0.0.138:8080/kas", "kas_token": "your-oauth-token"}
 ```
 
 ### ABAC Testing with MCP
