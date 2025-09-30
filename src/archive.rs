@@ -5,6 +5,9 @@ use std::path::Path;
 use zip::write::FileOptions;
 use zip::{ZipArchive, ZipWriter};
 
+#[cfg(feature = "kas")]
+use crate::kas::{KasClient, KasError};
+
 #[derive(Debug)]
 pub struct TdfArchive<R: Read + Seek> {
     zip_archive: ZipArchive<R>,
@@ -19,6 +22,59 @@ pub struct TdfEntry<'a> {
     _lifetime: std::marker::PhantomData<&'a ()>,
 }
 
+impl<'a> TdfEntry<'a> {
+    /// Decrypt the payload using KAS to unwrap the key
+    ///
+    /// This method:
+    /// 1. Calls KAS to unwrap the payload key
+    /// 2. Decrypts the payload using the unwrapped key
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use opentdf::{TdfArchive, kas::KasClient};
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let kas_client = KasClient::new("http://kas.example.com", "token")?;
+    /// let mut archive = TdfArchive::open("example.tdf")?;
+    /// let entry = archive.by_index()?;
+    /// let plaintext = entry.decrypt_with_kas(&kas_client).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "kas")]
+    pub async fn decrypt_with_kas(&self, kas_client: &KasClient) -> Result<Vec<u8>, TdfError> {
+        use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+
+        // Unwrap the payload key using KAS
+        let payload_key = kas_client.rewrap_standard_tdf(&self.manifest).await?;
+
+        // Decrypt the payload using AES-256-GCM
+        // The payload format is: IV (base64) + ciphertext
+        // For now, we'll need to extract IV from the manifest
+        let iv_b64 = &self.manifest.encryption_information.method.iv;
+        let iv = BASE64
+            .decode(iv_b64)
+            .map_err(|e| TdfError::DecryptionError(format!("Invalid IV: {}", e)))?;
+
+        // Create decryption cipher
+        use aes_gcm::{
+            aead::{Aead, KeyInit},
+            Aes256Gcm, Key, Nonce,
+        };
+
+        let key = Key::<Aes256Gcm>::from_slice(&payload_key);
+        let cipher = Aes256Gcm::new(key);
+        let nonce = Nonce::from_slice(&iv);
+
+        // Decrypt the payload
+        let plaintext = cipher
+            .decrypt(nonce, self.payload.as_ref())
+            .map_err(|e| TdfError::DecryptionError(format!("Decryption failed: {}", e)))?;
+
+        Ok(plaintext)
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum TdfError {
     #[error("ZIP error: {0}")]
@@ -29,6 +85,12 @@ pub enum TdfError {
     IoError(#[from] io::Error),
     #[error("Invalid TDF structure: {0}")]
     Structure(String),
+    #[cfg(feature = "kas")]
+    #[error("KAS error: {0}")]
+    KasError(#[from] KasError),
+    #[cfg(feature = "kas")]
+    #[error("Decryption error: {0}")]
+    DecryptionError(String),
 }
 
 impl TdfArchive<File> {
@@ -37,6 +99,35 @@ impl TdfArchive<File> {
         let file = File::open(path)?;
         let zip_archive = ZipArchive::new(file)?;
         Ok(Self { zip_archive })
+    }
+
+    /// Open a TDF archive and decrypt its contents using KAS
+    ///
+    /// This is a convenience method that:
+    /// 1. Opens the TDF archive
+    /// 2. Reads the first entry
+    /// 3. Decrypts the payload using KAS
+    ///
+    /// Returns the decrypted plaintext directly.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use opentdf::{TdfArchive, kas::KasClient};
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let kas_client = KasClient::new("http://10.0.0.138:8080/kas", "token")?;
+    /// let plaintext = TdfArchive::open_and_decrypt("example.tdf", &kas_client).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "kas")]
+    pub async fn open_and_decrypt<P: AsRef<Path>>(
+        path: P,
+        kas_client: &KasClient,
+    ) -> Result<Vec<u8>, TdfError> {
+        let mut archive = Self::open(path)?;
+        let entry = archive.by_index()?;
+        entry.decrypt_with_kas(kas_client).await
     }
 }
 

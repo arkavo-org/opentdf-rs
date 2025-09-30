@@ -20,6 +20,12 @@ rand = "0.8.5"
 chrono = { version = "0.4.35", features = ["serde"] }
 uuid = { version = "1.8.0", features = ["v4", "serde"] }
 lazy_static = "1.4.0"
+# KAS client dependencies
+reqwest = { version = "0.12", features = ["json"], optional = true }
+tokio = { version = "1", features = ["full"], optional = true }
+p256 = { version = "0.13", features = ["ecdsa", "pem"], optional = true }
+hkdf = { version = "0.12", optional = true }
+jwt-simple = { version = "0.12", optional = true }
 
 [workspace]
 members = ["crates/mcp-server"]
@@ -27,3 +33,4 @@ members = ["crates/mcp-server"]
 [features]
 default = []
 mcp = []
+kas = ["reqwest", "tokio", "p256", "hkdf", "jwt-simple"]
