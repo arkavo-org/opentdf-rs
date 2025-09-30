@@ -103,7 +103,8 @@ pub struct UnsignedRewrapRequest {
 /// Individual policy request entry
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PolicyRequest {
-    pub algorithm: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub algorithm: Option<String>,
     pub policy: Policy,
     #[serde(rename = "keyAccessObjects")]
     pub key_access_objects: Vec<KeyAccessObjectWrapper>,
@@ -353,7 +354,7 @@ impl KasClient {
 
         // Create policy request
         let policy_request = PolicyRequest {
-            algorithm: "ec:secp256r1".to_string(), // For Standard TDF with EC wrapping
+            algorithm: None, // For Standard TDF, algorithm is optional and should be None
             policy,
             key_access_objects: key_access_wrappers,
         };

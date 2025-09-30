@@ -34,3 +34,7 @@ members = ["crates/mcp-server"]
 default = []
 mcp = []
 kas = ["reqwest", "tokio", "p256", "hkdf", "jwt-simple"]
+
+[[example]]
+name = "kas_decrypt"
+required-features = ["kas"]
