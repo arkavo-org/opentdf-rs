@@ -30,8 +30,12 @@ mod kas_tests {
     #[test]
     fn test_ephemeral_key_pair_generation() {
         let key_pair = EphemeralKeyPair::new().expect("Failed to generate key pair");
-        assert!(key_pair.public_key_pem.starts_with("-----BEGIN PUBLIC KEY-----"));
-        assert!(key_pair.public_key_pem.ends_with("-----END PUBLIC KEY-----\n"));
+        assert!(key_pair
+            .public_key_pem
+            .starts_with("-----BEGIN PUBLIC KEY-----"));
+        assert!(key_pair
+            .public_key_pem
+            .ends_with("-----END PUBLIC KEY-----\n"));
     }
 
     #[tokio::test]
@@ -45,8 +49,8 @@ mod kas_tests {
         println!("Testing KAS rewrap against: {}", kas_url);
 
         // Create KAS client
-        let kas_client = KasClient::new(&kas_url, &oauth_token)
-            .expect("Failed to create KAS client");
+        let kas_client =
+            KasClient::new(&kas_url, &oauth_token).expect("Failed to create KAS client");
 
         // Create a simple TDF for testing
         let plaintext = b"Hello from KAS integration test!";
@@ -98,8 +102,8 @@ mod kas_tests {
 
         println!("Testing decryption of: {}", test_tdf_path);
 
-        let kas_client = KasClient::new(&kas_url, &oauth_token)
-            .expect("Failed to create KAS client");
+        let kas_client =
+            KasClient::new(&kas_url, &oauth_token).expect("Failed to create KAS client");
 
         // Open and decrypt the TDF
         match TdfArchive::open_and_decrypt(test_tdf_path, &kas_client).await {
@@ -107,10 +111,7 @@ mod kas_tests {
                 println!("✓ Successfully decrypted TDF!");
                 println!("Plaintext length: {} bytes", plaintext.len());
                 if plaintext.len() < 1000 {
-                    println!(
-                        "Plaintext: {}",
-                        String::from_utf8_lossy(&plaintext)
-                    );
+                    println!("Plaintext: {}", String::from_utf8_lossy(&plaintext));
                 }
             }
             Err(e) => {
@@ -142,7 +143,9 @@ mod kas_tests {
 
         // Create encryption
         let tdf_encryption = TdfEncryption::new().expect("Failed to create encryption");
-        let encrypted = tdf_encryption.encrypt(plaintext).expect("Failed to encrypt");
+        let encrypted = tdf_encryption
+            .encrypt(plaintext)
+            .expect("Failed to encrypt");
 
         println!("✓ Encryption successful");
         println!("  Ciphertext: {} bytes", encrypted.ciphertext.len());

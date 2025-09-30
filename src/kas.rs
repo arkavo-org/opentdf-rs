@@ -42,7 +42,7 @@ use {
     },
     hkdf::Hkdf,
     p256::{
-        ecdsa::{SigningKey, signature::Signer},
+        ecdsa::{signature::Signer, SigningKey},
         pkcs8::{DecodePublicKey, EncodePublicKey},
         PublicKey, SecretKey,
     },
@@ -232,7 +232,10 @@ impl KasClient {
     ///
     /// * `base_url` - Base URL of the KAS service (e.g., "http://kas.example.com")
     /// * `oauth_token` - OAuth bearer token for authentication
-    pub fn new(base_url: impl Into<String>, oauth_token: impl Into<String>) -> Result<Self, KasError> {
+    pub fn new(
+        base_url: impl Into<String>,
+        oauth_token: impl Into<String>,
+    ) -> Result<Self, KasError> {
         let http_client = Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
@@ -267,7 +270,9 @@ impl KasClient {
 
         // Sign the request with JWT
         let signed_token = self.create_signed_jwt(&unsigned_request)?;
-        let signed_request = SignedRewrapRequest { signed_request_token: signed_token };
+        let signed_request = SignedRewrapRequest {
+            signed_request_token: signed_token,
+        };
 
         // Make the HTTP request to KAS
         let rewrap_endpoint = format!("{}/v2/rewrap", self.base_url);
@@ -298,7 +303,8 @@ impl KasClient {
         let (wrapped_key, session_public_key_pem) = self.extract_wrapped_key(&rewrap_response)?;
 
         // Unwrap the key using ECDH + HKDF + AES-GCM
-        let payload_key = self.unwrap_key(&wrapped_key, &session_public_key_pem, &ephemeral_key_pair)?;
+        let payload_key =
+            self.unwrap_key(&wrapped_key, &session_public_key_pem, &ephemeral_key_pair)?;
 
         Ok(payload_key)
     }
@@ -319,7 +325,7 @@ impl KasClient {
                 // Decode wrapped key to ensure it's valid base64
                 let wrapped_key_bytes = BASE64
                     .decode(&kao.wrapped_key)
-                    .map_err(|e| KasError::Base64Error(e))?;
+                    .map_err(KasError::Base64Error)?;
 
                 Ok(KeyAccessObjectWrapper {
                     key_access_object_id: format!("kao-{}", idx),
@@ -404,7 +410,10 @@ impl KasClient {
     }
 
     /// Extract wrapped key from rewrap response
-    fn extract_wrapped_key(&self, response: &RewrapResponse) -> Result<(Vec<u8>, String), KasError> {
+    fn extract_wrapped_key(
+        &self,
+        response: &RewrapResponse,
+    ) -> Result<(Vec<u8>, String), KasError> {
         let policy_result = response
             .responses
             .first()
@@ -457,8 +466,10 @@ impl KasClient {
         ephemeral_key_pair: &EphemeralKeyPair,
     ) -> Result<Vec<u8>, KasError> {
         // Parse session public key from PEM
-        let session_public_key = PublicKey::from_public_key_pem(session_public_key_pem)
-            .map_err(|e| KasError::CryptoError(format!("Failed to parse session public key: {}", e)))?;
+        let session_public_key =
+            PublicKey::from_public_key_pem(session_public_key_pem).map_err(|e| {
+                KasError::CryptoError(format!("Failed to parse session public key: {}", e))
+            })?;
 
         // Perform ECDH key agreement
         let shared_secret = p256::elliptic_curve::ecdh::diffie_hellman(
@@ -509,7 +520,9 @@ mod tests {
         #[cfg(feature = "kas")]
         {
             let key_pair = EphemeralKeyPair::new().expect("Failed to generate key pair");
-            assert!(key_pair.public_key_pem.starts_with("-----BEGIN PUBLIC KEY-----"));
+            assert!(key_pair
+                .public_key_pem
+                .starts_with("-----BEGIN PUBLIC KEY-----"));
         }
     }
 

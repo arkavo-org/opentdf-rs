@@ -1158,7 +1158,9 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                                                 info!("Successfully decrypted TDF using KAS");
                                                 counter!("opentdf.kas.decrypt.success", 1);
                                                 let payload_size = entry.payload.len();
-                                                let plaintext_b64 = base64::engine::general_purpose::STANDARD.encode(&plaintext_data);
+                                                let plaintext_b64 =
+                                                    base64::engine::general_purpose::STANDARD
+                                                        .encode(&plaintext_data);
                                                 (plaintext_b64, true, entry.manifest, payload_size)
                                             }
                                             Err(e) => {
@@ -1186,14 +1188,15 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                                             "KAS_ERROR",
                                             format!("Failed to create KAS client: {}", e),
                                             Some("Verify KAS URL format is correct".to_string()),
-                                            Some("error")
+                                            Some("error"),
                                         );
                                     }
                                 }
                             } else {
                                 // No KAS decryption requested - return encrypted payload
                                 let payload_size = entry.payload.len();
-                                let payload_b64 = base64::engine::general_purpose::STANDARD.encode(&entry.payload);
+                                let payload_b64 = base64::engine::general_purpose::STANDARD
+                                    .encode(&entry.payload);
                                 (payload_b64, false, entry.manifest, payload_size)
                             };
 
@@ -1276,7 +1279,11 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                         info!(
                             "Successfully read TDF with {} bytes of {} payload",
                             original_payload_size,
-                            if decrypted_flag { "decrypted" } else { "encrypted" }
+                            if decrypted_flag {
+                                "decrypted"
+                            } else {
+                                "encrypted"
+                            }
                         );
 
                         create_success_response(
