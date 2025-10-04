@@ -31,6 +31,9 @@ rsa = { version = "0.9", features = ["sha2"], optional = true }
 pkcs8 = { version = "0.10", features = ["pem"], optional = true }
 sha1 = { version = "0.10", optional = true }
 
+[dev-dependencies]
+mockito = "1.5"
+
 [workspace]
 members = ["crates/mcp-server"]
 

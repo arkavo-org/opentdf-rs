@@ -53,7 +53,7 @@ impl<'a> TdfEntry<'a> {
         // IMPORTANT: Use with_payload_key() not with_policy_key()!
         // The key from KAS IS the payload key, not a policy key
         let tdf_encryption = TdfEncryption::with_payload_key(&payload_key)
-            .map_err(|e| TdfError::DecryptionError(format!("Invalid key: {}", e)))?;
+            .map_err(|e| TdfError::CryptoError("Invalid key from KAS".to_string(), Box::new(e)))?;
 
         // Check if this is a segmented TDF (modern format) or legacy (single block)
         let segments = &self
@@ -67,7 +67,7 @@ impl<'a> TdfEntry<'a> {
             let (plaintext, gmac_tags) = tdf_encryption
                 .decrypt_with_segments(&self.payload, segments)
                 .map_err(|e| {
-                    TdfError::DecryptionError(format!("Segment decryption failed: {}", e))
+                    TdfError::CryptoError("Segment decryption failed".to_string(), Box::new(e))
                 })?;
 
             // Verify root signature for integrity
@@ -75,8 +75,8 @@ impl<'a> TdfEntry<'a> {
                 .encryption_information
                 .integrity_information
                 .verify_root_signature(&gmac_tags, &payload_key)
-                .map_err(|_| {
-                    TdfError::DecryptionError("Root signature verification failed".to_string())
+                .map_err(|e| {
+                    TdfError::CryptoError("Root signature verification failed".to_string(), Box::new(e))
                 })?;
 
             Ok(plaintext)
@@ -85,7 +85,7 @@ impl<'a> TdfEntry<'a> {
             let iv_b64 = &self.manifest.encryption_information.method.iv;
             let iv = BASE64
                 .decode(iv_b64)
-                .map_err(|e| TdfError::DecryptionError(format!("Invalid IV: {}", e)))?;
+                .map_err(|e| TdfError::DecryptionError(format!("Invalid IV encoding: {}", e)))?;
 
             // Create decryption cipher
             use aes_gcm::{
@@ -100,7 +100,7 @@ impl<'a> TdfEntry<'a> {
             // Decrypt the payload
             let plaintext = cipher
                 .decrypt(nonce, self.payload.as_ref())
-                .map_err(|e| TdfError::DecryptionError(format!("Decryption failed: {}", e)))?;
+                .map_err(|e| TdfError::DecryptionError(format!("AES-GCM decryption failed: {}", e)))?;
 
             Ok(plaintext)
         }
@@ -121,8 +121,11 @@ pub enum TdfError {
     #[error("KAS error: {0}")]
     KasError(#[from] KasError),
     #[cfg(feature = "kas")]
-    #[error("Decryption error: {0}")]
+    #[error("Decryption failed: {0}")]
     DecryptionError(String),
+    #[cfg(feature = "kas")]
+    #[error("Cryptographic operation failed: {0}")]
+    CryptoError(String, #[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 impl TdfArchive<File> {

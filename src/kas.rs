@@ -224,7 +224,7 @@ pub enum EphemeralKeyPair {
     },
     #[cfg(feature = "kas")]
     RSA {
-        private_key: RsaPrivateKey,
+        private_key: Box<RsaPrivateKey>,
         public_key_pem: String,
     },
 }
@@ -264,7 +264,7 @@ impl EphemeralKeyPair {
                     .map_err(|e| KasError::Pkcs8Error(e.to_string()))?;
 
                 Ok(EphemeralKeyPair::RSA {
-                    private_key,
+                    private_key: Box::new(private_key),
                     public_key_pem,
                 })
             }
@@ -577,8 +577,17 @@ impl KasClient {
         match ephemeral_key_pair {
             EphemeralKeyPair::RSA { private_key, .. } => {
                 // RSA-OAEP decryption for Standard TDF
-                // IMPORTANT: Must use SHA1 to match Go SDK implementation
-                // See: platform/lib/ocrypto/asym_decryption.go:104
+                //
+                // SECURITY NOTE: Using SHA-1 with RSA-OAEP for Go SDK compatibility
+                //
+                // ⚠️  SHA-1 is cryptographically deprecated (collision attacks since 2017)
+                // However, it's required to match the OpenTDF platform implementation.
+                // The Go SDK uses SHA-1 for RSA-OAEP padding (see platform/lib/ocrypto/asym_decryption.go:104)
+                //
+                // This is a known limitation for cross-platform interoperability.
+                // TODO: File issue to migrate entire OpenTDF ecosystem to SHA-256
+                //
+                // See: https://shattered.io/ for SHA-1 collision attack details
                 let padding = Oaep::new::<Sha1>();
 
                 let payload_key = private_key.decrypt(padding, wrapped_key).map_err(|e| {

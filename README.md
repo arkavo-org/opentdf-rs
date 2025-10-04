@@ -424,12 +424,67 @@ match kas_client.rewrap_standard_tdf(&manifest).await {
 
 ### Interoperability
 
-The Rust KAS client is fully interoperable with:
-- **OpenTDFKit** (Swift): iOS/macOS applications
-- **platform/sdk** (Go): Backend services
-- **OpenTDF Platform**: Production KAS deployments
+> ⚠️ **Compatibility Note**: opentdf-rs follows the official OpenTDF specification with **camelCase** field names in TDF manifests (`encryptionInformation`, `keyAccess`, etc.). **OpenTDFKit (Swift)** currently uses non-standard **snake_case** field names and is **incompatible**. See [INTEROPERABILITY.md](INTEROPERABILITY.md) for detailed compatibility matrix and workarounds.
 
-TDF files created by any SDK can be decrypted by opentdf-rs using KAS, and vice versa.
+The Rust KAS client is fully interoperable with:
+- **platform/sdk** (Go): ✅ Fully compatible (spec-compliant)
+- **otdfctl** (Go): ✅ Fully compatible (golden implementation)
+- **OpenTDF Platform**: ✅ Production KAS deployments
+- **OpenTDFKit** (Swift): ❌ Incompatible (uses snake_case - bug in Swift SDK)
+
+TDF files created by spec-compliant SDKs (Go, Rust) can be decrypted across platforms using KAS.
+
+### Security Considerations
+
+#### Cryptographic Algorithms
+
+OpenTDF-RS uses industry-standard cryptographic primitives:
+
+- **Symmetric Encryption**: AES-256-GCM (Authenticated Encryption with Associated Data)
+- **Key Wrapping (Standard TDF)**: RSA-2048 with OAEP padding
+- **Key Agreement (NanoTDF)**: ECDH with P-256 curve + HKDF-SHA256
+- **Policy Binding**: HMAC-SHA256
+- **JWT Signing**: ES256 (ECDSA with P-256)
+
+#### ⚠️ SHA-1 Deprecation Notice
+
+**RSA-OAEP Padding**: The current implementation uses **SHA-1** for RSA-OAEP padding to maintain compatibility with the OpenTDF Go SDK (platform). **SHA-1 has known collision vulnerabilities** (see [SHAttered attack](https://shattered.io/)).
+
+- **Why SHA-1?** Required for cross-platform interoperability with existing OpenTDF implementations
+- **Risk Level**: Low in this context (used for padding, not primary security)
+- **Mitigation**: RSA-2048 key size and OAEP construction provide defense-in-depth
+- **Future**: Migration to SHA-256 planned for entire OpenTDF ecosystem
+
+#### Transport Security
+
+When using KAS in production:
+
+- **Always use HTTPS/TLS** for KAS communication (never plain HTTP in production)
+- **Validate TLS certificates** - consider certificate pinning for high-security deployments
+- **Secure OAuth tokens** - use short-lived tokens, never hardcode credentials
+- **Network isolation** - deploy KAS in a protected network segment
+
+#### Key Management Best Practices
+
+- **Ephemeral keys**: Generated fresh for each KAS request, never reused
+- **Key rotation**: Support for KAS key rotation through multiple key access objects
+- **Audit logging**: All key access attempts should be logged for compliance
+- **Access policies**: Enforce attribute-based access control (ABAC) at KAS layer
+
+#### Data-at-Rest Security
+
+- TDF archives use authenticated encryption (AES-256-GCM) preventing tampering
+- Policy binding cryptographically ties access policies to encrypted data
+- Key wrapping ensures payload keys are never stored in plaintext
+- Zero Trust: Encryption keys separated from encrypted data
+
+#### Compliance Considerations
+
+- FIPS 140-2: AES-256-GCM and RSA-2048 are FIPS-approved algorithms
+- NIST SP 800-38D: AES-GCM implementation follows NIST guidelines
+- **Note**: SHA-1 usage may impact certain compliance requirements - evaluate for your use case
+
+For security vulnerabilities, please see [SECURITY.md](SECURITY.md) (if available) or file an issue.
 
 ## MCP Server
 
