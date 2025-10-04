@@ -12,6 +12,8 @@ pub struct TdfManifest {
     pub payload: Payload,
     #[serde(rename = "encryptionInformation")]
     pub encryption_information: EncryptionInformation,
+    #[serde(rename = "schemaVersion", skip_serializing_if = "Option::is_none")]
+    pub schema_version: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -60,8 +62,8 @@ pub struct KeyAccess {
     pub policy_binding: PolicyBinding,
     #[serde(rename = "encryptedMetadata", skip_serializing_if = "Option::is_none")]
     pub encrypted_metadata: Option<String>,
-    #[serde(rename = "tdf_spec_version", skip_serializing_if = "Option::is_none")]
-    pub tdf_spec_version: Option<String>,
+    #[serde(rename = "schemaVersion", skip_serializing_if = "Option::is_none")]
+    pub schema_version: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -103,6 +105,80 @@ pub struct Segment {
     pub encrypted_segment_size: Option<u64>,
 }
 
+impl IntegrityInformation {
+    /// Generate root signature from GMAC tags
+    ///
+    /// The root signature is calculated as:
+    /// Base64(HMAC-SHA256(payloadKey, concat(gmac1, gmac2, ...)))
+    ///
+    /// This matches the OpenTDF Go SDK implementation where:
+    /// - GMAC tags are concatenated as raw bytes (not base64)
+    /// - HMAC-SHA256 is calculated over the concatenated tags
+    /// - Result is base64 encoded for storage
+    pub fn generate_root_signature(
+        &mut self,
+        gmac_tags: &[Vec<u8>],
+        payload_key: &[u8],
+    ) -> Result<(), MacError> {
+        type HmacSha256 = Hmac<Sha256>;
+
+        // Concatenate all raw GMAC tags
+        let mut aggregate_hash = Vec::new();
+        for tag in gmac_tags {
+            aggregate_hash.extend_from_slice(tag);
+        }
+
+        // Calculate HMAC-SHA256 over concatenated tags
+        let mut mac = <HmacSha256 as KeyInit>::new_from_slice(payload_key).map_err(|_| MacError)?;
+        mac.update(&aggregate_hash);
+        let result = mac.finalize();
+
+        // Base64 encode for storage
+        self.root_signature.sig = BASE64.encode(result.into_bytes());
+        self.root_signature.alg = "HS256".to_string();
+
+        Ok(())
+    }
+
+    /// Verify root signature against GMAC tags
+    ///
+    /// This validates the integrity of encrypted segments by:
+    /// 1. Concatenating all GMAC tags as raw bytes
+    /// 2. Calculating HMAC-SHA256 over concatenated tags using payload key
+    /// 3. Comparing result with stored root signature
+    ///
+    /// Returns Ok(()) if signature is valid, Err otherwise
+    pub fn verify_root_signature(
+        &self,
+        gmac_tags: &[Vec<u8>],
+        payload_key: &[u8],
+    ) -> Result<(), MacError> {
+        type HmacSha256 = Hmac<Sha256>;
+
+        // Concatenate all raw GMAC tags
+        let mut aggregate_hash = Vec::new();
+        for tag in gmac_tags {
+            aggregate_hash.extend_from_slice(tag);
+        }
+
+        // Calculate HMAC-SHA256 over concatenated tags
+        let mut mac = <HmacSha256 as KeyInit>::new_from_slice(payload_key).map_err(|_| MacError)?;
+        mac.update(&aggregate_hash);
+        let result = mac.finalize();
+
+        // Compare with stored signature
+        let expected_sig = BASE64
+            .decode(&self.root_signature.sig)
+            .map_err(|_| MacError)?;
+
+        if result.into_bytes().as_slice() != expected_sig.as_slice() {
+            return Err(MacError);
+        }
+
+        Ok(())
+    }
+}
+
 impl KeyAccess {
     /// Creates a new KeyAccess object with default values
     pub fn new(url: String) -> Self {
@@ -117,11 +193,17 @@ impl KeyAccess {
                 hash: String::new(),
             },
             encrypted_metadata: None,
-            tdf_spec_version: None,
+            schema_version: Some("1.0".to_string()),
         }
     }
 
     /// Generate policy binding using HMAC-SHA256 from raw policy string
+    ///
+    /// This matches the OpenTDF Go SDK format:
+    /// 1. Base64 encode the policy JSON
+    /// 2. HMAC-SHA256 the base64-encoded policy using the key
+    /// 3. Hex encode the HMAC result (32 bytes → 64 hex chars)
+    /// 4. Base64 encode the hex string for storage
     pub fn generate_policy_binding_raw(
         &mut self,
         policy: &str,
@@ -133,7 +215,12 @@ impl KeyAccess {
         let mut mac = <HmacSha256 as KeyInit>::new_from_slice(key).map_err(|_| MacError)?;
         mac.update(policy_base64.as_bytes());
         let result = mac.finalize();
-        self.policy_binding.hash = BASE64.encode(result.into_bytes());
+
+        // Hex encode the HMAC result to match Go SDK format
+        let hmac_hex = hex::encode(result.into_bytes());
+
+        // Base64 encode the hex string
+        self.policy_binding.hash = BASE64.encode(hmac_hex.as_bytes());
         self.policy_binding.alg = "HS256".to_string();
         Ok(())
     }
@@ -195,6 +282,7 @@ impl TdfManifest {
                 },
                 policy: String::new(),
             },
+            schema_version: Some("4.3.0".to_string()),
         }
     }
 

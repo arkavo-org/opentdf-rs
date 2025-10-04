@@ -65,6 +65,10 @@ struct TdfCreateParams {
 #[derive(Deserialize, Serialize, Debug)]
 struct TdfReadParams {
     tdf_data: String, // Base64 encoded TDF archive
+    #[serde(default)]
+    kas_url: Option<String>, // Optional KAS URL for decryption
+    #[serde(default)]
+    kas_token: Option<String>, // Optional OAuth token for KAS
 }
 
 #[derive(Deserialize, Debug)]
@@ -546,7 +550,7 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                 // Define tool schemas concisely for brevity here, assume full definitions exist
                 let tool_schemas = json!({
                     "tdf_create": {"description": "Creates TDF","schema": {"type": "object","properties": {"data": {"type": "string"},"kas_url": {"type": "string"},"policy": {"type": "object"}},"required": ["data", "kas_url", "policy"]}},
-                    "tdf_read": {"description": "Reads TDF archives","schema": {"type": "object","properties": {"tdf_data": {"type": "string"}},"required": ["tdf_data"]}},
+                    "tdf_read": {"description": "Reads TDF archives. Optionally decrypts with KAS if kas_url and kas_token provided.","schema": {"type": "object","properties": {"tdf_data": {"type": "string","description":"Base64-encoded TDF archive"},"kas_url": {"type": "string","description":"Optional KAS URL for decryption (e.g., http://10.0.0.138:8080/kas)"},"kas_token": {"type": "string","description":"Optional OAuth bearer token for KAS authentication"}},"required": ["tdf_data"]}},
                     "encrypt": {"description": "Encrypts data","schema": {"type": "object","properties": {"data": {"type": "string"}},"required": ["data"]}},
                     "decrypt": {"description": "Decrypts data","schema": {"type": "object","properties": {"encrypted_data": {"type": "string"},"iv": {"type": "string"},"encrypted_key": {"type": "string"},"policy_key": {"type": "string"}},"required": ["encrypted_data", "iv", "encrypted_key", "policy_key"]}},
                     "policy_create": {"description": "Creates policy","schema": {"type": "object","properties": {"attributes": {"type": "array"},"dissemination": {"type": "array", "items": {"type": "string"}}},"required": ["attributes"]}},
@@ -601,7 +605,7 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                 // Reuse the same schema definitions from initialize
                 let tool_schemas = json!({
                     "tdf_create": {"description": "Creates TDF","schema": {"type": "object","properties": {"data": {"type": "string"},"kas_url": {"type": "string"},"policy": {"type": "object"}},"required": ["data", "kas_url", "policy"]}},
-                    "tdf_read": {"description": "Reads TDF archives","schema": {"type": "object","properties": {"tdf_data": {"type": "string"}},"required": ["tdf_data"]}},
+                    "tdf_read": {"description": "Reads TDF archives. Optionally decrypts with KAS if kas_url and kas_token provided.","schema": {"type": "object","properties": {"tdf_data": {"type": "string","description":"Base64-encoded TDF archive"},"kas_url": {"type": "string","description":"Optional KAS URL for decryption (e.g., http://10.0.0.138:8080/kas)"},"kas_token": {"type": "string","description":"Optional OAuth bearer token for KAS authentication"}},"required": ["tdf_data"]}},
                     "encrypt": {"description": "Encrypts data","schema": {"type": "object","properties": {"data": {"type": "string"}},"required": ["data"]}},
                     "decrypt": {"description": "Decrypts data","schema": {"type": "object","properties": {"encrypted_data": {"type": "string"},"iv": {"type": "string"},"encrypted_key": {"type": "string"},"policy_key": {"type": "string"}},"required": ["encrypted_data", "iv", "encrypted_key", "policy_key"]}},
                     "policy_create": {"description": "Creates policy","schema": {"type": "object","properties": {"attributes": {"type": "array"},"dissemination": {"type": "array", "items": {"type": "string"}}},"required": ["attributes"]}},
@@ -1139,11 +1143,62 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                             }
                         };
 
-                        // Step 6: Extract manifest and encrypted payload
-                        let manifest = entry.manifest;
-                        let payload = entry.payload;
-                        let payload_base64 =
-                            base64::engine::general_purpose::STANDARD.encode(&payload);
+                        // Step 6: Optionally decrypt payload using KAS, or extract encrypted payload
+                        let (payload_base64, decrypted_flag, manifest, original_payload_size) =
+                            if let (Some(kas_url), Some(kas_token)) = (&p.kas_url, &p.kas_token) {
+                                info!("Attempting KAS decryption with URL: {}", kas_url);
+
+                                // Import KAS client
+                                use opentdf::kas::KasClient;
+
+                                match KasClient::new(kas_url.clone(), kas_token.clone()) {
+                                    Ok(kas_client) => {
+                                        match entry.decrypt_with_kas(&kas_client).await {
+                                            Ok(plaintext_data) => {
+                                                info!("Successfully decrypted TDF using KAS");
+                                                counter!("opentdf.kas.decrypt.success", 1);
+                                                let payload_size = entry.payload.len();
+                                                let plaintext_b64 =
+                                                    base64::engine::general_purpose::STANDARD
+                                                        .encode(&plaintext_data);
+                                                (plaintext_b64, true, entry.manifest, payload_size)
+                                            }
+                                            Err(e) => {
+                                                error!("KAS decryption failed: {}", e);
+                                                counter!("opentdf.kas.decrypt.failure", 1);
+                                                return create_detailed_error(
+                                                    req.id,
+                                                    -32000,
+                                                    "KAS decryption failed".to_string(),
+                                                    "KAS_ERROR",
+                                                    format!("Failed to decrypt TDF using KAS: {}", e),
+                                                    Some("Verify KAS URL and OAuth token are correct".to_string()),
+                                                    Some("error")
+                                                );
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to create KAS client: {}", e);
+                                        counter!("opentdf.kas.client.creation_error", 1);
+                                        return create_detailed_error(
+                                            req.id,
+                                            -32000,
+                                            "KAS client creation failed".to_string(),
+                                            "KAS_ERROR",
+                                            format!("Failed to create KAS client: {}", e),
+                                            Some("Verify KAS URL format is correct".to_string()),
+                                            Some("error"),
+                                        );
+                                    }
+                                }
+                            } else {
+                                // No KAS decryption requested - return encrypted payload
+                                let payload_size = entry.payload.len();
+                                let payload_b64 = base64::engine::general_purpose::STANDARD
+                                    .encode(&entry.payload);
+                                (payload_b64, false, entry.manifest, payload_size)
+                            };
 
                         // Step 7: Get policy from manifest if available
                         let policy = match manifest.get_policy() {
@@ -1195,8 +1250,9 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                         }
 
                         let payload_info = json!({
-                            "encrypted": true,
-                            "size": payload.len(),
+                            "encrypted": !decrypted_flag,
+                            "decrypted_by_kas": decrypted_flag,
+                            "size": original_payload_size,
                             "algorithm": manifest.encryption_information.method.algorithm.clone(),
                             "iv": manifest.encryption_information.method.iv.clone(),
                             "key_access": {
@@ -1221,8 +1277,13 @@ fn process_request(req: RpcRequest) -> ResponseFuture {
                         };
 
                         info!(
-                            "Successfully read TDF with {} bytes of encrypted payload",
-                            payload.len()
+                            "Successfully read TDF with {} bytes of {} payload",
+                            original_payload_size,
+                            if decrypted_flag {
+                                "decrypted"
+                            } else {
+                                "encrypted"
+                            }
                         );
 
                         create_success_response(
