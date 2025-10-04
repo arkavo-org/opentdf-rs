@@ -1168,23 +1168,29 @@ mod tests {
     }
 }
 
-    #[test]
-    fn test_empty_policy_serialization_compatibility() {
-        // Test that empty policies serialize with null instead of []
-        // This is critical for Go SDK compatibility
-        let policy = Policy::new("test-uuid".to_string(), vec![], vec![]);
-        let json_str = policy.to_json().unwrap();
-        
-        println!("Serialized empty policy: {}", json_str);
-        
-        // Check for null values
-        assert!(json_str.contains(r#""dataAttributes":null"#),
-                "Empty dataAttributes should serialize as null, got: {}", json_str);
-        assert!(json_str.contains(r#""dissem":null"#),
-                "Empty dissem should serialize as null, got: {}", json_str);
-        
-        // Deserialize and check
-        let parsed = Policy::from_json(&json_str).unwrap();
-        assert_eq!(parsed.body.attributes.len(), 0);
-        assert_eq!(parsed.body.dissem.len(), 0);
-    }
+#[test]
+fn test_empty_policy_serialization_compatibility() {
+    // Test that empty policies serialize with null instead of []
+    // This is critical for Go SDK compatibility
+    let policy = Policy::new("test-uuid".to_string(), vec![], vec![]);
+    let json_str = policy.to_json().unwrap();
+
+    println!("Serialized empty policy: {}", json_str);
+
+    // Check for null values
+    assert!(
+        json_str.contains(r#""dataAttributes":null"#),
+        "Empty dataAttributes should serialize as null, got: {}",
+        json_str
+    );
+    assert!(
+        json_str.contains(r#""dissem":null"#),
+        "Empty dissem should serialize as null, got: {}",
+        json_str
+    );
+
+    // Deserialize and check
+    let parsed = Policy::from_json(&json_str).unwrap();
+    assert_eq!(parsed.body.attributes.len(), 0);
+    assert_eq!(parsed.body.dissem.len(), 0);
+}

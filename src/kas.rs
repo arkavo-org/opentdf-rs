@@ -1,11 +1,20 @@
 //! KAS (Key Access Service) client implementation for OpenTDF rewrap protocol
 //!
 //! This module implements the KAS v2 rewrap protocol for unwrapping encrypted payload keys.
-//! It supports both Standard TDF (ZIP-based) format with EC and RSA key wrapping.
+//! It supports both Standard TDF (ZIP-based) and NanoTDF formats with RSA and EC key wrapping.
 //!
 //! # Protocol Flow
 //!
-//! 1. Generate ephemeral EC key pair
+//! ## Standard TDF (TDF3, ZTDF) - RSA-2048:
+//! 1. Generate ephemeral RSA-2048 key pair
+//! 2. Build unsigned rewrap request with manifest data
+//! 3. Sign request with JWT (ES256)
+//! 4. POST to KAS `/v2/rewrap` endpoint
+//! 5. Receive RSA-encrypted wrapped key
+//! 6. Unwrap key using RSA-OAEP (SHA-256)
+//!
+//! ## NanoTDF - EC P-256:
+//! 1. Generate ephemeral EC P-256 key pair
 //! 2. Build unsigned rewrap request with manifest data
 //! 3. Sign request with JWT (ES256)
 //! 4. POST to KAS `/v2/rewrap` endpoint
@@ -52,8 +61,11 @@ use {
         pkcs8::{DecodePublicKey, EncodePublicKey},
         PublicKey, SecretKey,
     },
+    pkcs8::LineEnding,
     reqwest::Client,
+    rsa::{Oaep, RsaPrivateKey, RsaPublicKey},
     serde_json::json,
+    sha1::Sha1,
     sha2::{Digest, Sha256},
     std::time::{SystemTime, UNIX_EPOCH},
 };
@@ -192,33 +204,79 @@ pub struct KeyAccessRewrapResult {
     pub error: Option<String>,
 }
 
+/// Key type for TDF encryption
+#[cfg(feature = "kas")]
+#[derive(Debug, Clone, Copy)]
+pub enum KeyType {
+    /// Elliptic Curve (P-256) - used for NanoTDF
+    EC,
+    /// RSA-2048 - used for Standard TDF (TDF3, ZTDF)
+    RSA,
+}
+
 /// Ephemeral key pair for KAS communication
 #[derive(Debug)]
-pub struct EphemeralKeyPair {
+pub enum EphemeralKeyPair {
     #[cfg(feature = "kas")]
-    pub private_key: SecretKey,
+    EC {
+        private_key: SecretKey,
+        public_key_pem: String,
+    },
     #[cfg(feature = "kas")]
-    pub public_key_pem: String,
+    RSA {
+        private_key: RsaPrivateKey,
+        public_key_pem: String,
+    },
 }
 
 #[cfg(feature = "kas")]
 impl EphemeralKeyPair {
-    /// Generate a new P-256 ephemeral key pair
-    pub fn new() -> Result<Self, KasError> {
+    /// Generate a new ephemeral key pair of the specified type
+    pub fn new(key_type: KeyType) -> Result<Self, KasError> {
         use rand::rngs::OsRng;
 
-        let private_key = SecretKey::random(&mut OsRng);
-        let public_key = private_key.public_key();
+        match key_type {
+            KeyType::EC => {
+                // Generate EC P-256 key pair for NanoTDF
+                let private_key = SecretKey::random(&mut OsRng);
+                let public_key = private_key.public_key();
 
-        // Encode public key as PEM
-        let public_key_pem = public_key
-            .to_public_key_pem(p256::pkcs8::LineEnding::LF)
-            .map_err(|e| KasError::Pkcs8Error(e.to_string()))?;
+                let public_key_pem = public_key
+                    .to_public_key_pem(p256::pkcs8::LineEnding::LF)
+                    .map_err(|e| KasError::Pkcs8Error(e.to_string()))?;
 
-        Ok(Self {
-            private_key,
-            public_key_pem,
-        })
+                Ok(EphemeralKeyPair::EC {
+                    private_key,
+                    public_key_pem,
+                })
+            }
+            KeyType::RSA => {
+                // Generate RSA-2048 key pair for Standard TDF
+                let bits = 2048;
+                let private_key = RsaPrivateKey::new(&mut OsRng, bits).map_err(|e| {
+                    KasError::CryptoError(format!("RSA key generation failed: {}", e))
+                })?;
+
+                let public_key = RsaPublicKey::from(&private_key);
+
+                let public_key_pem = public_key
+                    .to_public_key_pem(LineEnding::LF)
+                    .map_err(|e| KasError::Pkcs8Error(e.to_string()))?;
+
+                Ok(EphemeralKeyPair::RSA {
+                    private_key,
+                    public_key_pem,
+                })
+            }
+        }
+    }
+
+    /// Get the public key PEM string
+    pub fn public_key_pem(&self) -> &str {
+        match self {
+            EphemeralKeyPair::EC { public_key_pem, .. } => public_key_pem,
+            EphemeralKeyPair::RSA { public_key_pem, .. } => public_key_pem,
+        }
     }
 }
 
@@ -262,15 +320,15 @@ impl KasClient {
     /// Rewrap a key from a Standard TDF manifest
     ///
     /// This performs the complete KAS rewrap flow:
-    /// 1. Generate ephemeral key pair
+    /// 1. Generate RSA-2048 ephemeral key pair (Standard TDF uses RSA)
     /// 2. Build and sign rewrap request
     /// 3. POST to KAS
-    /// 4. Unwrap the returned key
+    /// 4. Unwrap the returned key using RSA-OAEP
     ///
     /// Returns the unwrapped payload key ready for TDF decryption
     pub async fn rewrap_standard_tdf(&self, manifest: &TdfManifest) -> Result<Vec<u8>, KasError> {
-        // Generate ephemeral key pair for this request
-        let ephemeral_key_pair = EphemeralKeyPair::new()?;
+        // Generate RSA ephemeral key pair for Standard TDF
+        let ephemeral_key_pair = EphemeralKeyPair::new(KeyType::RSA)?;
 
         // Build the rewrap request
         let unsigned_request = self.build_rewrap_request(manifest, &ephemeral_key_pair)?;
@@ -283,6 +341,7 @@ impl KasClient {
 
         // Make the HTTP request to KAS
         let rewrap_endpoint = format!("{}/v2/rewrap", self.base_url);
+
         let response = self
             .http_client
             .post(&rewrap_endpoint)
@@ -296,9 +355,10 @@ impl KasClient {
         let status = response.status();
         if !status.is_success() {
             let error_body = response.text().await.unwrap_or_default();
+
             return Err(match status.as_u16() {
                 401 => KasError::AuthenticationFailed,
-                403 => KasError::AccessDenied(error_body),
+                403 => KasError::AccessDenied(error_body.clone()),
                 _ => KasError::HttpError(format!("HTTP {}: {}", status, error_body)),
             });
         }
@@ -314,6 +374,37 @@ impl KasClient {
             self.unwrap_key(&wrapped_key, &session_public_key_pem, &ephemeral_key_pair)?;
 
         Ok(payload_key)
+    }
+
+    /// Extract policy UUID from base64-encoded policy JSON
+    ///
+    /// The policy is stored as base64-encoded JSON in the manifest.
+    /// This function decodes and parses it to extract the UUID field.
+    fn extract_policy_uuid(&self, base64_policy: &str) -> Result<String, KasError> {
+        // Decode base64 policy
+        let policy_bytes = BASE64
+            .decode(base64_policy)
+            .map_err(KasError::Base64Error)?;
+
+        // Parse JSON
+        let policy_json: serde_json::Value = serde_json::from_slice(&policy_bytes)
+            .map_err(|e| KasError::HttpError(format!("Failed to parse policy JSON: {}", e)))?;
+
+        // Extract UUID field
+        let uuid = policy_json
+            .get("uuid")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| KasError::HttpError("Policy missing 'uuid' field".to_string()))?;
+
+        // Validate UUID format (should be 36 characters with hyphens)
+        if uuid.len() != 36 {
+            return Err(KasError::HttpError(format!(
+                "Invalid UUID format: expected 36 characters, got {}",
+                uuid.len()
+            )));
+        }
+
+        Ok(uuid.to_string())
     }
 
     /// Build the unsigned rewrap request from manifest data
@@ -353,8 +444,10 @@ impl KasClient {
             .collect::<Result<Vec<_>, KasError>>()?;
 
         // Create policy from manifest
+        // Extract UUID from the base64-encoded policy JSON
+        let policy_uuid = self.extract_policy_uuid(&manifest.encryption_information.policy)?;
         let policy = Policy {
-            id: "policy".to_string(),
+            id: policy_uuid,
             body: manifest.encryption_information.policy.clone(),
         };
 
@@ -366,7 +459,7 @@ impl KasClient {
         };
 
         Ok(UnsignedRewrapRequest {
-            client_public_key: ephemeral_key_pair.public_key_pem.clone(),
+            client_public_key: ephemeral_key_pair.public_key_pem().to_string(),
             requests: vec![policy_request],
         })
     }
@@ -388,6 +481,9 @@ impl KasClient {
             "typ": "JWT"
         });
 
+        // IMPORTANT: requestBody MUST be a string, not a JSON object
+        // The KAS server expects: token.Get("requestBody").(string)
+        // See platform/service/kas/access/rewrap.go:146-149
         let payload = json!({
             "requestBody": request_body,
             "iat": now,
@@ -459,10 +555,16 @@ impl KasClient {
         Ok((wrapped_key, session_public_key))
     }
 
-    /// Unwrap the key using ECDH + HKDF + AES-GCM
+    /// Unwrap the key based on key type (EC or RSA)
     ///
     /// # Protocol
     ///
+    /// ## For RSA rewrap (Standard TDF - TDF3, ZTDF):
+    /// 1. KAS returns wrapped_key directly encrypted with client's RSA public key
+    /// 2. Decrypt using client's RSA private key with OAEP padding (SHA-256)
+    /// 3. Return the unwrapped payload key
+    ///
+    /// ## For EC rewrap (NanoTDF):
     /// 1. ECDH: client_private × session_public → shared_secret
     /// 2. HKDF: salt=SHA256("TDF"), shared_secret → symmetric_key
     /// 3. AES-GCM decrypt: wrapped_key → payload_key
@@ -472,49 +574,66 @@ impl KasClient {
         session_public_key_pem: &str,
         ephemeral_key_pair: &EphemeralKeyPair,
     ) -> Result<Vec<u8>, KasError> {
-        // Parse session public key from PEM
-        let session_public_key =
-            PublicKey::from_public_key_pem(session_public_key_pem).map_err(|e| {
-                KasError::CryptoError(format!("Failed to parse session public key: {}", e))
-            })?;
+        match ephemeral_key_pair {
+            EphemeralKeyPair::RSA { private_key, .. } => {
+                // RSA-OAEP decryption for Standard TDF
+                // IMPORTANT: Must use SHA1 to match Go SDK implementation
+                // See: platform/lib/ocrypto/asym_decryption.go:104
+                let padding = Oaep::new::<Sha1>();
 
-        // Perform ECDH key agreement
-        let shared_secret = p256::elliptic_curve::ecdh::diffie_hellman(
-            ephemeral_key_pair.private_key.to_nonzero_scalar(),
-            session_public_key.as_affine(),
-        );
+                let payload_key = private_key.decrypt(padding, wrapped_key).map_err(|e| {
+                    KasError::UnwrapError(format!("RSA-OAEP decryption failed: {}", e))
+                })?;
 
-        // Derive symmetric key using HKDF with salt = SHA256("TDF")
-        let mut salt_hasher = Sha256::new();
-        salt_hasher.update(b"TDF");
-        let salt = salt_hasher.finalize();
+                Ok(payload_key)
+            }
+            EphemeralKeyPair::EC { private_key, .. } => {
+                // EC/ECDH unwrap for NanoTDF
+                // Parse session public key from PEM
+                let session_public_key = PublicKey::from_public_key_pem(session_public_key_pem)
+                    .map_err(|e| {
+                        KasError::CryptoError(format!("Failed to parse session public key: {}", e))
+                    })?;
 
-        let hkdf = Hkdf::<Sha256>::new(Some(&salt), shared_secret.raw_secret_bytes());
-        let mut symmetric_key = [0u8; 32];
-        hkdf.expand(&[], &mut symmetric_key)
-            .map_err(|e| KasError::CryptoError(format!("HKDF expansion failed: {}", e)))?;
+                // Perform ECDH key agreement
+                let shared_secret = p256::elliptic_curve::ecdh::diffie_hellman(
+                    private_key.to_nonzero_scalar(),
+                    session_public_key.as_affine(),
+                );
 
-        // Unwrap key using AES-GCM
-        // Format: nonce (12 bytes) || ciphertext || tag (16 bytes)
-        if wrapped_key.len() < 28 {
-            // 12 + 16
-            return Err(KasError::UnwrapError(format!(
-                "Wrapped key too short: {} bytes",
-                wrapped_key.len()
-            )));
+                // Derive symmetric key using HKDF with salt = SHA256("TDF")
+                let mut salt_hasher = Sha256::new();
+                salt_hasher.update(b"TDF");
+                let salt = salt_hasher.finalize();
+
+                let hkdf = Hkdf::<Sha256>::new(Some(&salt), shared_secret.raw_secret_bytes());
+                let mut symmetric_key = [0u8; 32];
+                hkdf.expand(&[], &mut symmetric_key)
+                    .map_err(|e| KasError::CryptoError(format!("HKDF expansion failed: {}", e)))?;
+
+                // Unwrap key using AES-GCM
+                // Format: nonce (12 bytes) || ciphertext || tag (16 bytes)
+                if wrapped_key.len() < 28 {
+                    return Err(KasError::UnwrapError(format!(
+                        "Wrapped key too short: {} bytes",
+                        wrapped_key.len()
+                    )));
+                }
+
+                let nonce = Nonce::from_slice(&wrapped_key[..12]);
+                let ciphertext_and_tag = &wrapped_key[12..];
+
+                let cipher = Aes256Gcm::new_from_slice(&symmetric_key).map_err(|e| {
+                    KasError::CryptoError(format!("Failed to create cipher: {}", e))
+                })?;
+
+                let payload_key = cipher.decrypt(nonce, ciphertext_and_tag).map_err(|e| {
+                    KasError::UnwrapError(format!("AES-GCM decryption failed: {}", e))
+                })?;
+
+                Ok(payload_key)
+            }
         }
-
-        let nonce = Nonce::from_slice(&wrapped_key[..12]);
-        let ciphertext_and_tag = &wrapped_key[12..];
-
-        let cipher = Aes256Gcm::new_from_slice(&symmetric_key)
-            .map_err(|e| KasError::CryptoError(format!("Failed to create cipher: {}", e)))?;
-
-        let payload_key = cipher
-            .decrypt(nonce, ciphertext_and_tag)
-            .map_err(|e| KasError::UnwrapError(format!("AES-GCM decryption failed: {}", e)))?;
-
-        Ok(payload_key)
     }
 }
 
@@ -526,9 +645,18 @@ mod tests {
     fn test_ephemeral_key_pair_generation() {
         #[cfg(feature = "kas")]
         {
-            let key_pair = EphemeralKeyPair::new().expect("Failed to generate key pair");
-            assert!(key_pair
-                .public_key_pem
+            // Test RSA key generation
+            let key_pair_rsa =
+                EphemeralKeyPair::new(KeyType::RSA).expect("Failed to generate RSA key pair");
+            assert!(key_pair_rsa
+                .public_key_pem()
+                .starts_with("-----BEGIN PUBLIC KEY-----"));
+
+            // Test EC key generation
+            let key_pair_ec =
+                EphemeralKeyPair::new(KeyType::EC).expect("Failed to generate EC key pair");
+            assert!(key_pair_ec
+                .public_key_pem()
                 .starts_with("-----BEGIN PUBLIC KEY-----"));
         }
     }

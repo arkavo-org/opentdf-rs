@@ -139,6 +139,44 @@ impl IntegrityInformation {
 
         Ok(())
     }
+
+    /// Verify root signature against GMAC tags
+    ///
+    /// This validates the integrity of encrypted segments by:
+    /// 1. Concatenating all GMAC tags as raw bytes
+    /// 2. Calculating HMAC-SHA256 over concatenated tags using payload key
+    /// 3. Comparing result with stored root signature
+    ///
+    /// Returns Ok(()) if signature is valid, Err otherwise
+    pub fn verify_root_signature(
+        &self,
+        gmac_tags: &[Vec<u8>],
+        payload_key: &[u8],
+    ) -> Result<(), MacError> {
+        type HmacSha256 = Hmac<Sha256>;
+
+        // Concatenate all raw GMAC tags
+        let mut aggregate_hash = Vec::new();
+        for tag in gmac_tags {
+            aggregate_hash.extend_from_slice(tag);
+        }
+
+        // Calculate HMAC-SHA256 over concatenated tags
+        let mut mac = <HmacSha256 as KeyInit>::new_from_slice(payload_key).map_err(|_| MacError)?;
+        mac.update(&aggregate_hash);
+        let result = mac.finalize();
+
+        // Compare with stored signature
+        let expected_sig = BASE64
+            .decode(&self.root_signature.sig)
+            .map_err(|_| MacError)?;
+
+        if result.into_bytes().as_slice() != expected_sig.as_slice() {
+            return Err(MacError);
+        }
+
+        Ok(())
+    }
 }
 
 impl KeyAccess {

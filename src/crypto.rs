@@ -63,6 +63,21 @@ impl TdfEncryption {
         })
     }
 
+    /// Create TdfEncryption with a known payload key (for KAS decryption)
+    ///
+    /// When decrypting a TDF with KAS, the unwrapped key from KAS IS the payload key.
+    /// This constructor uses that key directly without generating a new random one.
+    pub fn with_payload_key(payload_key: &[u8]) -> Result<Self, EncryptionError> {
+        if payload_key.len() != 32 {
+            return Err(EncryptionError::InvalidKeyLength);
+        }
+
+        Ok(Self {
+            policy_key: vec![0u8; 32], // Not used for decryption
+            payload_key: payload_key.to_vec(),
+        })
+    }
+
     /// Encrypt data using the payload key and then encrypt the payload key using the policy key
     pub fn encrypt(&self, data: &[u8]) -> Result<EncryptedPayload, EncryptionError> {
         // Generate random IV for payload encryption
@@ -221,22 +236,92 @@ impl TdfEncryption {
             gmac_tags,
         })
     }
+
+    /// Decrypt data using segment-based decryption for OpenTDF compatibility
+    ///
+    /// This implements the OpenTDF standard segment-based decryption:
+    /// - Parses payload into segments based on segment metadata
+    /// - Each segment format: [IV (12 bytes)][Ciphertext + Tag]
+    /// - Decrypts each segment with AES-256-GCM
+    /// - Extracts GMAC tag (last 16 bytes) from each encrypted segment
+    /// - Returns plaintext and GMAC tags for root signature verification
+    ///
+    /// # Arguments
+    ///
+    /// * `payload` - The encrypted payload bytes (concatenated segments)
+    /// * `segments` - Segment metadata from manifest
+    ///
+    /// # Returns
+    ///
+    /// Tuple of (plaintext, gmac_tags) for verification
+    pub fn decrypt_with_segments(
+        &self,
+        payload: &[u8],
+        segments: &[crate::manifest::Segment],
+    ) -> Result<(Vec<u8>, Vec<Vec<u8>>), EncryptionError> {
+        const GCM_IV_SIZE: usize = 12; // 96-bit IV
+        const GCM_TAG_SIZE: usize = 16; // 128-bit authentication tag
+
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.payload_key));
+        let mut plaintext = Vec::new();
+        let mut gmac_tags = Vec::new();
+        let mut offset = 0;
+
+        for segment_meta in segments {
+            // Get encrypted segment size from metadata
+            let encrypted_size = segment_meta
+                .encrypted_segment_size
+                .ok_or(EncryptionError::KeyGenerationError)?
+                as usize;
+
+            // Ensure we don't read past the payload
+            if offset + encrypted_size > payload.len() {
+                return Err(EncryptionError::KeyGenerationError);
+            }
+
+            // Extract segment data
+            let segment_data = &payload[offset..offset + encrypted_size];
+
+            // Parse segment: [IV (12)][Ciphertext + Tag]
+            if segment_data.len() < GCM_IV_SIZE + GCM_TAG_SIZE {
+                return Err(EncryptionError::KeyGenerationError);
+            }
+
+            let iv = &segment_data[..GCM_IV_SIZE];
+            let ciphertext_and_tag = &segment_data[GCM_IV_SIZE..];
+
+            // Decrypt segment
+            let nonce = Nonce::from_slice(iv);
+            let decrypted = cipher
+                .decrypt(nonce, ciphertext_and_tag)
+                .map_err(EncryptionError::AeadError)?;
+
+            // Extract GMAC tag (last 16 bytes of ciphertext_and_tag before decryption)
+            let gmac_tag = ciphertext_and_tag[ciphertext_and_tag.len() - GCM_TAG_SIZE..].to_vec();
+            gmac_tags.push(gmac_tag);
+
+            plaintext.extend_from_slice(&decrypted);
+            offset += encrypted_size;
+        }
+
+        Ok((plaintext, gmac_tags))
+    }
 }
 
 /// Information about an encrypted segment
 #[derive(Debug, Clone)]
 pub struct SegmentInfo {
-    pub hash: String,          // Base64 encoded GMAC tag
-    pub plaintext_size: u64,   // Size before encryption
-    pub encrypted_size: u64,   // Size after encryption (includes IV + tag)
+    pub hash: String,        // Base64 encoded GMAC tag
+    pub plaintext_size: u64, // Size before encryption
+    pub encrypted_size: u64, // Size after encryption (includes IV + tag)
 }
 
 /// Result of segment-based encryption
 #[derive(Debug)]
 pub struct SegmentedPayload {
-    pub segments: Vec<Vec<u8>>,        // Encrypted segment data (IV + ciphertext + tag)
+    pub segments: Vec<Vec<u8>>, // Encrypted segment data (IV + ciphertext + tag)
     pub segment_info: Vec<SegmentInfo>, // Metadata for manifest
-    pub gmac_tags: Vec<Vec<u8>>,       // Raw GMAC tags for root signature
+    pub gmac_tags: Vec<Vec<u8>>, // Raw GMAC tags for root signature
 }
 
 /// Wrap a payload key using RSA-OAEP encryption
@@ -394,6 +479,117 @@ mod tests {
 
         // Verify hash matches
         assert_eq!(encrypted.policy_key_hash, key_hash);
+        Ok(())
+    }
+
+    #[test]
+    fn test_segment_encryption_and_decryption() -> Result<(), EncryptionError> {
+        use crate::manifest::Segment;
+
+        // Create encryption instance
+        let tdf = TdfEncryption::new()?;
+        let plaintext =
+            b"Hello from segment test! This is a test of segment-based encryption and decryption.";
+
+        // Encrypt with segments (use small segment size for testing)
+        const SEGMENT_SIZE: usize = 32;
+        let segmented = tdf.encrypt_with_segments(plaintext, SEGMENT_SIZE)?;
+
+        // Verify we got the expected number of segments
+        let expected_segments = (plaintext.len() + SEGMENT_SIZE - 1) / SEGMENT_SIZE;
+        assert_eq!(segmented.segments.len(), expected_segments);
+        assert_eq!(segmented.segment_info.len(), expected_segments);
+        assert_eq!(segmented.gmac_tags.len(), expected_segments);
+
+        // Create segment metadata for decryption
+        let segments: Vec<Segment> = segmented
+            .segment_info
+            .iter()
+            .map(|info| Segment {
+                hash: info.hash.clone(),
+                segment_size: Some(info.plaintext_size),
+                encrypted_segment_size: Some(info.encrypted_size),
+            })
+            .collect();
+
+        // Concatenate all segment data
+        let mut payload = Vec::new();
+        for segment in &segmented.segments {
+            payload.extend_from_slice(segment);
+        }
+
+        // Decrypt
+        let (decrypted, gmac_tags) = tdf.decrypt_with_segments(&payload, &segments)?;
+
+        // Verify plaintext matches
+        assert_eq!(plaintext, decrypted.as_slice());
+
+        // Verify GMAC tags match
+        assert_eq!(gmac_tags.len(), segmented.gmac_tags.len());
+        for (extracted, original) in gmac_tags.iter().zip(segmented.gmac_tags.iter()) {
+            assert_eq!(extracted, original);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_segment_decryption_with_root_signature() -> Result<(), EncryptionError> {
+        use crate::manifest::{IntegrityInformation, RootSignature, Segment};
+
+        // Create encryption instance
+        let tdf = TdfEncryption::new()?;
+        let plaintext = b"Testing root signature verification with segments";
+
+        // Encrypt with segments
+        const SEGMENT_SIZE: usize = 20;
+        let segmented = tdf.encrypt_with_segments(plaintext, SEGMENT_SIZE)?;
+
+        // Create integrity information with root signature
+        let mut integrity_info = IntegrityInformation {
+            root_signature: RootSignature {
+                alg: "HS256".to_string(),
+                sig: String::new(),
+            },
+            segment_hash_alg: "GMAC".to_string(),
+            segments: Vec::new(),
+            segment_size_default: SEGMENT_SIZE as u64,
+            encrypted_segment_size_default: (SEGMENT_SIZE + 12 + 16) as u64,
+        };
+
+        // Generate root signature
+        integrity_info
+            .generate_root_signature(&segmented.gmac_tags, tdf.payload_key())
+            .expect("Failed to generate root signature");
+
+        // Create segment metadata
+        let segments: Vec<Segment> = segmented
+            .segment_info
+            .iter()
+            .map(|info| Segment {
+                hash: info.hash.clone(),
+                segment_size: Some(info.plaintext_size),
+                encrypted_segment_size: Some(info.encrypted_size),
+            })
+            .collect();
+
+        // Concatenate payload
+        let mut payload = Vec::new();
+        for segment in &segmented.segments {
+            payload.extend_from_slice(segment);
+        }
+
+        // Decrypt and extract GMAC tags
+        let (decrypted, gmac_tags) = tdf.decrypt_with_segments(&payload, &segments)?;
+
+        // Verify root signature
+        integrity_info
+            .verify_root_signature(&gmac_tags, tdf.payload_key())
+            .expect("Root signature verification failed");
+
+        // Verify plaintext
+        assert_eq!(plaintext, decrypted.as_slice());
+
         Ok(())
     }
 }

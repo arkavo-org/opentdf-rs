@@ -43,35 +43,67 @@ impl<'a> TdfEntry<'a> {
     /// ```
     #[cfg(feature = "kas")]
     pub async fn decrypt_with_kas(&self, kas_client: &KasClient) -> Result<Vec<u8>, TdfError> {
+        use crate::crypto::TdfEncryption;
         use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 
         // Unwrap the payload key using KAS
         let payload_key = kas_client.rewrap_standard_tdf(&self.manifest).await?;
 
-        // Decrypt the payload using AES-256-GCM
-        // The payload format is: IV (base64) + ciphertext
-        // For now, we'll need to extract IV from the manifest
-        let iv_b64 = &self.manifest.encryption_information.method.iv;
-        let iv = BASE64
-            .decode(iv_b64)
-            .map_err(|e| TdfError::DecryptionError(format!("Invalid IV: {}", e)))?;
+        // Create TDF encryption instance with the unwrapped payload key from KAS
+        // IMPORTANT: Use with_payload_key() not with_policy_key()!
+        // The key from KAS IS the payload key, not a policy key
+        let tdf_encryption = TdfEncryption::with_payload_key(&payload_key)
+            .map_err(|e| TdfError::DecryptionError(format!("Invalid key: {}", e)))?;
 
-        // Create decryption cipher
-        use aes_gcm::{
-            aead::{Aead, KeyInit},
-            Aes256Gcm, Key, Nonce,
-        };
+        // Check if this is a segmented TDF (modern format) or legacy (single block)
+        let segments = &self
+            .manifest
+            .encryption_information
+            .integrity_information
+            .segments;
 
-        let key = Key::<Aes256Gcm>::from_slice(&payload_key);
-        let cipher = Aes256Gcm::new(key);
-        let nonce = Nonce::from_slice(&iv);
+        if !segments.is_empty() {
+            // Modern segmented format
+            let (plaintext, gmac_tags) = tdf_encryption
+                .decrypt_with_segments(&self.payload, segments)
+                .map_err(|e| {
+                    TdfError::DecryptionError(format!("Segment decryption failed: {}", e))
+                })?;
 
-        // Decrypt the payload
-        let plaintext = cipher
-            .decrypt(nonce, self.payload.as_ref())
-            .map_err(|e| TdfError::DecryptionError(format!("Decryption failed: {}", e)))?;
+            // Verify root signature for integrity
+            self.manifest
+                .encryption_information
+                .integrity_information
+                .verify_root_signature(&gmac_tags, &payload_key)
+                .map_err(|_| {
+                    TdfError::DecryptionError("Root signature verification failed".to_string())
+                })?;
 
-        Ok(plaintext)
+            Ok(plaintext)
+        } else {
+            // Legacy single-block format
+            let iv_b64 = &self.manifest.encryption_information.method.iv;
+            let iv = BASE64
+                .decode(iv_b64)
+                .map_err(|e| TdfError::DecryptionError(format!("Invalid IV: {}", e)))?;
+
+            // Create decryption cipher
+            use aes_gcm::{
+                aead::{Aead, KeyInit},
+                Aes256Gcm, Key, Nonce,
+            };
+
+            let key = Key::<Aes256Gcm>::from_slice(&payload_key);
+            let cipher = Aes256Gcm::new(key);
+            let nonce = Nonce::from_slice(&iv);
+
+            // Decrypt the payload
+            let plaintext = cipher
+                .decrypt(nonce, self.payload.as_ref())
+                .map_err(|e| TdfError::DecryptionError(format!("Decryption failed: {}", e)))?;
+
+            Ok(plaintext)
+        }
     }
 }
 

@@ -29,12 +29,25 @@ mod kas_tests {
 
     #[test]
     fn test_ephemeral_key_pair_generation() {
-        let key_pair = EphemeralKeyPair::new().expect("Failed to generate key pair");
-        assert!(key_pair
-            .public_key_pem
+        use opentdf::kas::KeyType;
+        // Test RSA (for Standard TDF)
+        let key_pair_rsa =
+            EphemeralKeyPair::new(KeyType::RSA).expect("Failed to generate RSA key pair");
+        assert!(key_pair_rsa
+            .public_key_pem()
             .starts_with("-----BEGIN PUBLIC KEY-----"));
-        assert!(key_pair
-            .public_key_pem
+        assert!(key_pair_rsa
+            .public_key_pem()
+            .ends_with("-----END PUBLIC KEY-----\n"));
+
+        // Test EC (for NanoTDF)
+        let key_pair_ec =
+            EphemeralKeyPair::new(KeyType::EC).expect("Failed to generate EC key pair");
+        assert!(key_pair_ec
+            .public_key_pem()
+            .starts_with("-----BEGIN PUBLIC KEY-----"));
+        assert!(key_pair_ec
+            .public_key_pem()
             .ends_with("-----END PUBLIC KEY-----\n"));
     }
 

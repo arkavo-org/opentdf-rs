@@ -27,7 +27,8 @@ tokio = { version = "1", features = ["full"], optional = true }
 p256 = { version = "0.13", features = ["ecdsa", "pem"], optional = true }
 hkdf = { version = "0.12", optional = true }
 jwt-simple = { version = "0.12", optional = true }
-rsa = { version = "0.9", features = ["sha1"], optional = true }
+rsa = { version = "0.9", features = ["sha2"], optional = true }
+pkcs8 = { version = "0.10", features = ["pem"], optional = true }
 sha1 = { version = "0.10", optional = true }
 
 [workspace]
@@ -36,7 +37,7 @@ members = ["crates/mcp-server"]
 [features]
 default = []
 mcp = []
-kas = ["reqwest", "tokio", "p256", "hkdf", "jwt-simple", "rsa", "sha1"]
+kas = ["reqwest", "tokio", "p256", "hkdf", "jwt-simple", "rsa", "pkcs8", "sha1"]
 
 [[example]]
 name = "kas_decrypt"
