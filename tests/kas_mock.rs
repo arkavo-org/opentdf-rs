@@ -22,8 +22,8 @@ mod kas_mock_tests {
 
     /// Helper to create a properly formatted test manifest with policy
     fn create_test_manifest_with_policy(kas_url: String) -> TdfManifest {
-        use opentdf::{AttributeIdentifier, AttributePolicy, AttributeValue, Operator, Policy};
         use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+        use opentdf::{AttributeIdentifier, AttributePolicy, AttributeValue, Operator, Policy};
 
         // Create a simple policy
         let attr_id = AttributeIdentifier {
@@ -41,10 +41,7 @@ mod kas_mock_tests {
         );
 
         // Create manifest with the policy
-        let mut manifest = TdfManifest::new(
-            "0.payload".to_string(),
-            kas_url,
-        );
+        let mut manifest = TdfManifest::new("0.payload".to_string(), kas_url);
 
         // Set a dummy wrapped key (base64 encoded random bytes)
         manifest.encryption_information.key_access[0].wrapped_key =
@@ -216,7 +213,9 @@ mod kas_mock_tests {
         assert!(result.is_err(), "Should fail with network error");
         let err = result.unwrap_err();
         assert!(
-            err.to_string().contains("HTTP") || err.to_string().contains("network") || err.to_string().contains("timeout"),
+            err.to_string().contains("HTTP")
+                || err.to_string().contains("network")
+                || err.to_string().contains("timeout"),
             "Error should indicate network failure: {}",
             err
         );
@@ -232,8 +231,14 @@ mod kas_mock_tests {
         let key_pair = key_pair.unwrap();
         let pem = key_pair.public_key_pem();
 
-        assert!(pem.starts_with("-----BEGIN PUBLIC KEY-----"), "Should be valid PEM");
-        assert!(pem.ends_with("-----END PUBLIC KEY-----\n"), "Should be valid PEM");
+        assert!(
+            pem.starts_with("-----BEGIN PUBLIC KEY-----"),
+            "Should be valid PEM"
+        );
+        assert!(
+            pem.ends_with("-----END PUBLIC KEY-----\n"),
+            "Should be valid PEM"
+        );
         assert!(pem.len() > 200, "RSA-2048 PEM should be substantial");
     }
 
@@ -247,8 +252,14 @@ mod kas_mock_tests {
         let key_pair = key_pair.unwrap();
         let pem = key_pair.public_key_pem();
 
-        assert!(pem.starts_with("-----BEGIN PUBLIC KEY-----"), "Should be valid PEM");
-        assert!(pem.ends_with("-----END PUBLIC KEY-----\n"), "Should be valid PEM");
+        assert!(
+            pem.starts_with("-----BEGIN PUBLIC KEY-----"),
+            "Should be valid PEM"
+        );
+        assert!(
+            pem.ends_with("-----END PUBLIC KEY-----\n"),
+            "Should be valid PEM"
+        );
         assert!(pem.len() > 100, "EC P-256 PEM should have content");
         assert!(pem.len() < 200, "EC PEM should be smaller than RSA");
     }
@@ -261,7 +272,8 @@ mod kas_mock_tests {
             .mock("POST", "/v2/rewrap")
             .match_header("Authorization", "Bearer test-token")
             .match_body(mockito::Matcher::Regex(
-                r#""signedRequestToken":"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+""#.to_string()
+                r#""signedRequestToken":"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+""#
+                    .to_string(),
             ))
             .with_status(200)
             .with_header("content-type", "application/json")

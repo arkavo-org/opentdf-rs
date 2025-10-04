@@ -76,7 +76,10 @@ impl<'a> TdfEntry<'a> {
                 .integrity_information
                 .verify_root_signature(&gmac_tags, &payload_key)
                 .map_err(|e| {
-                    TdfError::CryptoError("Root signature verification failed".to_string(), Box::new(e))
+                    TdfError::CryptoError(
+                        "Root signature verification failed".to_string(),
+                        Box::new(e),
+                    )
                 })?;
 
             Ok(plaintext)
@@ -98,9 +101,9 @@ impl<'a> TdfEntry<'a> {
             let nonce = Nonce::from_slice(&iv);
 
             // Decrypt the payload
-            let plaintext = cipher
-                .decrypt(nonce, self.payload.as_ref())
-                .map_err(|e| TdfError::DecryptionError(format!("AES-GCM decryption failed: {}", e)))?;
+            let plaintext = cipher.decrypt(nonce, self.payload.as_ref()).map_err(|e| {
+                TdfError::DecryptionError(format!("AES-GCM decryption failed: {}", e))
+            })?;
 
             Ok(plaintext)
         }
