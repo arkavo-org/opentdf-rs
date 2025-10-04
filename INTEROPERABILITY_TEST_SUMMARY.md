@@ -37,21 +37,31 @@
 - **Example**: `examples/create_tdf_with_kas.rs` demonstrates usage
 
 ### ⚠ Cross-Platform TDF Creation/Decryption
-- **Status**: PARTIAL - Format incompatibilities discovered
+- **Status**: IN PROGRESS - Policy binding encoding fixed, remaining issues under investigation
 - **Scenarios tested**:
-  1. Create TDF with Rust → Decrypt with otdfctl: ❌ (KAS request format issues)
-  2. Create TDF with otdfctl → Decrypt with Rust: ❌ (KAS request format issues)
+  1. Create TDF with Rust → Decrypt with otdfctl: ⚠ (tamper detected - under investigation)
+  2. Create TDF with otdfctl → Decrypt with Rust: ⚠ (authentication issues - under investigation)
   3. Create TDF with OpenTDFKit → Decrypt with Rust: ⏸ (Not yet tested)
   4. Create TDF with Rust → Decrypt with OpenTDFKit: ⏸ (Not yet tested)
 
-**Issues Discovered:**
-- TDF format differences between Rust and Go implementations
-  - Go uses segment-based encryption with empty method.iv
-  - Rust uses single-payload encryption with IV in method.iv
-  - Policy binding hash encoding may differ (hex vs base64)
-  - Integrity information structure varies (segments vs single payload)
-- KAS rewrap requests from both implementations fail with "invalid request"
-- Root cause requires deeper investigation of protocol expectations
+**Issues Discovered and Fixed:**
+- ✅ **Policy Binding Encoding** (FIXED in this session):
+  - **Root Cause**: Go SDK uses `base64(hex(hmac))` but Rust was using `base64(hmac)`
+  - **Go SDK** (`/platform/sdk/tdf.go:537-538`): Hex encodes HMAC before base64
+  - **Rust** (was): Directly base64 encoded the 32-byte HMAC
+  - **Fix**: Updated `src/manifest.rs:generate_policy_binding_raw()` to match Go format
+  - **Result**: Policy bindings now use same encoding (64 hex chars → base64)
+
+**Remaining Issues:**
+- TDF format differences between Rust and Go implementations:
+  - **Encryption approach**:
+    - Go: Segment-based encryption with empty `method.iv`, IV stored in segments
+    - Rust: Single-payload encryption with IV in `method.iv`
+  - **Integrity information**:
+    - Go: Populated `segments` array with hashes and signatures
+    - Rust: Empty `segments` array, empty `rootSignature.sig`
+- otdfctl decrypt still reports "tamper detected" despite policy binding fix
+- Rust KAS client authentication issues (may be OAuth token related)
 
 ## Components Verified
 
@@ -86,13 +96,31 @@ RewrapResponse {
 - [x] Successfully fetch KAS public key from platform
 - [x] Successfully wrap payload key with RSA-OAEP-SHA1
 
+### ✅ Phase 2: Policy Binding Compatibility (COMPLETED)
+- [x] Add `hex` crate dependency (Cargo.toml)
+- [x] Investigate Go SDK policy binding generation
+- [x] Update `generate_policy_binding_raw()` to use hex encoding
+- [x] Verified new format: base64(hex(hmac)) - 64 hex chars after b64 decode
+- [x] Confirmed compatibility with Go SDK format
+
 ## Next Steps for Full Interoperability
 
-### 1. Investigate Protocol Compatibility Issues
-- [ ] Debug KAS rewrap request/response format
-- [ ] Compare actual HTTP requests between Go SDK and Rust implementations
-- [ ] Identify specific field mismatches causing "invalid request" errors
-- [ ] Review OpenTDF protocol specification for Standard TDF format
+### 1. Investigate Remaining Compatibility Issues
+- [ ] **TDF Format Alignment**: Decide whether to adopt segment-based encryption
+  - Review OpenTDF Standard TDF specification for required format
+  - Determine if single-payload encryption is acceptable or if segments are required
+  - If segments required, implement segment-based encryption matching Go SDK
+- [ ] **Integrity Information**: Implement root signature and segment hashes
+  - Understand GMAC segment hash algorithm
+  - Implement HS256 root signature generation
+- [ ] **Authentication Issues**: Debug KAS client OAuth token handling
+  - Verify token is properly included in rewrap requests
+  - Check Authorization header format
+  - Test with fresh tokens
+- [ ] **otdfctl "tamper detected"**: Debug why decryption still fails
+  - Capture actual KAS rewrap HTTP requests (both Go and Rust)
+  - Compare JSON structures byte-by-byte
+  - Verify policy binding calculation with same test data
 
 ### 2. Create Cross-Platform Test Suite
 Once RSA wrapping is implemented:

@@ -122,6 +122,12 @@ impl KeyAccess {
     }
 
     /// Generate policy binding using HMAC-SHA256 from raw policy string
+    ///
+    /// This matches the OpenTDF Go SDK format:
+    /// 1. Base64 encode the policy JSON
+    /// 2. HMAC-SHA256 the base64-encoded policy using the key
+    /// 3. Hex encode the HMAC result (32 bytes → 64 hex chars)
+    /// 4. Base64 encode the hex string for storage
     pub fn generate_policy_binding_raw(
         &mut self,
         policy: &str,
@@ -133,7 +139,12 @@ impl KeyAccess {
         let mut mac = <HmacSha256 as KeyInit>::new_from_slice(key).map_err(|_| MacError)?;
         mac.update(policy_base64.as_bytes());
         let result = mac.finalize();
-        self.policy_binding.hash = BASE64.encode(result.into_bytes());
+
+        // Hex encode the HMAC result to match Go SDK format
+        let hmac_hex = hex::encode(result.into_bytes());
+
+        // Base64 encode the hex string
+        self.policy_binding.hash = BASE64.encode(hmac_hex.as_bytes());
         self.policy_binding.alg = "HS256".to_string();
         Ok(())
     }
