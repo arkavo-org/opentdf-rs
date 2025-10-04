@@ -236,6 +236,37 @@ impl TdfArchiveBuilder {
         Ok(())
     }
 
+    /// Adds a TDF entry with segmented payload to the archive
+    ///
+    /// This method supports segment-based encryption by writing segments sequentially
+    pub fn add_entry_with_segments(
+        &mut self,
+        manifest: &TdfManifest,
+        segments: &[Vec<u8>],
+        index: usize,
+    ) -> Result<(), TdfError> {
+        let manifest_json = manifest.to_json()?;
+
+        // Write manifest
+        self.writer.start_file::<_, ()>(
+            format!("{}.manifest.json", index),
+            FileOptions::default().compression_method(zip::CompressionMethod::Stored),
+        )?;
+        self.writer.write_all(manifest_json.as_bytes())?;
+
+        // Write payload - concatenate all segments
+        self.writer.start_file::<_, ()>(
+            format!("{}.payload", index),
+            FileOptions::default().compression_method(zip::CompressionMethod::Stored),
+        )?;
+
+        for segment in segments {
+            self.writer.write_all(segment)?;
+        }
+
+        Ok(())
+    }
+
     /// Finalizes the archive and returns the number of bytes written
     pub fn finish(self) -> Result<u64, TdfError> {
         let result = self.writer.finish()?;

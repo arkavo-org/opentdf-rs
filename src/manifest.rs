@@ -12,6 +12,8 @@ pub struct TdfManifest {
     pub payload: Payload,
     #[serde(rename = "encryptionInformation")]
     pub encryption_information: EncryptionInformation,
+    #[serde(rename = "schemaVersion", skip_serializing_if = "Option::is_none")]
+    pub schema_version: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -60,8 +62,8 @@ pub struct KeyAccess {
     pub policy_binding: PolicyBinding,
     #[serde(rename = "encryptedMetadata", skip_serializing_if = "Option::is_none")]
     pub encrypted_metadata: Option<String>,
-    #[serde(rename = "tdf_spec_version", skip_serializing_if = "Option::is_none")]
-    pub tdf_spec_version: Option<String>,
+    #[serde(rename = "schemaVersion", skip_serializing_if = "Option::is_none")]
+    pub schema_version: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -103,6 +105,42 @@ pub struct Segment {
     pub encrypted_segment_size: Option<u64>,
 }
 
+impl IntegrityInformation {
+    /// Generate root signature from GMAC tags
+    ///
+    /// The root signature is calculated as:
+    /// Base64(HMAC-SHA256(payloadKey, concat(gmac1, gmac2, ...)))
+    ///
+    /// This matches the OpenTDF Go SDK implementation where:
+    /// - GMAC tags are concatenated as raw bytes (not base64)
+    /// - HMAC-SHA256 is calculated over the concatenated tags
+    /// - Result is base64 encoded for storage
+    pub fn generate_root_signature(
+        &mut self,
+        gmac_tags: &[Vec<u8>],
+        payload_key: &[u8],
+    ) -> Result<(), MacError> {
+        type HmacSha256 = Hmac<Sha256>;
+
+        // Concatenate all raw GMAC tags
+        let mut aggregate_hash = Vec::new();
+        for tag in gmac_tags {
+            aggregate_hash.extend_from_slice(tag);
+        }
+
+        // Calculate HMAC-SHA256 over concatenated tags
+        let mut mac = <HmacSha256 as KeyInit>::new_from_slice(payload_key).map_err(|_| MacError)?;
+        mac.update(&aggregate_hash);
+        let result = mac.finalize();
+
+        // Base64 encode for storage
+        self.root_signature.sig = BASE64.encode(result.into_bytes());
+        self.root_signature.alg = "HS256".to_string();
+
+        Ok(())
+    }
+}
+
 impl KeyAccess {
     /// Creates a new KeyAccess object with default values
     pub fn new(url: String) -> Self {
@@ -117,7 +155,7 @@ impl KeyAccess {
                 hash: String::new(),
             },
             encrypted_metadata: None,
-            tdf_spec_version: None,
+            schema_version: Some("1.0".to_string()),
         }
     }
 
@@ -206,6 +244,7 @@ impl TdfManifest {
                 },
                 policy: String::new(),
             },
+            schema_version: Some("4.3.0".to_string()),
         }
     }
 

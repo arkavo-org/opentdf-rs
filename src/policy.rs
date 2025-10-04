@@ -412,10 +412,48 @@ pub struct Policy {
 }
 
 /// Policy body containing attribute requirements and dissemination list
+///
+/// Note: To match Go SDK behavior, empty arrays serialize as null instead of []
+/// This is critical for policy binding HMAC calculation compatibility
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PolicyBody {
+    #[serde(
+        rename = "dataAttributes",
+        default,
+        serialize_with = "serialize_empty_vec_as_null",
+        deserialize_with = "deserialize_null_as_empty_vec"
+    )]
     pub attributes: Vec<AttributePolicy>,
+    #[serde(
+        default,
+        serialize_with = "serialize_empty_vec_as_null",
+        deserialize_with = "deserialize_null_as_empty_vec"
+    )]
     pub dissem: Vec<String>, // Entities authorized to access
+}
+
+/// Serialize empty Vec as null to match Go SDK behavior
+/// This ensures policy binding HMAC compatibility across implementations
+fn serialize_empty_vec_as_null<T, S>(vec: &Vec<T>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    T: serde::Serialize,
+    S: serde::Serializer,
+{
+    if vec.is_empty() {
+        serializer.serialize_none()
+    } else {
+        vec.serialize(serializer)
+    }
+}
+
+/// Deserialize null as empty Vec for compatibility with Go SDK
+fn deserialize_null_as_empty_vec<'de, T, D>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    T: serde::Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    let opt = Option::<Vec<T>>::deserialize(deserializer)?;
+    Ok(opt.unwrap_or_default())
 }
 
 impl Policy {
@@ -1129,3 +1167,24 @@ mod tests {
         assert!(!condition.evaluate(&attributes).unwrap());
     }
 }
+
+    #[test]
+    fn test_empty_policy_serialization_compatibility() {
+        // Test that empty policies serialize with null instead of []
+        // This is critical for Go SDK compatibility
+        let policy = Policy::new("test-uuid".to_string(), vec![], vec![]);
+        let json_str = policy.to_json().unwrap();
+        
+        println!("Serialized empty policy: {}", json_str);
+        
+        // Check for null values
+        assert!(json_str.contains(r#""dataAttributes":null"#),
+                "Empty dataAttributes should serialize as null, got: {}", json_str);
+        assert!(json_str.contains(r#""dissem":null"#),
+                "Empty dissem should serialize as null, got: {}", json_str);
+        
+        // Deserialize and check
+        let parsed = Policy::from_json(&json_str).unwrap();
+        assert_eq!(parsed.body.attributes.len(), 0);
+        assert_eq!(parsed.body.dissem.len(), 0);
+    }

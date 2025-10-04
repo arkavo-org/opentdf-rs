@@ -164,6 +164,79 @@ impl TdfEncryption {
     pub fn payload_key(&self) -> &[u8] {
         &self.payload_key
     }
+
+    /// Encrypt data using segment-based encryption for OpenTDF compatibility
+    ///
+    /// This implements the OpenTDF standard segment-based encryption:
+    /// - Splits payload into segments (default 2MB)
+    /// - Encrypts each segment with AES-256-GCM
+    /// - Extracts GMAC tag (last 16 bytes) from each encrypted segment
+    /// - Returns segment data and metadata for manifest generation
+    pub fn encrypt_with_segments(
+        &self,
+        data: &[u8],
+        segment_size: usize,
+    ) -> Result<SegmentedPayload, EncryptionError> {
+        const GCM_IV_SIZE: usize = 12; // 96-bit IV
+        const GCM_TAG_SIZE: usize = 16; // 128-bit authentication tag
+
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.payload_key));
+        let mut segments = Vec::new();
+        let mut segment_info = Vec::new();
+        let mut gmac_tags = Vec::new();
+
+        // Process data in segments
+        for chunk in data.chunks(segment_size) {
+            // Generate unique IV for this segment
+            let mut iv = vec![0u8; GCM_IV_SIZE];
+            OsRng.fill_bytes(&mut iv);
+            let nonce = Nonce::from_slice(&iv);
+
+            // Encrypt segment
+            let ciphertext = cipher
+                .encrypt(nonce, chunk)
+                .map_err(EncryptionError::AeadError)?;
+
+            // AES-GCM output format: [encrypted_data][16-byte auth tag]
+            // GMAC is the authentication tag (last 16 bytes)
+            let gmac_tag = ciphertext[ciphertext.len() - GCM_TAG_SIZE..].to_vec();
+            gmac_tags.push(gmac_tag.clone());
+
+            // Prepend IV to ciphertext for storage (OpenTDF format)
+            let mut segment_data = iv;
+            segment_data.extend_from_slice(&ciphertext);
+
+            segment_info.push(SegmentInfo {
+                hash: BASE64.encode(&gmac_tag),
+                plaintext_size: chunk.len() as u64,
+                encrypted_size: segment_data.len() as u64,
+            });
+
+            segments.push(segment_data);
+        }
+
+        Ok(SegmentedPayload {
+            segments,
+            segment_info,
+            gmac_tags,
+        })
+    }
+}
+
+/// Information about an encrypted segment
+#[derive(Debug, Clone)]
+pub struct SegmentInfo {
+    pub hash: String,          // Base64 encoded GMAC tag
+    pub plaintext_size: u64,   // Size before encryption
+    pub encrypted_size: u64,   // Size after encryption (includes IV + tag)
+}
+
+/// Result of segment-based encryption
+#[derive(Debug)]
+pub struct SegmentedPayload {
+    pub segments: Vec<Vec<u8>>,        // Encrypted segment data (IV + ciphertext + tag)
+    pub segment_info: Vec<SegmentInfo>, // Metadata for manifest
+    pub gmac_tags: Vec<Vec<u8>>,       // Raw GMAC tags for root signature
 }
 
 /// Wrap a payload key using RSA-OAEP encryption

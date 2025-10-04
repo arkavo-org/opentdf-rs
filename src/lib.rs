@@ -1,6 +1,6 @@
 mod archive;
 mod crypto;
-mod manifest;
+pub mod manifest;
 mod policy;
 
 #[cfg(feature = "kas")]
@@ -10,7 +10,9 @@ pub mod kas;
 pub mod kas_key;
 
 pub use archive::{TdfArchive, TdfArchiveBuilder};
-pub use crypto::{EncryptedPayload, EncryptionError, TdfEncryption};
+pub use crypto::{
+    EncryptedPayload, EncryptionError, SegmentInfo, SegmentedPayload, TdfEncryption,
+};
 pub use manifest::TdfManifest;
 
 #[cfg(feature = "kas")]
