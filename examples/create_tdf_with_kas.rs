@@ -47,15 +47,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Step 2: Create test data
-    let plaintext =
-        b"Hello from Rust opentdf-rs! This TDF can be decrypted by any OpenTDF implementation.";
+    // For large file testing, read from file if it exists, otherwise use default message
+    let plaintext_data;
+    let plaintext: &[u8] = if std::path::Path::new("/tmp/large-test.bin").exists() {
+        plaintext_data = std::fs::read("/tmp/large-test.bin")?;
+        &plaintext_data
+    } else {
+        b"Hello from Rust opentdf-rs! This TDF can be decrypted by any OpenTDF implementation."
+    };
     println!();
     println!("2. Preparing plaintext...");
-    println!(
-        "   Plaintext ({} bytes): {}",
-        plaintext.len(),
-        String::from_utf8_lossy(plaintext)
-    );
+    if plaintext.len() > 100 {
+        println!(
+            "   Plaintext: {} bytes ({:.2} MB)",
+            plaintext.len(),
+            plaintext.len() as f64 / 1024.0 / 1024.0
+        );
+    } else {
+        println!(
+            "   Plaintext ({} bytes): {}",
+            plaintext.len(),
+            String::from_utf8_lossy(plaintext)
+        );
+    }
 
     // Step 3: Create TDF encryption and encrypt data with segments
     println!();
