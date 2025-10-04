@@ -166,6 +166,61 @@ impl TdfEncryption {
     }
 }
 
+/// Wrap a payload key using RSA-OAEP encryption
+///
+/// This function wraps a symmetric payload key with an RSA public key using OAEP padding.
+/// This is used to create TDF files that can be decrypted via the KAS rewrap protocol.
+///
+/// The algorithm used is RSA-OAEP with SHA1 hash, matching the OpenTDF platform specification.
+///
+/// # Arguments
+///
+/// * `payload_key` - The symmetric key to wrap (typically 32 bytes for AES-256)
+/// * `kas_public_key_pem` - PEM-encoded RSA public key from KAS
+///
+/// # Returns
+///
+/// Base64-encoded wrapped key ready for inclusion in TDF manifest
+///
+/// # Example
+///
+/// ```no_run
+/// use opentdf::wrap_key_with_rsa_oaep;
+///
+/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let payload_key = &[0u8; 32]; // Your AES-256 key
+/// let kas_public_key_pem = "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----";
+///
+/// let wrapped_key = wrap_key_with_rsa_oaep(payload_key, kas_public_key_pem)?;
+/// # Ok(())
+/// # }
+/// ```
+#[cfg(feature = "kas")]
+pub fn wrap_key_with_rsa_oaep(
+    payload_key: &[u8],
+    kas_public_key_pem: &str,
+) -> Result<String, EncryptionError> {
+    use rsa::pkcs8::DecodePublicKey;
+    use rsa::{Oaep, RsaPublicKey};
+    use sha1::Sha1;
+
+    // Parse the PEM-encoded public key
+    let public_key = RsaPublicKey::from_public_key_pem(kas_public_key_pem).map_err(|_| {
+        EncryptionError::KeyGenerationError // Could add a more specific error variant
+    })?;
+
+    // Create OAEP padding with SHA1 (matching Go SDK implementation)
+    let padding = Oaep::new::<Sha1>();
+
+    // Encrypt the payload key with RSA-OAEP
+    let wrapped_key = public_key
+        .encrypt(&mut rand::rngs::OsRng, padding, payload_key)
+        .map_err(|_| EncryptionError::AeadError(aes_gcm::Error))?;
+
+    // Encode as base64 for storage in manifest
+    Ok(BASE64.encode(&wrapped_key))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

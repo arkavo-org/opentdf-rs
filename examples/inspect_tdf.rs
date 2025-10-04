@@ -84,7 +84,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Err(e) => {
             println!("  ⚠ No policy or parse error: {}", e);
-            println!("  Raw policy string: {}", &ei.policy[..ei.policy.len().min(100)]);
+            println!(
+                "  Raw policy string: {}",
+                &ei.policy[..ei.policy.len().min(100)]
+            );
         }
     }
 

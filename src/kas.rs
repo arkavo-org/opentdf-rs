@@ -23,6 +23,12 @@
 //!     "oauth_token_here",
 //! )?;
 //!
+//! // Create a test manifest
+//! let manifest = opentdf::TdfManifest::new(
+//!     "0.payload".to_string(),
+//!     "http://kas.example.com".to_string()
+//! );
+//!
 //! // Unwrap a key from a TDF manifest
 //! let payload_key = client.rewrap_standard_tdf(&manifest).await?;
 //! # Ok(())

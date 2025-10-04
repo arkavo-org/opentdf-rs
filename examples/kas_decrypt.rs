@@ -70,7 +70,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(entry) => {
             println!("   ✓ Entry read successfully");
             println!("     - Payload size: {} bytes", entry.payload.len());
-            println!("     - Algorithm: {}", entry.manifest.encryption_information.method.algorithm);
+            println!(
+                "     - Algorithm: {}",
+                entry.manifest.encryption_information.method.algorithm
+            );
             entry
         }
         Err(e) => {
@@ -92,7 +95,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("   - KAS URL: {}", ka.url);
         println!("   - Protocol: {}", ka.protocol);
         println!("   - Key type: {}", ka.access_type);
-        println!("   - Policy binding: {} ({})", ka.policy_binding.alg, &ka.policy_binding.hash[..16]);
+        println!(
+            "   - Policy binding: {} ({})",
+            ka.policy_binding.alg,
+            &ka.policy_binding.hash[..16]
+        );
     }
 
     // Display policy if available
@@ -108,7 +115,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("     - Valid to: {}", to);
             }
             println!("     - Dissemination: {:?}", policy.body.dissem);
-            println!("     - Attributes: {} conditions", policy.body.attributes.len());
+            println!(
+                "     - Attributes: {} conditions",
+                policy.body.attributes.len()
+            );
         }
         Err(e) => {
             println!("   ⚠ No policy or failed to parse: {}", e);
