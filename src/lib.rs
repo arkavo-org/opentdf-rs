@@ -2,6 +2,7 @@ mod archive;
 mod crypto;
 pub mod manifest;
 mod policy;
+mod tdf;
 
 #[cfg(feature = "kas")]
 pub mod kas;
@@ -9,7 +10,11 @@ pub mod kas;
 #[cfg(feature = "kas")]
 pub mod kas_key;
 
-pub use archive::{TdfArchive, TdfArchiveBuilder};
+// High-level API (primary interface)
+pub use tdf::{Tdf, TdfEncryptBuilder, TdfEncryptFileBuilder};
+
+// Core types
+pub use archive::{TdfArchive, TdfArchiveBuilder, TdfError};
 pub use crypto::{EncryptedPayload, EncryptionError, SegmentInfo, SegmentedPayload, TdfEncryption};
 pub use manifest::TdfManifest;
 

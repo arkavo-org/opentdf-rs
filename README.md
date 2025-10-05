@@ -134,10 +134,12 @@ let policy = Policy {
 
 ### ABAC Integration with TDF
 
+The new simplified API makes ABAC policy binding effortless:
+
 ```rust
 use opentdf::{
-    AttributePolicy, AttributeIdentifier, AttributeValue, Operator, 
-    Policy, PolicyBody, TdfArchive, TdfArchiveBuilder, TdfEncryption, TdfManifest
+    Tdf, Policy, AttributePolicy, AttributeIdentifier,
+    AttributeValue, Operator
 };
 use std::collections::HashMap;
 
@@ -152,7 +154,7 @@ let department = AttributePolicy::condition(
     AttributeIdentifier::from_string("gov.example:department")?,
     Operator::In,
     Some(AttributeValue::StringArray(vec![
-        "ENGINEERING".to_string(), 
+        "ENGINEERING".to_string(),
         "EXECUTIVE".to_string()
     ]))
 );
@@ -160,53 +162,27 @@ let department = AttributePolicy::condition(
 // Combine with logical AND
 let combined_policy = AttributePolicy::and(vec![clearance, department]);
 
-// Create full policy with time constraints
-let policy = Policy {
-    uuid: uuid::Uuid::new_v4().to_string(),
-    valid_from: Some(chrono::Utc::now()),
-    valid_to: Some(chrono::Utc::now() + chrono::Duration::days(30)),
-    body: PolicyBody {
-        attributes: vec![combined_policy],
-        dissem: vec!["user@example.com".to_string()],
-    },
-};
-
-// 2. Encrypt data using TDF
-let data = b"Sensitive information".to_vec();
-let tdf_encryption = TdfEncryption::new()?;
-let encrypted_payload = tdf_encryption.encrypt(&data)?;
-
-// 3. Create manifest with KAS information
-let mut manifest = TdfManifest::new(
-    "0.payload".to_string(),
-    "https://kas.example.com".to_string(),
+// Create full policy
+let policy = Policy::new(
+    uuid::Uuid::new_v4().to_string(),
+    vec![combined_policy.clone()],
+    vec!["user@example.com".to_string()]
 );
 
-manifest.encryption_information.method.algorithm = "AES-256-GCM".to_string();
-manifest.encryption_information.method.iv = encrypted_payload.iv.clone();
-manifest.encryption_information.key_access[0].wrapped_key = 
-    encrypted_payload.encrypted_key.clone();
+// 2. Encrypt with ABAC policy - just 4 lines!
+Tdf::encrypt(b"Sensitive information")
+    .kas_url("https://kas.example.com")
+    .policy(policy)
+    .to_file("example.tdf")?;
 
-// 4. Bind policy to manifest and generate cryptographic binding
-manifest.set_policy(&policy)?;
-manifest.encryption_information.key_access[0].generate_policy_binding(
-    &policy, 
-    tdf_encryption.policy_key()
-)?;
-
-// 5. Create TDF archive with encrypted payload
-let mut builder = TdfArchiveBuilder::new("example.tdf")?;
-builder.add_entry(&manifest, &encrypted_payload.ciphertext.as_bytes(), 0)?;
-builder.finish()?;
-
-// 6. Later: Evaluate access based on user attributes
+// 3. Later: Evaluate access based on user attributes
 let user_attrs = HashMap::from([
     (
-        AttributeIdentifier::from_string("gov.example:clearance")?, 
+        AttributeIdentifier::from_string("gov.example:clearance")?,
         AttributeValue::String("TOP_SECRET".to_string())
     ),
     (
-        AttributeIdentifier::from_string("gov.example:department")?, 
+        AttributeIdentifier::from_string("gov.example:department")?,
         AttributeValue::String("ENGINEERING".to_string())
     ),
 ]);
@@ -606,50 +582,71 @@ Add to your Cargo.toml:
 opentdf = "0.3.0"
 ```
 
-### Basic Usage
+### Basic Usage - Simple API ✨
+
+The new simplified API makes TDF encryption incredibly easy:
 
 ```rust
-use opentdf::{TdfArchive, TdfArchiveBuilder, TdfEncryption, TdfManifest};
+use opentdf::{Tdf, Policy};
 
-// Create a new TDF encryption
-let tdf_encryption = TdfEncryption::new()?;
-
-// Encrypt data
-let data = b"Sensitive data".to_vec();
-let encrypted_payload = tdf_encryption.encrypt(&data)?;
-
-// Create manifest
-let mut manifest = TdfManifest::new(
-    "0.payload".to_string(),
-    "http://kas.example.com".to_string(),
-);
-
-// Update manifest with encryption details
-manifest.encryption_information.method.algorithm = "AES-256-GCM".to_string();
-manifest.encryption_information.method.iv = encrypted_payload.iv.clone();
-manifest.encryption_information.key_access[0].wrapped_key = 
-    encrypted_payload.encrypted_key.clone();
-
-// Set ABAC policy
+// Create a policy
 let policy = Policy::new(
-    AttributePolicy::condition(
-        AttributeIdentifier::from_string("gov.example:clearance")?,
-        Operator::MinimumOf,
-        Some("SECRET".into())
-    ),
+    uuid::Uuid::new_v4().to_string(),
+    vec![],
     vec!["user@example.com".to_string()]
 );
 
-manifest.set_policy(&policy)?;
-manifest.encryption_information.key_access[0].generate_policy_binding(
-    &policy, 
-    tdf_encryption.policy_key()
-)?;
+// Encrypt data - just 4 lines!
+Tdf::encrypt(b"Sensitive data")
+    .kas_url("https://kas.example.com")
+    .policy(policy)
+    .to_file("example.tdf")?;
+```
 
-// Create TDF archive
-let mut builder = TdfArchiveBuilder::new("example.tdf")?;
-builder.add_entry(&manifest, &encrypted_payload.ciphertext.as_bytes(), 0)?;
-builder.finish()?;
+### Encrypt a File
+
+```rust
+use opentdf::{Tdf, Policy};
+
+let policy = Policy::new(
+    uuid::Uuid::new_v4().to_string(),
+    vec![],
+    vec!["user@example.com".to_string()]
+);
+
+Tdf::encrypt_file("input.txt", "output.tdf")
+    .kas_url("https://kas.example.com")
+    .policy(policy)
+    .mime_type("text/plain")
+    .build()?;
+```
+
+### With Attribute-Based Access Control (ABAC)
+
+```rust
+use opentdf::{
+    Tdf, Policy, AttributePolicy, AttributeIdentifier,
+    AttributeValue, Operator
+};
+
+// Create policy with attribute conditions
+let clearance = AttributePolicy::condition(
+    AttributeIdentifier::from_string("gov.example:clearance")?,
+    Operator::MinimumOf,
+    Some("SECRET".into())
+);
+
+let policy = Policy::new(
+    uuid::Uuid::new_v4().to_string(),
+    vec![clearance],
+    vec!["user@example.com".to_string()]
+);
+
+// Encrypt with ABAC policy
+Tdf::encrypt(b"Classified information")
+    .kas_url("https://kas.example.com")
+    .policy(policy)
+    .to_file("classified.tdf")?;
 ```
 
 ## License
