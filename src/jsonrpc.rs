@@ -1,0 +1,478 @@
+//! JSON-RPC integration for TDF (ZTDF-JSON format)
+//!
+//! This module provides support for inline TDF payloads suitable for JSON-RPC protocols
+//! like A2A (Agent-to-Agent) and MCP (Model Context Protocol).
+//!
+//! # Overview
+//!
+//! The ZTDF-JSON format adapts the TDF3 manifest structure for JSON-RPC by inlining
+//! the encrypted payload, eliminating ZIP overhead while maintaining full OpenTDF
+//! compatibility.
+//!
+//! # Example
+//!
+//! ```rust
+//! use opentdf::{Tdf, Policy, jsonrpc::TdfJsonRpc};
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! // Create a policy
+//! let policy = Policy::new(
+//!     uuid::Uuid::new_v4().to_string(),
+//!     vec![],
+//!     vec!["user@example.com".to_string()]
+//! );
+//!
+//! // Encrypt data and get JSON-RPC envelope
+//! let envelope = TdfJsonRpc::encrypt(b"Sensitive data")
+//!     .kas_url("https://kas.example.com")
+//!     .policy(policy)
+//!     .build()?;
+//!
+//! // Serialize to JSON for transmission
+//! let json = serde_json::to_string(&envelope)?;
+//!
+//! // Later: deserialize and decrypt
+//! let envelope: TdfJsonRpc = serde_json::from_str(&json)?;
+//! let plaintext = envelope.decrypt()?;
+//! # Ok(())
+//! # }
+//! ```
+
+use crate::crypto::{TdfEncryption, EncryptionError};
+use crate::manifest::{TdfManifest, Payload, EncryptionInformation, KeyAccess, EncryptionMethod, IntegrityInformation, RootSignature, Segment};
+use crate::policy::Policy;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use serde::{Deserialize, Serialize};
+
+/// TDF envelope for JSON-RPC protocols with inline payload
+///
+/// This structure represents a complete TDF package suitable for transmission
+/// over JSON-RPC protocols. Unlike traditional TDF archives that use ZIP format,
+/// this format includes the encrypted payload inline as a base64-encoded string.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TdfJsonRpc {
+    /// TDF manifest with inline encrypted payload
+    pub manifest: TdfManifestInline,
+    
+    /// TDF specification version
+    pub version: String,
+}
+
+/// TDF manifest with inline payload support
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TdfManifestInline {
+    /// Inline payload (replaces file reference)
+    pub payload: InlinePayload,
+    
+    /// Encryption information including key access and policy
+    #[serde(rename = "encryptionInformation")]
+    pub encryption_information: EncryptionInformation,
+    
+    /// Schema version
+    #[serde(rename = "schemaVersion", skip_serializing_if = "Option::is_none")]
+    pub schema_version: Option<String>,
+}
+
+/// Inline payload for JSON-RPC transport
+///
+/// Instead of referencing a separate file (as in traditional TDF archives),
+/// the encrypted data is included directly as a base64-encoded string.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InlinePayload {
+    /// Payload type (always "inline" for JSON-RPC)
+    #[serde(rename = "type")]
+    pub payload_type: String,
+    
+    /// MIME type of the original (unencrypted) data
+    #[serde(rename = "mimeType")]
+    pub mime_type: String,
+    
+    /// Encoding protocol (always "base64" for binary data)
+    pub protocol: String,
+    
+    /// Base64-encoded encrypted data
+    pub value: String,
+    
+    /// Whether the payload is encrypted
+    #[serde(rename = "isEncrypted")]
+    pub is_encrypted: bool,
+}
+
+/// Builder for creating TDF JSON-RPC envelopes
+pub struct TdfJsonRpcBuilder {
+    data: Vec<u8>,
+    kas_url: Option<String>,
+    policy: Option<Policy>,
+    mime_type: String,
+}
+
+impl TdfJsonRpc {
+    /// Create a new builder for encrypting data into JSON-RPC format
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use opentdf::{Policy, jsonrpc::TdfJsonRpc};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let policy = Policy::new(
+    ///     uuid::Uuid::new_v4().to_string(),
+    ///     vec![],
+    ///     vec!["user@example.com".to_string()]
+    /// );
+    ///
+    /// let envelope = TdfJsonRpc::encrypt(b"Hello, World!")
+    ///     .kas_url("https://kas.example.com")
+    ///     .policy(policy)
+    ///     .mime_type("text/plain")
+    ///     .build()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn encrypt(data: &[u8]) -> TdfJsonRpcBuilder {
+        TdfJsonRpcBuilder {
+            data: data.to_vec(),
+            kas_url: None,
+            policy: None,
+            mime_type: "application/octet-stream".to_string(),
+        }
+    }
+
+    /// Decrypt the inline payload with a provided data encryption key
+    ///
+    /// # Arguments
+    ///
+    /// * `payload_key` - The data encryption key obtained from KAS
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use opentdf::jsonrpc::TdfJsonRpc;
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let envelope: TdfJsonRpc = serde_json::from_str("{...}")?;
+    /// let payload_key = vec![0u8; 32]; // Obtained from KAS
+    ///
+    /// let plaintext = envelope.decrypt_with_key(&payload_key)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn decrypt_with_key(&self, payload_key: &[u8]) -> Result<Vec<u8>, EncryptionError> {
+        use aes_gcm::{
+            aead::{Aead, KeyInit},
+            Aes256Gcm, Nonce,
+        };
+
+        // Decode base64 payload
+        let ciphertext = BASE64.decode(&self.manifest.payload.value)?;
+
+        // Extract IV from encryption method
+        // The IV contains both payload IV (12 bytes) and key IV (12 bytes) concatenated
+        let iv_bytes = BASE64.decode(&self.manifest.encryption_information.method.iv)?;
+        
+        // Extract just the payload IV (first 12 bytes)
+        let payload_iv = if iv_bytes.len() >= 12 {
+            &iv_bytes[0..12]
+        } else {
+            &iv_bytes[..]
+        };
+
+        // Create cipher with payload key
+        let cipher = Aes256Gcm::new_from_slice(payload_key)
+            .map_err(|_| EncryptionError::InvalidKeyLength)?;
+        
+        let nonce = Nonce::from_slice(payload_iv);
+
+        // Decrypt the data
+        let plaintext = cipher
+            .decrypt(nonce, ciphertext.as_ref())
+            .map_err(EncryptionError::AeadError)?;
+
+        Ok(plaintext)
+    }
+
+    /// Convert to standard TDF manifest format (for KAS integration)
+    ///
+    /// This is useful when you need to interact with KAS, which expects
+    /// the standard TDF manifest format.
+    pub fn to_standard_manifest(&self) -> TdfManifest {
+        TdfManifest {
+            payload: Payload {
+                payload_type: "reference".to_string(),
+                url: "inline".to_string(),
+                protocol: "base64".to_string(),
+                is_encrypted: true,
+                mime_type: Some(self.manifest.payload.mime_type.clone()),
+                tdf_spec_version: None,
+            },
+            encryption_information: self.manifest.encryption_information.clone(),
+            schema_version: self.manifest.schema_version.clone(),
+        }
+    }
+}
+
+impl TdfJsonRpcBuilder {
+    /// Set the KAS (Key Access Service) URL
+    pub fn kas_url(mut self, url: &str) -> Self {
+        self.kas_url = Some(url.to_string());
+        self
+    }
+
+    /// Set the access control policy
+    pub fn policy(mut self, policy: Policy) -> Self {
+        self.policy = Some(policy);
+        self
+    }
+
+    /// Set the MIME type of the original data
+    pub fn mime_type(mut self, mime_type: &str) -> Self {
+        self.mime_type = mime_type.to_string();
+        self
+    }
+
+    /// Build the TDF JSON-RPC envelope
+    ///
+    /// This encrypts the data and creates a complete envelope ready for
+    /// transmission over JSON-RPC protocols.
+    pub fn build(self) -> Result<TdfJsonRpc, EncryptionError> {
+        let kas_url = self.kas_url.ok_or(EncryptionError::KeyGenerationError)?;
+        let policy = self.policy.ok_or(EncryptionError::KeyGenerationError)?;
+
+        // Create TdfEncryption instance
+        let tdf_encryption = TdfEncryption::new()?;
+        
+        // Encrypt the data
+        let encrypted_payload = tdf_encryption.encrypt(&self.data)?;
+
+        // Get the payload key for policy binding
+        let payload_key = tdf_encryption.payload_key();
+
+        // Create policy binding
+        let policy_json = serde_json::to_string(&policy)
+            .map_err(|_| EncryptionError::KeyGenerationError)?;
+        let policy_b64 = BASE64.encode(policy_json.as_bytes());
+
+        // Calculate policy binding hash
+        let policy_hash = KeyAccess::calculate_policy_binding(&policy_b64, payload_key)
+            .map_err(|_| EncryptionError::KeyGenerationError)?;
+
+        // Create key access object
+        let key_access = KeyAccess {
+            access_type: "wrapped".to_string(),
+            url: kas_url,
+            kid: None,
+            protocol: "kas".to_string(),
+            wrapped_key: encrypted_payload.encrypted_key.clone(),
+            policy_binding: crate::manifest::PolicyBinding {
+                alg: "HS256".to_string(),
+                hash: policy_hash,
+            },
+            encrypted_metadata: None,
+            schema_version: Some("1.0".to_string()),
+        };
+
+        // Create integrity information (simplified for inline payload)
+        let integrity_info = IntegrityInformation {
+            root_signature: RootSignature {
+                alg: "HS256".to_string(),
+                sig: String::new(), // Would be calculated in production
+            },
+            segment_hash_alg: "GMAC".to_string(),
+            segments: vec![Segment {
+                hash: String::new(),
+                segment_size: Some(self.data.len() as u64),
+                encrypted_segment_size: Some(BASE64.decode(&encrypted_payload.ciphertext)?.len() as u64),
+            }],
+            segment_size_default: self.data.len() as u64,
+            encrypted_segment_size_default: BASE64.decode(&encrypted_payload.ciphertext)?.len() as u64,
+        };
+
+        // Create encryption information
+        let encryption_info = EncryptionInformation {
+            encryption_type: "split".to_string(),
+            key_access: vec![key_access],
+            method: EncryptionMethod {
+                algorithm: "AES-256-GCM".to_string(),
+                is_streamable: true,
+                iv: encrypted_payload.iv.clone(),
+            },
+            integrity_information: integrity_info,
+            policy: policy_b64,
+        };
+
+        // Create inline payload
+        let inline_payload = InlinePayload {
+            payload_type: "inline".to_string(),
+            mime_type: self.mime_type,
+            protocol: "base64".to_string(),
+            value: encrypted_payload.ciphertext,
+            is_encrypted: true,
+        };
+
+        // Create manifest
+        let manifest = TdfManifestInline {
+            payload: inline_payload,
+            encryption_information: encryption_info,
+            schema_version: Some("1.1.0".to_string()),
+        };
+
+        Ok(TdfJsonRpc {
+            manifest,
+            version: "3.0.0".to_string(),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_create_jsonrpc_envelope() {
+        let policy = Policy::new(
+            "test-policy".to_string(),
+            vec![],
+            vec!["user@example.com".to_string()],
+        );
+
+        let envelope = TdfJsonRpc::encrypt(b"Hello, World!")
+            .kas_url("https://kas.example.com")
+            .policy(policy)
+            .mime_type("text/plain")
+            .build()
+            .expect("Failed to create envelope");
+
+        assert_eq!(envelope.version, "3.0.0");
+        assert_eq!(envelope.manifest.payload.payload_type, "inline");
+        assert_eq!(envelope.manifest.payload.mime_type, "text/plain");
+        assert_eq!(envelope.manifest.payload.protocol, "base64");
+        assert!(envelope.manifest.payload.is_encrypted);
+    }
+
+    #[test]
+    fn test_serialize_deserialize() {
+        let policy = Policy::new(
+            "test-policy".to_string(),
+            vec![],
+            vec!["user@example.com".to_string()],
+        );
+
+        let envelope = TdfJsonRpc::encrypt(b"Test data")
+            .kas_url("https://kas.example.com")
+            .policy(policy)
+            .build()
+            .expect("Failed to create envelope");
+
+        // Serialize to JSON
+        let json = serde_json::to_string(&envelope).expect("Failed to serialize");
+
+        // Deserialize back
+        let deserialized: TdfJsonRpc = serde_json::from_str(&json).expect("Failed to deserialize");
+
+        assert_eq!(envelope.version, deserialized.version);
+        assert_eq!(
+            envelope.manifest.payload.value,
+            deserialized.manifest.payload.value
+        );
+    }
+
+    #[test]
+    fn test_decrypt_with_key() {
+        use aes_gcm::{
+            aead::{Aead, KeyInit},
+            Aes256Gcm, Nonce,
+        };
+
+        let policy = Policy::new(
+            "test-policy".to_string(),
+            vec![],
+            vec!["user@example.com".to_string()],
+        );
+
+        let original_data = b"Secret message";
+        
+        // Create encryption with known keys for testing
+        let tdf_encryption = TdfEncryption::new().expect("Failed to create encryption");
+        let payload_key = tdf_encryption.payload_key().to_vec();
+        let policy_key = tdf_encryption.policy_key().to_vec();
+        
+        // Encrypt the data
+        let encrypted_payload = tdf_encryption.encrypt(original_data).expect("Failed to encrypt");
+        
+        // Create policy binding
+        let policy_json = serde_json::to_string(&policy).expect("Failed to serialize policy");
+        let policy_b64 = BASE64.encode(policy_json.as_bytes());
+        let policy_hash = KeyAccess::calculate_policy_binding(&policy_b64, &payload_key)
+            .expect("Failed to calculate policy binding");
+
+        // Create key access object
+        let key_access = KeyAccess {
+            access_type: "wrapped".to_string(),
+            url: "https://kas.example.com".to_string(),
+            kid: None,
+            protocol: "kas".to_string(),
+            wrapped_key: encrypted_payload.encrypted_key.clone(),
+            policy_binding: crate::manifest::PolicyBinding {
+                alg: "HS256".to_string(),
+                hash: policy_hash,
+            },
+            encrypted_metadata: None,
+            schema_version: Some("1.0".to_string()),
+        };
+
+        // Create integrity information
+        let integrity_info = IntegrityInformation {
+            root_signature: RootSignature {
+                alg: "HS256".to_string(),
+                sig: String::new(),
+            },
+            segment_hash_alg: "GMAC".to_string(),
+            segments: vec![Segment {
+                hash: String::new(),
+                segment_size: Some(original_data.len() as u64),
+                encrypted_segment_size: Some(BASE64.decode(&encrypted_payload.ciphertext).unwrap().len() as u64),
+            }],
+            segment_size_default: original_data.len() as u64,
+            encrypted_segment_size_default: BASE64.decode(&encrypted_payload.ciphertext).unwrap().len() as u64,
+        };
+
+        // Create encryption information
+        let encryption_info = EncryptionInformation {
+            encryption_type: "split".to_string(),
+            key_access: vec![key_access],
+            method: EncryptionMethod {
+                algorithm: "AES-256-GCM".to_string(),
+                is_streamable: true,
+                iv: encrypted_payload.iv.clone(),
+            },
+            integrity_information: integrity_info,
+            policy: policy_b64,
+        };
+
+        // Create inline payload
+        let inline_payload = InlinePayload {
+            payload_type: "inline".to_string(),
+            mime_type: "text/plain".to_string(),
+            protocol: "base64".to_string(),
+            value: encrypted_payload.ciphertext,
+            is_encrypted: true,
+        };
+
+        // Create manifest
+        let manifest = TdfManifestInline {
+            payload: inline_payload,
+            encryption_information: encryption_info,
+            schema_version: Some("1.1.0".to_string()),
+        };
+
+        let envelope = TdfJsonRpc {
+            manifest,
+            version: "3.0.0".to_string(),
+        };
+
+        // Decrypt using the payload key
+        let decrypted = envelope.decrypt_with_key(&payload_key).expect("Failed to decrypt");
+
+        assert_eq!(original_data, decrypted.as_slice());
+    }
+}
