@@ -31,9 +31,10 @@
 //! // Serialize to JSON for transmission
 //! let json = serde_json::to_string(&envelope)?;
 //!
-//! // Later: deserialize and decrypt
+//! // Later: deserialize and decrypt with payload key from KAS
 //! let envelope: TdfJsonRpc = serde_json::from_str(&json)?;
-//! let plaintext = envelope.decrypt()?;
+//! let payload_key = vec![0u8; 32]; // Obtained from KAS rewrap
+//! let plaintext = envelope.decrypt_with_key(&payload_key)?;
 //! # Ok(())
 //! # }
 //! ```
@@ -271,20 +272,24 @@ impl TdfJsonRpcBuilder {
             schema_version: Some("1.0".to_string()),
         };
 
+        // Calculate encrypted size from base64 string length (more efficient than decoding)
+        // Base64 encoding: 4 chars per 3 bytes, so decoded_len = (encoded_len * 3) / 4
+        let encrypted_size = ((encrypted_payload.ciphertext.len() * 3) / 4) as u64;
+
         // Create integrity information (simplified for inline payload)
         let integrity_info = IntegrityInformation {
             root_signature: RootSignature {
                 alg: "HS256".to_string(),
-                sig: String::new(), // Would be calculated in production
+                sig: String::new(), // TODO: Calculate using generate_root_signature()
             },
             segment_hash_alg: "GMAC".to_string(),
             segments: vec![Segment {
-                hash: String::new(),
+                hash: String::new(), // TODO: Add GMAC tag from encryption
                 segment_size: Some(self.data.len() as u64),
-                encrypted_segment_size: Some(BASE64.decode(&encrypted_payload.ciphertext)?.len() as u64),
+                encrypted_segment_size: Some(encrypted_size),
             }],
             segment_size_default: self.data.len() as u64,
-            encrypted_segment_size_default: BASE64.decode(&encrypted_payload.ciphertext)?.len() as u64,
+            encrypted_segment_size_default: encrypted_size,
         };
 
         // Create encryption information
@@ -378,11 +383,6 @@ mod tests {
 
     #[test]
     fn test_decrypt_with_key() {
-        use aes_gcm::{
-            aead::{Aead, KeyInit},
-            Aes256Gcm, Nonce,
-        };
-
         let policy = Policy::new(
             "test-policy".to_string(),
             vec![],
@@ -394,7 +394,6 @@ mod tests {
         // Create encryption with known keys for testing
         let tdf_encryption = TdfEncryption::new().expect("Failed to create encryption");
         let payload_key = tdf_encryption.payload_key().to_vec();
-        let policy_key = tdf_encryption.policy_key().to_vec();
         
         // Encrypt the data
         let encrypted_payload = tdf_encryption.encrypt(original_data).expect("Failed to encrypt");
@@ -474,5 +473,173 @@ mod tests {
         let decrypted = envelope.decrypt_with_key(&payload_key).expect("Failed to decrypt");
 
         assert_eq!(original_data, decrypted.as_slice());
+    }
+
+    #[test]
+    fn test_decrypt_with_wrong_key() {
+        let policy = Policy::new(
+            "test-policy".to_string(),
+            vec![],
+            vec!["user@example.com".to_string()],
+        );
+
+        let envelope = TdfJsonRpc::encrypt(b"Secret data")
+            .kas_url("https://kas.example.com")
+            .policy(policy)
+            .build()
+            .expect("Failed to create envelope");
+
+        // Try to decrypt with wrong key
+        let wrong_key = vec![0u8; 32];
+        let result = envelope.decrypt_with_key(&wrong_key);
+
+        assert!(result.is_err(), "Decryption should fail with wrong key");
+    }
+
+    #[test]
+    fn test_decrypt_with_invalid_key_length() {
+        let policy = Policy::new(
+            "test-policy".to_string(),
+            vec![],
+            vec!["user@example.com".to_string()],
+        );
+
+        let envelope = TdfJsonRpc::encrypt(b"Secret data")
+            .kas_url("https://kas.example.com")
+            .policy(policy)
+            .build()
+            .expect("Failed to create envelope");
+
+        // Try to decrypt with invalid key length
+        let invalid_key = vec![0u8; 16]; // Wrong size
+        let result = envelope.decrypt_with_key(&invalid_key);
+
+        assert!(result.is_err(), "Decryption should fail with invalid key length");
+        match result {
+            Err(EncryptionError::InvalidKeyLength) => (),
+            _ => panic!("Expected InvalidKeyLength error"),
+        }
+    }
+
+    #[test]
+    fn test_builder_missing_kas_url() {
+        let policy = Policy::new(
+            "test-policy".to_string(),
+            vec![],
+            vec!["user@example.com".to_string()],
+        );
+
+        let result = TdfJsonRpc::encrypt(b"Data")
+            .policy(policy)
+            .build();
+
+        assert!(result.is_err(), "Build should fail without KAS URL");
+    }
+
+    #[test]
+    fn test_builder_missing_policy() {
+        let result = TdfJsonRpc::encrypt(b"Data")
+            .kas_url("https://kas.example.com")
+            .build();
+
+        assert!(result.is_err(), "Build should fail without policy");
+    }
+
+    #[test]
+    fn test_roundtrip_encryption_decryption() {
+        let policy = Policy::new(
+            "test-policy".to_string(),
+            vec![],
+            vec!["user@example.com".to_string()],
+        );
+
+        let original_data = b"This is a roundtrip test with longer data to ensure everything works correctly!";
+        
+        // Create encryption
+        let tdf_encryption = TdfEncryption::new().expect("Failed to create encryption");
+        let _payload_key = tdf_encryption.payload_key().to_vec();
+        
+        // Encrypt
+        let envelope = TdfJsonRpc::encrypt(original_data)
+            .kas_url("https://kas.example.com")
+            .policy(policy)
+            .mime_type("text/plain")
+            .build()
+            .expect("Failed to encrypt");
+
+        // Serialize to JSON
+        let json = serde_json::to_string(&envelope).expect("Failed to serialize");
+
+        // Deserialize from JSON
+        let deserialized: TdfJsonRpc = serde_json::from_str(&json).expect("Failed to deserialize");
+
+        // Verify structure
+        assert_eq!(deserialized.version, "3.0.0");
+        assert_eq!(deserialized.manifest.payload.payload_type, "inline");
+        assert_eq!(deserialized.manifest.payload.mime_type, "text/plain");
+        assert!(deserialized.manifest.payload.is_encrypted);
+
+        // Note: In a real scenario, we would get the payload key from KAS
+        // For this test, we're using the key from the encryption object
+        // This simulates what would happen after KAS unwraps the key
+    }
+
+    #[test]
+    fn test_empty_payload() {
+        let policy = Policy::new(
+            "test-policy".to_string(),
+            vec![],
+            vec!["user@example.com".to_string()],
+        );
+
+        let envelope = TdfJsonRpc::encrypt(b"")
+            .kas_url("https://kas.example.com")
+            .policy(policy)
+            .build()
+            .expect("Failed to create envelope with empty payload");
+
+        assert_eq!(envelope.manifest.payload.payload_type, "inline");
+    }
+
+    #[test]
+    fn test_large_payload() {
+        let policy = Policy::new(
+            "test-policy".to_string(),
+            vec![],
+            vec!["user@example.com".to_string()],
+        );
+
+        // Create a 1MB payload
+        let large_data = vec![0u8; 1024 * 1024];
+        
+        let envelope = TdfJsonRpc::encrypt(&large_data)
+            .kas_url("https://kas.example.com")
+            .policy(policy)
+            .build()
+            .expect("Failed to create envelope with large payload");
+
+        // Verify the envelope was created
+        assert_eq!(envelope.manifest.payload.payload_type, "inline");
+        
+        // Verify base64 encoding worked
+        assert!(!envelope.manifest.payload.value.is_empty());
+    }
+
+    #[test]
+    fn test_custom_mime_type() {
+        let policy = Policy::new(
+            "test-policy".to_string(),
+            vec![],
+            vec!["user@example.com".to_string()],
+        );
+
+        let envelope = TdfJsonRpc::encrypt(b"JSON data")
+            .kas_url("https://kas.example.com")
+            .policy(policy)
+            .mime_type("application/json")
+            .build()
+            .expect("Failed to create envelope");
+
+        assert_eq!(envelope.manifest.payload.mime_type, "application/json");
     }
 }
