@@ -25,7 +25,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("   ✓ Encryption successful");
     println!("   Version: {}", envelope.version);
-    println!("   Payload type: {}", envelope.manifest.payload.payload_type);
+    println!(
+        "   Payload type: {}",
+        envelope.manifest.payload.payload_type
+    );
     println!("   MIME type: {}", envelope.manifest.payload.mime_type);
 
     println!("\n3. Serializing to JSON...");
@@ -47,15 +50,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("   Encryption type: {}", enc_info.encryption_type);
     println!("   Algorithm: {}", enc_info.method.algorithm);
-    println!("   Segment hash alg: {}", enc_info.integrity_information.segment_hash_alg);
-    println!("   Root signature alg: {}", enc_info.integrity_information.root_signature.alg);
+    println!(
+        "   Segment hash alg: {}",
+        enc_info.integrity_information.segment_hash_alg
+    );
+    println!(
+        "   Root signature alg: {}",
+        enc_info.integrity_information.root_signature.alg
+    );
 
     // Check that root signature is not empty (TODO was implemented)
     if enc_info.integrity_information.root_signature.sig.is_empty() {
         println!("   ⚠ WARNING: Root signature is empty!");
     } else {
-        println!("   ✓ Root signature present: {}...",
-            &enc_info.integrity_information.root_signature.sig[..20]);
+        println!(
+            "   ✓ Root signature present: {}...",
+            &enc_info.integrity_information.root_signature.sig[..20]
+        );
     }
 
     // Check that segment hash is not empty (TODO was implemented)
@@ -70,7 +81,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n6. Deserializing from JSON...");
     let deserialized: TdfJsonRpc = serde_json::from_str(&json)?;
     println!("   ✓ Deserialization successful");
-    println!("   Version match: {}", deserialized.version == envelope.version);
+    println!(
+        "   Version match: {}",
+        deserialized.version == envelope.version
+    );
 
     println!("\n7. KAS endpoint information:");
     println!("   KAS URL: {}", kas_url);
@@ -78,7 +92,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("   Access type: {}", key_access.access_type);
         println!("   Protocol: {}", key_access.protocol);
         println!("   Policy binding alg: {}", key_access.policy_binding.alg);
-        println!("   Policy binding hash: {}...", &key_access.policy_binding.hash[..20]);
+        println!(
+            "   Policy binding hash: {}...",
+            &key_access.policy_binding.hash[..20]
+        );
     }
 
     println!("\n=== ✓ All Sanity Checks Passed! ===");
