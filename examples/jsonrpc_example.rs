@@ -23,7 +23,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. Encrypt data into ZTDF-JSON format
     let original_data = b"This is sensitive data for JSON-RPC transmission";
-    
+
     let envelope = TdfJsonRpc::encrypt(original_data)
         .kas_url("https://kas.example.com")
         .policy(policy)
@@ -34,7 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 3. Serialize to JSON (ready for JSON-RPC transmission)
     let json = serde_json::to_string_pretty(&envelope)?;
-    
+
     println!("\n=== JSON-RPC Envelope ===");
     println!("{}", json);
     println!("\n=== Envelope Size ===");
@@ -42,13 +42,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 4. Simulate transmission and deserialization
     let received_envelope: TdfJsonRpc = serde_json::from_str(&json)?;
-    
+
     println!("\n=== Received Envelope ===");
     println!("Version: {}", received_envelope.version);
-    println!("Payload type: {}", received_envelope.manifest.payload.payload_type);
-    println!("MIME type: {}", received_envelope.manifest.payload.mime_type);
-    println!("Encrypted: {}", received_envelope.manifest.payload.is_encrypted);
-    println!("Algorithm: {}", received_envelope.manifest.encryption_information.method.algorithm);
+    println!(
+        "Payload type: {}",
+        received_envelope.manifest.payload.payload_type
+    );
+    println!(
+        "MIME type: {}",
+        received_envelope.manifest.payload.mime_type
+    );
+    println!(
+        "Encrypted: {}",
+        received_envelope.manifest.payload.is_encrypted
+    );
+    println!(
+        "Algorithm: {}",
+        received_envelope
+            .manifest
+            .encryption_information
+            .method
+            .algorithm
+    );
 
     // 5. In production, you would:
     //    - Extract the wrapped key from key_access

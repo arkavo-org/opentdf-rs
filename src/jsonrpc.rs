@@ -31,16 +31,22 @@
 //! // Serialize to JSON for transmission
 //! let json = serde_json::to_string(&envelope)?;
 //!
-//! // Later: deserialize and decrypt with payload key from KAS
+//! // Later: deserialize (decryption requires actual payload key from KAS)
 //! let envelope: TdfJsonRpc = serde_json::from_str(&json)?;
-//! let payload_key = vec![0u8; 32]; // Obtained from KAS rewrap
-//! let plaintext = envelope.decrypt_with_key(&payload_key)?;
+//! assert_eq!(envelope.version, "3.0.0");
 //! # Ok(())
 //! # }
 //! ```
 
-use crate::crypto::{TdfEncryption, EncryptionError};
-use crate::manifest::{TdfManifest, Payload, EncryptionInformation, KeyAccess, EncryptionMethod, IntegrityInformation, RootSignature, Segment};
+// Allow deprecated warnings for Nonce::from_slice() which is the correct API for aes-gcm 0.10.x
+// This will be resolved when aes-gcm updates to generic-array 1.x
+#![allow(deprecated)]
+
+use crate::crypto::{EncryptionError, TdfEncryption};
+use crate::manifest::{
+    EncryptionInformation, EncryptionMethod, IntegrityInformation, KeyAccess, Payload,
+    RootSignature, Segment, TdfManifest,
+};
 use crate::policy::Policy;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::{Deserialize, Serialize};
@@ -54,7 +60,7 @@ use serde::{Deserialize, Serialize};
 pub struct TdfJsonRpc {
     /// TDF manifest with inline encrypted payload
     pub manifest: TdfManifestInline,
-    
+
     /// TDF specification version
     pub version: String,
 }
@@ -64,11 +70,11 @@ pub struct TdfJsonRpc {
 pub struct TdfManifestInline {
     /// Inline payload (replaces file reference)
     pub payload: InlinePayload,
-    
+
     /// Encryption information including key access and policy
     #[serde(rename = "encryptionInformation")]
     pub encryption_information: EncryptionInformation,
-    
+
     /// Schema version
     #[serde(rename = "schemaVersion", skip_serializing_if = "Option::is_none")]
     pub schema_version: Option<String>,
@@ -83,17 +89,17 @@ pub struct InlinePayload {
     /// Payload type (always "inline" for JSON-RPC)
     #[serde(rename = "type")]
     pub payload_type: String,
-    
+
     /// MIME type of the original (unencrypted) data
     #[serde(rename = "mimeType")]
     pub mime_type: String,
-    
+
     /// Encoding protocol (always "base64" for binary data)
     pub protocol: String,
-    
+
     /// Base64-encoded encrypted data
     pub value: String,
-    
+
     /// Whether the payload is encrypted
     #[serde(rename = "isEncrypted")]
     pub is_encrypted: bool,
@@ -170,7 +176,7 @@ impl TdfJsonRpc {
         // Extract IV from encryption method
         // The IV contains both payload IV (12 bytes) and key IV (12 bytes) concatenated
         let iv_bytes = BASE64.decode(&self.manifest.encryption_information.method.iv)?;
-        
+
         // Extract just the payload IV (first 12 bytes)
         let payload_iv = if iv_bytes.len() >= 12 {
             &iv_bytes[0..12]
@@ -181,7 +187,7 @@ impl TdfJsonRpc {
         // Create cipher with payload key
         let cipher = Aes256Gcm::new_from_slice(payload_key)
             .map_err(|_| EncryptionError::InvalidKeyLength)?;
-        
+
         let nonce = Nonce::from_slice(payload_iv);
 
         // Decrypt the data
@@ -241,7 +247,7 @@ impl TdfJsonRpcBuilder {
 
         // Create TdfEncryption instance
         let tdf_encryption = TdfEncryption::new()?;
-        
+
         // Encrypt the data
         let encrypted_payload = tdf_encryption.encrypt(&self.data)?;
 
@@ -249,8 +255,8 @@ impl TdfJsonRpcBuilder {
         let payload_key = tdf_encryption.payload_key();
 
         // Create policy binding
-        let policy_json = serde_json::to_string(&policy)
-            .map_err(|_| EncryptionError::KeyGenerationError)?;
+        let policy_json =
+            serde_json::to_string(&policy).map_err(|_| EncryptionError::KeyGenerationError)?;
         let policy_b64 = BASE64.encode(policy_json.as_bytes());
 
         // Calculate policy binding hash
@@ -276,21 +282,35 @@ impl TdfJsonRpcBuilder {
         // Base64 encoding: 4 chars per 3 bytes, so decoded_len = (encoded_len * 3) / 4
         let encrypted_size = ((encrypted_payload.ciphertext.len() * 3) / 4) as u64;
 
-        // Create integrity information (simplified for inline payload)
-        let integrity_info = IntegrityInformation {
+        // Extract GMAC tag from encrypted payload (last 16 bytes of ciphertext)
+        // AES-GCM encryption appends the authentication tag to the ciphertext
+        let ciphertext_bytes = BASE64.decode(&encrypted_payload.ciphertext)?;
+        let gmac_tag = if ciphertext_bytes.len() >= 16 {
+            ciphertext_bytes[ciphertext_bytes.len() - 16..].to_vec()
+        } else {
+            return Err(EncryptionError::KeyGenerationError);
+        };
+
+        // Create integrity information with proper root signature
+        let mut integrity_info = IntegrityInformation {
             root_signature: RootSignature {
                 alg: "HS256".to_string(),
-                sig: String::new(), // TODO: Calculate using generate_root_signature()
+                sig: String::new(), // Will be calculated below
             },
             segment_hash_alg: "GMAC".to_string(),
             segments: vec![Segment {
-                hash: String::new(), // TODO: Add GMAC tag from encryption
+                hash: BASE64.encode(&gmac_tag), // GMAC tag from encryption
                 segment_size: Some(self.data.len() as u64),
                 encrypted_segment_size: Some(encrypted_size),
             }],
             segment_size_default: self.data.len() as u64,
             encrypted_segment_size_default: encrypted_size,
         };
+
+        // Calculate root signature over GMAC tags
+        integrity_info
+            .generate_root_signature(&[gmac_tag], payload_key)
+            .map_err(|_| EncryptionError::KeyGenerationError)?;
 
         // Create encryption information
         let encryption_info = EncryptionInformation {
@@ -390,14 +410,16 @@ mod tests {
         );
 
         let original_data = b"Secret message";
-        
+
         // Create encryption with known keys for testing
         let tdf_encryption = TdfEncryption::new().expect("Failed to create encryption");
         let payload_key = tdf_encryption.payload_key().to_vec();
-        
+
         // Encrypt the data
-        let encrypted_payload = tdf_encryption.encrypt(original_data).expect("Failed to encrypt");
-        
+        let encrypted_payload = tdf_encryption
+            .encrypt(original_data)
+            .expect("Failed to encrypt");
+
         // Create policy binding
         let policy_json = serde_json::to_string(&policy).expect("Failed to serialize policy");
         let policy_b64 = BASE64.encode(policy_json.as_bytes());
@@ -429,10 +451,15 @@ mod tests {
             segments: vec![Segment {
                 hash: String::new(),
                 segment_size: Some(original_data.len() as u64),
-                encrypted_segment_size: Some(BASE64.decode(&encrypted_payload.ciphertext).unwrap().len() as u64),
+                encrypted_segment_size: Some(
+                    BASE64.decode(&encrypted_payload.ciphertext).unwrap().len() as u64,
+                ),
             }],
             segment_size_default: original_data.len() as u64,
-            encrypted_segment_size_default: BASE64.decode(&encrypted_payload.ciphertext).unwrap().len() as u64,
+            encrypted_segment_size_default: BASE64
+                .decode(&encrypted_payload.ciphertext)
+                .unwrap()
+                .len() as u64,
         };
 
         // Create encryption information
@@ -470,7 +497,9 @@ mod tests {
         };
 
         // Decrypt using the payload key
-        let decrypted = envelope.decrypt_with_key(&payload_key).expect("Failed to decrypt");
+        let decrypted = envelope
+            .decrypt_with_key(&payload_key)
+            .expect("Failed to decrypt");
 
         assert_eq!(original_data, decrypted.as_slice());
     }
@@ -514,7 +543,10 @@ mod tests {
         let invalid_key = vec![0u8; 16]; // Wrong size
         let result = envelope.decrypt_with_key(&invalid_key);
 
-        assert!(result.is_err(), "Decryption should fail with invalid key length");
+        assert!(
+            result.is_err(),
+            "Decryption should fail with invalid key length"
+        );
         match result {
             Err(EncryptionError::InvalidKeyLength) => (),
             _ => panic!("Expected InvalidKeyLength error"),
@@ -529,9 +561,7 @@ mod tests {
             vec!["user@example.com".to_string()],
         );
 
-        let result = TdfJsonRpc::encrypt(b"Data")
-            .policy(policy)
-            .build();
+        let result = TdfJsonRpc::encrypt(b"Data").policy(policy).build();
 
         assert!(result.is_err(), "Build should fail without KAS URL");
     }
@@ -553,12 +583,13 @@ mod tests {
             vec!["user@example.com".to_string()],
         );
 
-        let original_data = b"This is a roundtrip test with longer data to ensure everything works correctly!";
-        
+        let original_data =
+            b"This is a roundtrip test with longer data to ensure everything works correctly!";
+
         // Create encryption
         let tdf_encryption = TdfEncryption::new().expect("Failed to create encryption");
         let _payload_key = tdf_encryption.payload_key().to_vec();
-        
+
         // Encrypt
         let envelope = TdfJsonRpc::encrypt(original_data)
             .kas_url("https://kas.example.com")
@@ -611,7 +642,7 @@ mod tests {
 
         // Create a 1MB payload
         let large_data = vec![0u8; 1024 * 1024];
-        
+
         let envelope = TdfJsonRpc::encrypt(&large_data)
             .kas_url("https://kas.example.com")
             .policy(policy)
@@ -620,7 +651,7 @@ mod tests {
 
         // Verify the envelope was created
         assert_eq!(envelope.manifest.payload.payload_type, "inline");
-        
+
         // Verify base64 encoding worked
         assert!(!envelope.manifest.payload.value.is_empty());
     }

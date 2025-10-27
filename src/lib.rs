@@ -37,4 +37,4 @@ pub use kas_key::{
 };
 
 // JSON-RPC types
-pub use jsonrpc::{TdfJsonRpc, TdfJsonRpcBuilder, TdfManifestInline, InlinePayload};
+pub use jsonrpc::{InlinePayload, TdfJsonRpc, TdfJsonRpcBuilder, TdfManifestInline};

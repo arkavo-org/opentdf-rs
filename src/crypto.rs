@@ -1,6 +1,10 @@
+// Allow deprecated warnings for Nonce::from_slice() which is the correct API for aes-gcm 0.10.x
+// This will be resolved when aes-gcm updates to generic-array 1.x
+#![allow(deprecated)]
+
 use aes_gcm::{
     aead::{Aead, KeyInit},
-    Aes256Gcm, Key, Nonce,
+    Aes256Gcm, Nonce,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use rand::{rngs::OsRng, RngCore};
@@ -85,7 +89,8 @@ impl TdfEncryption {
         OsRng.fill_bytes(&mut payload_iv);
 
         // Encrypt the actual data using the payload key
-        let payload_cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.payload_key));
+        let payload_cipher = Aes256Gcm::new_from_slice(&self.payload_key)
+            .map_err(|_| EncryptionError::InvalidKeyLength)?;
         let nonce = Nonce::from_slice(&payload_iv);
         let ciphertext = payload_cipher
             .encrypt(nonce, data)
@@ -96,7 +101,8 @@ impl TdfEncryption {
         OsRng.fill_bytes(&mut key_iv);
 
         // Encrypt the payload key using the policy key
-        let policy_cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.policy_key));
+        let policy_cipher = Aes256Gcm::new_from_slice(&self.policy_key)
+            .map_err(|_| EncryptionError::InvalidKeyLength)?;
         let key_nonce = Nonce::from_slice(&key_iv);
         let encrypted_key = policy_cipher
             .encrypt(key_nonce, self.payload_key.as_ref())
@@ -123,7 +129,8 @@ impl TdfEncryption {
         encrypted_key: &[u8],
     ) -> Result<Vec<u8>, EncryptionError> {
         // First decrypt the payload key using the policy key
-        let policy_cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.policy_key));
+        let policy_cipher = Aes256Gcm::new_from_slice(&self.policy_key)
+            .map_err(|_| EncryptionError::InvalidKeyLength)?;
         let nonce = Nonce::from_slice(iv);
 
         self.payload_key = policy_cipher
@@ -131,7 +138,8 @@ impl TdfEncryption {
             .map_err(EncryptionError::AeadError)?;
 
         // Then decrypt the actual data using the decrypted payload key
-        let payload_cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.payload_key));
+        let payload_cipher = Aes256Gcm::new_from_slice(&self.payload_key)
+            .map_err(|_| EncryptionError::InvalidKeyLength)?;
         let payload_nonce = Nonce::from_slice(iv); // Use the same IV for simplicity
         let plaintext = payload_cipher
             .decrypt(payload_nonce, ciphertext)
@@ -154,14 +162,16 @@ impl TdfEncryption {
         let (payload_iv, key_iv) = combined_iv.split_at(12);
 
         // First decrypt the payload key using the policy key
-        let policy_cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(policy_key));
+        let policy_cipher =
+            Aes256Gcm::new_from_slice(policy_key).map_err(|_| EncryptionError::InvalidKeyLength)?;
         let key_nonce = Nonce::from_slice(key_iv);
         let payload_key = policy_cipher
             .decrypt(key_nonce, encrypted_key.as_ref())
             .map_err(EncryptionError::AeadError)?;
 
         // Then decrypt the actual data using the decrypted payload key
-        let payload_cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&payload_key));
+        let payload_cipher = Aes256Gcm::new_from_slice(&payload_key)
+            .map_err(|_| EncryptionError::InvalidKeyLength)?;
         let payload_nonce = Nonce::from_slice(payload_iv);
         let plaintext = payload_cipher
             .decrypt(payload_nonce, ciphertext.as_ref())
@@ -195,7 +205,8 @@ impl TdfEncryption {
         const GCM_IV_SIZE: usize = 12; // 96-bit IV
         const GCM_TAG_SIZE: usize = 16; // 128-bit authentication tag
 
-        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.payload_key));
+        let cipher = Aes256Gcm::new_from_slice(&self.payload_key)
+            .map_err(|_| EncryptionError::InvalidKeyLength)?;
         let mut segments = Vec::new();
         let mut segment_info = Vec::new();
         let mut gmac_tags = Vec::new();
@@ -262,7 +273,8 @@ impl TdfEncryption {
         const GCM_IV_SIZE: usize = 12; // 96-bit IV
         const GCM_TAG_SIZE: usize = 16; // 128-bit authentication tag
 
-        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&self.payload_key));
+        let cipher = Aes256Gcm::new_from_slice(&self.payload_key)
+            .map_err(|_| EncryptionError::InvalidKeyLength)?;
         let mut plaintext = Vec::new();
         let mut gmac_tags = Vec::new();
         let mut offset = 0;
@@ -437,14 +449,16 @@ mod tests {
         OsRng.fill_bytes(&mut payload_iv);
 
         // Encrypt payload directly
-        let payload_cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&tdf.payload_key()));
+        let payload_cipher = Aes256Gcm::new_from_slice(tdf.payload_key())
+            .map_err(|_| EncryptionError::InvalidKeyLength)?;
         let nonce = Nonce::from_slice(&payload_iv);
         let ciphertext = payload_cipher
             .encrypt(nonce, data.as_ref())
             .map_err(EncryptionError::AeadError)?;
 
         // Encrypt the payload key
-        let policy_cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&policy_key));
+        let policy_cipher = Aes256Gcm::new_from_slice(&policy_key)
+            .map_err(|_| EncryptionError::InvalidKeyLength)?;
         let encrypted_key = policy_cipher
             .encrypt(nonce, tdf.payload_key())
             .map_err(EncryptionError::AeadError)?;
@@ -462,7 +476,7 @@ mod tests {
     #[test]
     fn test_invalid_policy_key_length() {
         // Try to create with invalid key length
-        let result = TdfEncryption::with_policy_key(&vec![0u8; 16]);
+        let result = TdfEncryption::with_policy_key(&[0u8; 16]);
         assert!(matches!(result, Err(EncryptionError::InvalidKeyLength)));
     }
 
@@ -496,7 +510,7 @@ mod tests {
         let segmented = tdf.encrypt_with_segments(plaintext, SEGMENT_SIZE)?;
 
         // Verify we got the expected number of segments
-        let expected_segments = (plaintext.len() + SEGMENT_SIZE - 1) / SEGMENT_SIZE;
+        let expected_segments = plaintext.len().div_ceil(SEGMENT_SIZE);
         assert_eq!(segmented.segments.len(), expected_segments);
         assert_eq!(segmented.segment_info.len(), expected_segments);
         assert_eq!(segmented.gmac_tags.len(), expected_segments);

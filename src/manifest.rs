@@ -171,7 +171,7 @@ impl IntegrityInformation {
             .decode(&self.root_signature.sig)
             .map_err(|_| MacError)?;
 
-        if result.into_bytes().as_slice() != expected_sig.as_slice() {
+        if result.into_bytes()[..] != expected_sig[..] {
             return Err(MacError);
         }
 
@@ -263,10 +263,7 @@ impl KeyAccess {
     /// # Returns
     ///
     /// Base64-encoded hex string of the HMAC-SHA256 hash
-    pub fn calculate_policy_binding(
-        policy_base64: &str,
-        key: &[u8],
-    ) -> Result<String, MacError> {
+    pub fn calculate_policy_binding(policy_base64: &str, key: &[u8]) -> Result<String, MacError> {
         type HmacSha256 = Hmac<Sha256>;
 
         let mut mac = <HmacSha256 as KeyInit>::new_from_slice(key).map_err(|_| MacError)?;
