@@ -1,3 +1,7 @@
+// Allow deprecated warnings for Nonce::from_slice() which is the correct API for aes-gcm 0.10.x
+// This will be resolved when aes-gcm updates to generic-array 1.x
+#![allow(deprecated)]
+
 use crate::manifest::TdfManifest;
 use std::fs::File;
 use std::io::{self, Read, Seek, Write};
@@ -93,11 +97,11 @@ impl<'a> TdfEntry<'a> {
             // Create decryption cipher
             use aes_gcm::{
                 aead::{Aead, KeyInit},
-                Aes256Gcm, Key, Nonce,
+                Aes256Gcm, Nonce,
             };
 
-            let key = Key::<Aes256Gcm>::from_slice(&payload_key);
-            let cipher = Aes256Gcm::new(key);
+            let cipher = Aes256Gcm::new_from_slice(&payload_key)
+                .map_err(|_| TdfError::DecryptionError("Invalid key length".to_string()))?;
             let nonce = Nonce::from_slice(&iv);
 
             // Decrypt the payload

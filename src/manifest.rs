@@ -16,7 +16,7 @@ pub struct TdfManifest {
     pub schema_version: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Payload {
     #[serde(rename = "type")]
     pub payload_type: String,
@@ -30,7 +30,7 @@ pub struct Payload {
     pub tdf_spec_version: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EncryptionInformation {
     #[serde(rename = "type")]
     pub encryption_type: String,
@@ -66,7 +66,7 @@ pub struct KeyAccess {
     pub schema_version: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EncryptionMethod {
     pub algorithm: String,
     #[serde(rename = "isStreamable")]
@@ -74,7 +74,7 @@ pub struct EncryptionMethod {
     pub iv: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntegrityInformation {
     #[serde(rename = "rootSignature")]
     pub root_signature: RootSignature,
@@ -87,13 +87,13 @@ pub struct IntegrityInformation {
     pub encrypted_segment_size_default: u64,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RootSignature {
     pub alg: String,
     pub sig: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Segment {
     pub hash: String,
     #[serde(rename = "segmentSize", skip_serializing_if = "Option::is_none")]
@@ -171,7 +171,7 @@ impl IntegrityInformation {
             .decode(&self.root_signature.sig)
             .map_err(|_| MacError)?;
 
-        if result.into_bytes().as_slice() != expected_sig.as_slice() {
+        if result.into_bytes()[..] != expected_sig[..] {
             return Err(MacError);
         }
 
@@ -247,6 +247,34 @@ impl KeyAccess {
     /// Clear encrypted metadata
     pub fn clear_encrypted_metadata(&mut self) {
         self.encrypted_metadata = None;
+    }
+
+    /// Calculate policy binding hash (static helper)
+    ///
+    /// This is a static helper that calculates the policy binding hash
+    /// without modifying a KeyAccess instance. Useful for creating new
+    /// KeyAccess objects with pre-calculated bindings.
+    ///
+    /// # Arguments
+    ///
+    /// * `policy_base64` - Base64-encoded policy JSON
+    /// * `key` - The key to use for HMAC-SHA256
+    ///
+    /// # Returns
+    ///
+    /// Base64-encoded hex string of the HMAC-SHA256 hash
+    pub fn calculate_policy_binding(policy_base64: &str, key: &[u8]) -> Result<String, MacError> {
+        type HmacSha256 = Hmac<Sha256>;
+
+        let mut mac = <HmacSha256 as KeyInit>::new_from_slice(key).map_err(|_| MacError)?;
+        mac.update(policy_base64.as_bytes());
+        let result = mac.finalize();
+
+        // Hex encode the HMAC result to match Go SDK format
+        let hmac_hex = hex::encode(result.into_bytes());
+
+        // Base64 encode the hex string
+        Ok(BASE64.encode(hmac_hex.as_bytes()))
     }
 }
 

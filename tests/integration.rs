@@ -187,7 +187,7 @@ fn test_create_and_read_encrypted_archive() -> Result<(), Box<dyn std::error::Er
     let encrypted_key =
         BASE64.decode(&entry.manifest.encryption_information.key_access[0].wrapped_key)?;
 
-    let decrypted_payload = decryptor.decrypt(&ciphertext, &iv, &encrypted_key)?;
+    let decrypted_payload = decryptor.decrypt(&ciphertext, iv, &encrypted_key)?;
 
     assert_eq!(decrypted_payload, original_data);
     assert_eq!(entry.manifest.payload.url, "0.payload");
@@ -311,7 +311,7 @@ fn test_encrypted_archive_with_policy_verification() -> Result<(), Box<dyn std::
 
     let encrypted_key = BASE64.decode(&encrypted_payload.encrypted_key)?;
 
-    let decrypted = decryptor.decrypt(&ciphertext, &iv, &encrypted_key)?;
+    let decrypted = decryptor.decrypt(&ciphertext, iv, &encrypted_key)?;
     assert_eq!(decrypted, original_data);
 
     Ok(())

@@ -18,6 +18,10 @@
 //! 2. Build unsigned rewrap request with manifest data
 //! 3. Sign request with JWT (ES256)
 //! 4. POST to KAS `/v2/rewrap` endpoint
+
+// Allow deprecated warnings for Nonce::from_slice() which is the correct API for aes-gcm 0.10.x
+// This will be resolved when aes-gcm updates to generic-array 1.x
+#![allow(deprecated)]
 //! 5. Receive wrapped key and session public key
 //! 6. Unwrap key using ECDH + HKDF + AES-GCM
 //!
