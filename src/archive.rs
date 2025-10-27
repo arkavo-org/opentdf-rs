@@ -1,3 +1,7 @@
+// Allow deprecated warnings for Nonce::from_slice() which is the correct API for aes-gcm 0.10.x
+// This will be resolved when aes-gcm updates to generic-array 1.x
+#![allow(deprecated)]
+
 use crate::manifest::TdfManifest;
 use std::fs::File;
 use std::io::{self, Read, Seek, Write};
