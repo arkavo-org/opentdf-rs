@@ -359,14 +359,13 @@
                     uuid: crypto.randomUUID(),
                     body: {
                         attributes: [{
-                            type: "And",
+                            type: "AND",
                             conditions: [{
-                                type: "Condition",
                                 attribute: {
                                     namespace: "gov.example",
                                     name: "clearance"
                                 },
-                                operator: "MinimumOf",
+                                operator: "minimumOf",
                                 value: "SECRET"
                             }]
                         }],
@@ -427,12 +426,11 @@
                 const userAttrs = document.getElementById('user-attrs').value;
 
                 const policy = {
-                    type: "Condition",
                     attribute: {
                         namespace: "gov.example",
                         name: "clearance"
                     },
-                    operator: "Equals",
+                    operator: "equals",
                     value: "TOP_SECRET"
                 };
 
@@ -459,18 +457,16 @@
                 const userAttrs = document.getElementById('user-attrs').value;
 
                 const policy = {
-                    type: "And",
+                    type: "AND",
                     conditions: [
                         {
-                            type: "Condition",
                             attribute: { namespace: "gov.example", name: "clearance" },
-                            operator: "MinimumOf",
+                            operator: "minimumOf",
                             value: "SECRET"
                         },
                         {
-                            type: "Condition",
                             attribute: { namespace: "gov.example", name: "department" },
-                            operator: "Equals",
+                            operator: "equals",
                             value: "ENGINEERING"
                         }
                     ]

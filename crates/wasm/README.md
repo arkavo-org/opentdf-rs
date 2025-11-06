@@ -131,12 +131,11 @@ if (result.success) {
 ```javascript
 // Define an attribute policy
 const policy = {
-  type: "Condition",
   attribute: {
     namespace: "gov.example",
     name: "clearance"
   },
-  operator: "MinimumOf",
+  operator: "minimumOf",
   value: "SECRET"
 };
 
@@ -165,24 +164,22 @@ if (accessResult.success) {
 ```javascript
 // Create a policy requiring both clearance and department
 const complexPolicy = {
-  type: "And",
+  type: "AND",
   conditions: [
     {
-      type: "Condition",
       attribute: {
         namespace: "gov.example",
         name: "clearance"
       },
-      operator: "MinimumOf",
+      operator: "minimumOf",
       value: "SECRET"
     },
     {
-      type: "Condition",
       attribute: {
         namespace: "gov.example",
         name: "department"
       },
-      operator: "In",
+      operator: "in",
       value: ["ENGINEERING", "EXECUTIVE"]
     }
   ]

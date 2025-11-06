@@ -153,7 +153,7 @@ async function runTests() {
                 namespace: "gov.example",
                 name: "clearance"
             },
-            operator: "Equals",
+            operator: "equals",
             value: "TOP_SECRET"
         };
 
@@ -182,12 +182,12 @@ async function runTests() {
             conditions: [
                 {
                     attribute: { namespace: "gov.example", name: "clearance" },
-                    operator: "MinimumOf",
+                    operator: "minimumOf",
                     value: "SECRET"
                 },
                 {
                     attribute: { namespace: "gov.example", name: "department" },
-                    operator: "Equals",
+                    operator: "equals",
                     value: "ENGINEERING"
                 }
             ]
@@ -216,7 +216,7 @@ async function runTests() {
     runTest('Test 6: Deny Access (Insufficient Attributes)', () => {
         const policy = {
             attribute: { namespace: "gov.example", name: "clearance" },
-            operator: "Equals",
+            operator: "equals",
             value: "TOP_SECRET"
         };
 
