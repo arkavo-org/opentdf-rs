@@ -33,6 +33,7 @@ sha1 = { version = "0.10", optional = true }
 
 [dev-dependencies]
 mockito = "1.5"
+criterion = "0.5"
 
 [workspace]
 members = ["crates/mcp-server", "crates/wasm"]
@@ -54,3 +55,7 @@ required-features = ["kas"]
 [[example]]
 name = "create_tdf_with_kas"
 required-features = ["kas"]
+
+[[bench]]
+name = "memory_builder"
+harness = false
