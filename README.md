@@ -819,7 +819,7 @@ rustup target add wasm32-wasip1
 curl https://wasmtime.dev/install.sh -sSf | bash
 
 # Build and run the test
-cd wasi-test
+cd tests/wasi
 cargo build --target wasm32-wasip1 --release
 wasmtime target/wasm32-wasip1/release/opentdf-wasi-test.wasm
 ```
@@ -865,7 +865,7 @@ Archive opened successfully
 - **Memory Usage**: ~5MB peak
 - **Startup Time**: <10ms
 
-For complete WASI documentation and advanced usage, see [wasi-test/README.md](wasi-test/README.md).
+For complete WASI documentation and advanced usage, see [tests/wasi/README.md](tests/wasi/README.md).
 
 ## License
 

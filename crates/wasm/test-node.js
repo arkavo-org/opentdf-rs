@@ -149,7 +149,6 @@ async function runTests() {
     // Test 4: Evaluate simple ABAC policy
     runTest('Test 4: Evaluate Simple ABAC Policy', () => {
         const policy = {
-            type: "Condition",
             attribute: {
                 namespace: "gov.example",
                 name: "clearance"
@@ -179,16 +178,14 @@ async function runTests() {
     // Test 5: Evaluate complex ABAC policy
     runTest('Test 5: Evaluate Complex ABAC Policy', () => {
         const policy = {
-            type: "And",
+            type: "AND",
             conditions: [
                 {
-                    type: "Condition",
                     attribute: { namespace: "gov.example", name: "clearance" },
                     operator: "MinimumOf",
                     value: "SECRET"
                 },
                 {
-                    type: "Condition",
                     attribute: { namespace: "gov.example", name: "department" },
                     operator: "Equals",
                     value: "ENGINEERING"
@@ -218,7 +215,6 @@ async function runTests() {
     // Test 6: Deny access with insufficient attributes
     runTest('Test 6: Deny Access (Insufficient Attributes)', () => {
         const policy = {
-            type: "Condition",
             attribute: { namespace: "gov.example", name: "clearance" },
             operator: "Equals",
             value: "TOP_SECRET"

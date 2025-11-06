@@ -183,7 +183,7 @@ wasmtime --profile target/wasm32-wasip1/release/opentdf-wasi-test.wasm
 
 **Error**: `tokio` or `rayon` compilation failures
 
-**Solution**: This test uses a separate workspace to avoid dev-dependencies. If you see this error, ensure you're building from the `wasi-test/` directory.
+**Solution**: This test uses a separate workspace to avoid dev-dependencies. If you see this error, ensure you're building from the `tests/wasi/` directory.
 
 **Error**: `wasm32-wasip1` target not found
 
