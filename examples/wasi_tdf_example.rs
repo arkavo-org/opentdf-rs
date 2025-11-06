@@ -90,12 +90,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Extracting TDF entry...");
     let entry = archive.get_entry(0)?;
     println!("Entry extracted:");
-    println!("  Manifest payload reference: {}", entry.manifest.encryption_information.int_tdf.encrypted_segment_size_default);
+    println!(
+        "  Encrypted segment size default: {} bytes",
+        entry
+            .manifest
+            .encryption_information
+            .integrity_information
+            .encrypted_segment_size_default
+    );
     println!("  Encrypted payload size: {} bytes", entry.payload.len());
-    println!("  Policy UUID: {}", entry.manifest.assertion_data.as_ref()
-        .and_then(|a| a.unwrap_policy())
+
+    // Try to get policy UUID
+    let policy_uuid = entry
+        .manifest
+        .get_policy()
+        .ok()
         .map(|p| p.uuid.clone())
-        .unwrap_or_else(|| "N/A".to_string()));
+        .unwrap_or_else(|| "N/A".to_string());
+    println!("  Policy UUID: {}", policy_uuid);
 
     println!("\n=== WASI Test Complete ===");
     println!("✓ TDF creation (in-memory) - SUCCESS");

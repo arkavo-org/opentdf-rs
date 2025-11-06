@@ -1,7 +1,6 @@
 use opentdf::{
-    AttributeIdentifier, AttributePolicy, AttributeValue, Policy, TdfArchive,
-    TdfArchiveMemoryBuilder, TdfEncryption, TdfManifest,
-    manifest::PolicyBinding,
+    manifest::PolicyBinding, AttributeIdentifier, AttributePolicy, AttributeValue, Policy,
+    TdfArchive, TdfArchiveMemoryBuilder, TdfEncryption, TdfManifest,
 };
 use std::collections::HashMap;
 use std::io::Cursor;
@@ -87,8 +86,8 @@ fn _tdf_create_impl(data: &str, kas_url: &str, policy_json: &str) -> Result<Stri
         serde_json::from_str(policy_json).map_err(|e| format!("Failed to parse policy: {}", e))?;
 
     // Create TDF encryption instance with generated keys
-    let tdf_encryption = TdfEncryption::new()
-        .map_err(|e| format!("Failed to create encryption: {}", e))?;
+    let tdf_encryption =
+        TdfEncryption::new().map_err(|e| format!("Failed to create encryption: {}", e))?;
 
     // Encrypt the data
     let encrypted_payload = tdf_encryption
