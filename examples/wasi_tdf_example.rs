@@ -1,6 +1,6 @@
 use opentdf::{
-    AttributeIdentifier, AttributePolicy, AttributeValue, Policy, PolicyBody,
-    TdfArchive, TdfArchiveMemoryBuilder, TdfEncryption, TdfManifest,
+    AttributeIdentifier, AttributePolicy, AttributeValue, Policy, PolicyBody, TdfArchive,
+    TdfArchiveMemoryBuilder, TdfEncryption, TdfManifest,
 };
 use std::io::Cursor;
 
@@ -19,11 +19,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "classification".to_string(),
     );
     let attr_value = AttributeValue::String("confidential".to_string());
-    let attr_policy = AttributePolicy::condition(
-        attr_id.clone(),
-        opentdf::Operator::Equals,
-        attr_value,
-    );
+    let attr_policy =
+        AttributePolicy::condition(attr_id.clone(), opentdf::Operator::Equals, attr_value);
 
     let policy = Policy {
         uuid: uuid::Uuid::new_v4().to_string(),
@@ -43,13 +40,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let encrypted_payload = tdf_encryption.encrypt(test_data)?;
     println!("Encryption successful!");
     println!("  IV length: {} bytes", encrypted_payload.iv.len());
-    println!("  Encrypted key length: {} bytes", encrypted_payload.encrypted_key.len());
-    println!("  Ciphertext length: {} bytes (base64)\n", encrypted_payload.ciphertext.len());
+    println!(
+        "  Encrypted key length: {} bytes",
+        encrypted_payload.encrypted_key.len()
+    );
+    println!(
+        "  Ciphertext length: {} bytes (base64)\n",
+        encrypted_payload.ciphertext.len()
+    );
 
     // Decode ciphertext from base64
     use base64::Engine;
-    let ciphertext_bytes = base64::engine::general_purpose::STANDARD
-        .decode(&encrypted_payload.ciphertext)?;
+    let ciphertext_bytes =
+        base64::engine::general_purpose::STANDARD.decode(&encrypted_payload.ciphertext)?;
     println!("Decoded ciphertext: {} bytes\n", ciphertext_bytes.len());
 
     // Create manifest

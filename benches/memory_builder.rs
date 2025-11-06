@@ -1,10 +1,10 @@
+use base64::Engine;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use opentdf::{
     AttributeIdentifier, AttributePolicy, AttributeValue, Policy, PolicyBody, TdfArchive,
     TdfArchiveMemoryBuilder, TdfEncryption, TdfManifest,
 };
 use std::io::Cursor;
-use base64::Engine;
 
 // Helper function to create test data of specific size
 fn create_test_data(size_kb: usize) -> Vec<u8> {
@@ -62,12 +62,14 @@ fn bench_memory_archive_building(c: &mut Criterion) {
             .expect("Failed to encrypt data");
 
         // Decode ciphertext from base64
-        let ciphertext_bytes =
-            base64::engine::general_purpose::STANDARD
-                .decode(&encrypted_payload.ciphertext)
-                .expect("Failed to decode ciphertext");
+        let ciphertext_bytes = base64::engine::general_purpose::STANDARD
+            .decode(&encrypted_payload.ciphertext)
+            .expect("Failed to decode ciphertext");
 
-        let manifest = TdfManifest::new("0.payload".to_string(), "https://kas.example.com".to_string());
+        let manifest = TdfManifest::new(
+            "0.payload".to_string(),
+            "https://kas.example.com".to_string(),
+        );
 
         group.throughput(Throughput::Bytes((size_kb * 1024) as u64));
 
@@ -268,17 +270,24 @@ fn bench_manifest_operations(c: &mut Criterion) {
     });
 
     group.bench_function("serialize_manifest", |b| {
-        let manifest = TdfManifest::new("0.payload".to_string(), "https://kas.example.com".to_string());
+        let manifest = TdfManifest::new(
+            "0.payload".to_string(),
+            "https://kas.example.com".to_string(),
+        );
         b.iter(|| {
             let _json = manifest.to_json().expect("Failed to serialize");
         });
     });
 
     group.bench_function("deserialize_manifest", |b| {
-        let manifest = TdfManifest::new("0.payload".to_string(), "https://kas.example.com".to_string());
+        let manifest = TdfManifest::new(
+            "0.payload".to_string(),
+            "https://kas.example.com".to_string(),
+        );
         let json = manifest.to_json().expect("Failed to serialize");
         b.iter(|| {
-            let _manifest = TdfManifest::from_json(black_box(&json)).expect("Failed to deserialize");
+            let _manifest =
+                TdfManifest::from_json(black_box(&json)).expect("Failed to deserialize");
         });
     });
 
