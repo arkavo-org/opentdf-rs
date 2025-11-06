@@ -1,4 +1,8 @@
-use opentdf::{AttributeIdentifier, AttributePolicy, AttributeValue, Policy, Tdf, TdfArchive};
+use opentdf::{
+    AttributeIdentifier, AttributePolicy, AttributeValue, Policy, TdfArchive,
+    TdfArchiveMemoryBuilder, TdfEncryption, TdfManifest,
+    manifest::PolicyBinding,
+};
 use std::collections::HashMap;
 use std::io::Cursor;
 use wasm_bindgen::prelude::*;
@@ -82,12 +86,49 @@ fn _tdf_create_impl(data: &str, kas_url: &str, policy_json: &str) -> Result<Stri
     let policy: Policy =
         serde_json::from_str(policy_json).map_err(|e| format!("Failed to parse policy: {}", e))?;
 
-    // Create TDF
-    let tdf_bytes = Tdf::encrypt(data_bytes)
-        .kas_url(kas_url)
-        .policy(policy)
-        .to_bytes()
-        .map_err(|e| format!("Failed to create TDF: {}", e))?;
+    // Create TDF encryption instance with generated keys
+    let tdf_encryption = TdfEncryption::new()
+        .map_err(|e| format!("Failed to create encryption: {}", e))?;
+
+    // Encrypt the data
+    let encrypted_payload = tdf_encryption
+        .encrypt(&data_bytes)
+        .map_err(|e| format!("Failed to encrypt: {}", e))?;
+
+    // Decode the base64-encoded ciphertext
+    let ciphertext_bytes = BASE64
+        .decode(&encrypted_payload.ciphertext)
+        .map_err(|e| format!("Failed to decode ciphertext: {}", e))?;
+
+    // Create manifest
+    let mut manifest = TdfManifest::new("0.payload".to_string(), kas_url.to_string());
+
+    // Set policy on manifest
+    manifest
+        .set_policy(&policy)
+        .map_err(|e| format!("Failed to set policy: {}", e))?;
+
+    // Set IV from encrypted payload
+    manifest.encryption_information.method.iv = encrypted_payload.iv.clone();
+
+    // Update key access with encrypted key
+    if let Some(key_access) = manifest.encryption_information.key_access.first_mut() {
+        key_access.wrapped_key = encrypted_payload.encrypted_key.clone();
+        key_access.policy_binding = PolicyBinding {
+            alg: "HS256".to_string(),
+            hash: encrypted_payload.policy_key_hash.clone(),
+        };
+    }
+
+    // Build TDF archive in memory
+    let mut builder = TdfArchiveMemoryBuilder::new();
+    builder
+        .add_entry(&manifest, &ciphertext_bytes, 0)
+        .map_err(|e| format!("Failed to add entry: {}", e))?;
+
+    let tdf_bytes = builder
+        .finish()
+        .map_err(|e| format!("Failed to finish archive: {}", e))?;
 
     // Encode result as base64
     Ok(BASE64.encode(&tdf_bytes))

@@ -17,7 +17,7 @@ pub mod jsonrpc;
 pub use tdf::{Tdf, TdfEncryptBuilder, TdfEncryptFileBuilder};
 
 // Core types
-pub use archive::{TdfArchive, TdfArchiveBuilder, TdfError};
+pub use archive::{TdfArchive, TdfArchiveBuilder, TdfArchiveMemoryBuilder, TdfError};
 pub use crypto::{EncryptedPayload, EncryptionError, SegmentInfo, SegmentedPayload, TdfEncryption};
 pub use manifest::TdfManifest;
 
