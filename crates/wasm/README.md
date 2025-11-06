@@ -12,16 +12,37 @@ WebAssembly bindings for OpenTDF (Trusted Data Format), enabling data-centric se
 
 ## Installation
 
-### Browser (ES Modules)
+### From GitHub Packages (Recommended)
 
-```bash
-npm install @opentdf/opentdf-wasm
+The package is published to GitHub Packages. You'll need a GitHub account and a personal access token.
+
+**Step 1:** Create a GitHub [Personal Access Token](https://github.com/settings/tokens) with `read:packages` permission.
+
+**Step 2:** Configure npm to use GitHub Packages. Create/update `~/.npmrc`:
+
+```
+@arkavo-org:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=YOUR_GITHUB_TOKEN
 ```
 
-### Node.js
+**Step 3:** Install the package:
 
 ```bash
-npm install @opentdf/opentdf-wasm
+npm install @arkavo-org/opentdf-wasm
+```
+
+See [NPM_PUBLISHING.md](NPM_PUBLISHING.md) for detailed installation instructions, CI/CD setup, and troubleshooting.
+
+### From GitHub Releases
+
+Download pre-built WASM binaries without npm:
+
+```bash
+# Download and extract
+wget https://github.com/arkavo-org/opentdf-rs/releases/latest/download/opentdf-wasm-combined.tar.gz
+tar -xzf opentdf-wasm-combined.tar.gz
+
+# Contains web/ and node/ directories ready to use
 ```
 
 ## Usage
@@ -29,7 +50,7 @@ npm install @opentdf/opentdf-wasm
 ### Browser
 
 ```javascript
-import init, { tdf_create, tdf_read, access_evaluate, version } from '@opentdf/opentdf-wasm';
+import init, { tdf_create, tdf_read, access_evaluate, version } from '@arkavo-org/opentdf-wasm';
 
 // Initialize the WASM module
 await init();
@@ -70,7 +91,7 @@ if (result.success) {
 ### Node.js
 
 ```javascript
-const { tdf_create, tdf_read, access_evaluate, version } = require('@opentdf/opentdf-wasm');
+const { tdf_create, tdf_read, access_evaluate, version } = require('@arkavo-org/opentdf-wasm');
 
 console.log('OpenTDF WASM version:', version());
 

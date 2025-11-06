@@ -23,6 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      packages: write
 
     steps:
       - name: Checkout code
@@ -59,20 +60,41 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-target-wasm-release-
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@arkavo-org'
+
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
       - name: Build WASM for Web (Release)
         working-directory: crates/wasm
-        run: wasm-pack build --release --target web --out-dir pkg-web
+        run: wasm-pack build --release --target web --out-dir pkg-web --scope arkavo-org
 
       - name: Build WASM for Node.js (Release)
         working-directory: crates/wasm
-        run: wasm-pack build --release --target nodejs --out-dir pkg-node
+        run: wasm-pack build --release --target nodejs --out-dir pkg-node --scope arkavo-org
 
       - name: Run tests
         working-directory: crates/wasm
         run: wasm-pack test --node
+
+      - name: Publish to GitHub Packages (Web)
+        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
+        working-directory: crates/wasm/pkg-web
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish to GitHub Packages (Node)
+        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
+        working-directory: crates/wasm/pkg-node
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create package archives
         run: |

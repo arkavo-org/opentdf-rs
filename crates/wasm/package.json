@@ -1,5 +1,5 @@
 {
-  "name": "@opentdf/opentdf-wasm",
+  "name": "@arkavo-org/opentdf-wasm",
   "version": "0.3.0",
   "description": "WebAssembly bindings for OpenTDF (Trusted Data Format)",
   "main": "pkg/opentdf_wasm.js",
@@ -7,6 +7,9 @@
   "files": [
     "pkg"
   ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/arkavo-org/opentdf-rs"

@@ -655,26 +655,28 @@ OpenTDF-RS can be compiled to WebAssembly and run in both browser and Node.js en
 
 ### Installation
 
-#### Browser (ES Modules)
+#### From GitHub Packages
 
-Download the latest release from [GitHub Releases](https://github.com/arkavo-org/opentdf-rs/releases) or install via npm:
-
-```bash
-npm install @opentdf/opentdf-wasm
-```
-
-#### Node.js
+Configure npm to use GitHub Packages for `@arkavo-org` scoped packages:
 
 ```bash
-npm install @opentdf/opentdf-wasm
+# Create/update .npmrc
+echo "@arkavo-org:registry=https://npm.pkg.github.com" >> .npmrc
+
+# Install the package
+npm install @arkavo-org/opentdf-wasm
 ```
+
+#### From GitHub Releases
+
+Download pre-built WASM binaries from [GitHub Releases](https://github.com/arkavo-org/opentdf-rs/releases).
 
 ### Quick Start
 
 #### Browser
 
 ```javascript
-import init, { tdf_create, tdf_read, access_evaluate, version } from '@opentdf/opentdf-wasm';
+import init, { tdf_create, tdf_read, access_evaluate, version } from '@arkavo-org/opentdf-wasm';
 
 // Initialize the WASM module
 await init();
@@ -705,7 +707,7 @@ if (result.success) {
 #### Node.js
 
 ```javascript
-const { tdf_create, version } = require('@opentdf/opentdf-wasm');
+const { tdf_create, version } = require('@arkavo-org/opentdf-wasm');
 
 console.log('OpenTDF version:', version());
 
