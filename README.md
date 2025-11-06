@@ -649,6 +649,118 @@ Tdf::encrypt(b"Classified information")
     .to_file("classified.tdf")?;
 ```
 
+## WebAssembly (WASM) Support
+
+OpenTDF-RS can be compiled to WebAssembly and run in both browser and Node.js environments. This enables data-centric security directly in web applications without requiring a server-side component.
+
+### Installation
+
+#### Browser (ES Modules)
+
+Download the latest release from [GitHub Releases](https://github.com/arkavo-org/opentdf-rs/releases) or install via npm:
+
+```bash
+npm install @opentdf/opentdf-wasm
+```
+
+#### Node.js
+
+```bash
+npm install @opentdf/opentdf-wasm
+```
+
+### Quick Start
+
+#### Browser
+
+```javascript
+import init, { tdf_create, tdf_read, access_evaluate, version } from '@opentdf/opentdf-wasm';
+
+// Initialize the WASM module
+await init();
+
+console.log('OpenTDF version:', version());
+
+// Create a TDF
+const data = btoa('Sensitive information'); // Base64 encode
+const policy = {
+  uuid: crypto.randomUUID(),
+  body: {
+    attributes: [],
+    dissem: ['user@example.com']
+  }
+};
+
+const result = tdf_create(
+  data,
+  'https://kas.example.com',
+  JSON.stringify(policy)
+);
+
+if (result.success) {
+  console.log('TDF created:', result.data);
+}
+```
+
+#### Node.js
+
+```javascript
+const { tdf_create, version } = require('@opentdf/opentdf-wasm');
+
+console.log('OpenTDF version:', version());
+
+const data = Buffer.from('Sensitive information').toString('base64');
+const policy = {
+  uuid: require('crypto').randomUUID(),
+  body: {
+    attributes: [],
+    dissem: ['user@example.com']
+  }
+};
+
+const result = tdf_create(data, 'https://kas.example.com', JSON.stringify(policy));
+console.log('Success:', result.success);
+```
+
+### WASM Features
+
+- ✅ TDF archive creation with encryption
+- ✅ TDF manifest reading
+- ✅ Attribute-Based Access Control (ABAC) policy evaluation
+- ✅ Policy creation and validation
+- ✅ Works in browser and Node.js environments
+- ✅ Optimized for size (~200KB gzipped for web)
+
+### Building from Source
+
+```bash
+# Install wasm-pack
+cargo install wasm-pack
+
+# Build for web
+cd crates/wasm
+wasm-pack build --target web --out-dir pkg-web
+
+# Build for Node.js
+wasm-pack build --target nodejs --out-dir pkg-node
+```
+
+### GitHub Releases
+
+WASM artifacts are automatically built and published for:
+- **Feature branches**: Built on every push for testing (artifacts retained 7 days)
+- **Main branch**: Built and retained as latest artifacts (90 days)
+- **Tagged releases**: Full releases with downloadable archives and checksums
+
+Download options:
+- `opentdf-wasm-web.tar.gz` - Web browser target
+- `opentdf-wasm-node.tar.gz` - Node.js target
+- `opentdf-wasm-combined.tar.gz` - Both targets in one archive
+
+All releases include SHA256 checksums for verification.
+
+For complete WASM documentation, see [crates/wasm/README.md](crates/wasm/README.md).
+
 ## License
 
 This project is licensed under [LICENSE].
