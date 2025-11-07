@@ -123,7 +123,9 @@ mod kas_mock_tests {
         assert!(result.is_err(), "Should fail with 401");
         let err = result.unwrap_err();
         assert!(
-            err.to_string().contains("Authentication") || err.to_string().contains("401") || err.to_string().contains("Unauthorized"),
+            err.to_string().contains("Authentication")
+                || err.to_string().contains("401")
+                || err.to_string().contains("Unauthorized"),
             "Error should indicate authentication failure: {}",
             err
         );
