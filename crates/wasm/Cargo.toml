@@ -7,13 +7,19 @@ license = "Apache-2.0"
 repository = "https://github.com/arkavo-org/opentdf-rs"
 
 [package.metadata.wasm-pack.profile.release]
+# Enable wasm-opt for production builds (20-30% size reduction)
+# This optimizes the WASM binary but increases build time
+wasm-opt = ["-O3", "--enable-mutable-globals"]
+
+[package.metadata.wasm-pack.profile.dev]
+# Disable wasm-opt for development (faster builds)
 wasm-opt = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-opentdf = { path = "../..", version = "0.3.0" }
+opentdf = { path = "../..", version = "0.4.0" }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 serde = { version = "1.0", features = ["derive"] }

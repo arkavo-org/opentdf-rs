@@ -318,6 +318,46 @@ Typical bundle sizes:
 
 - Node.js 14+ with WebAssembly support
 
+## KAS Integration Limitations
+
+**The WASM module does not include KAS (Key Access Service) client functionality.**
+
+This is an **architectural decision**, not a missing feature:
+
+### Why KAS is not included:
+1. **Async/HTTP complexity** - KAS requires async HTTP calls which need platform-specific implementations:
+   - Browsers: `fetch()` API via `web-sys` (adds ~50KB)
+   - Node.js: Different HTTP implementation (adds more dependencies)
+   - Both require `wasm-bindgen-futures` for async support
+
+2. **Bundle size** - Adding full KAS support would increase bundle size by 50-100KB and add significant complexity.
+
+3. **Alternative approaches** - Most WASM use cases work better with:
+   - **Server-side KAS** - Use native Rust SDK on server with full KAS support
+   - **JavaScript KAS client** - Call KAS directly from JavaScript, use WASM only for crypto
+   - **Local key encryption** - Use WASM's `tdf_create()` for local encryption without KAS
+
+### Example: Using WASM with external KAS
+```javascript
+// JavaScript calls KAS for key wrapping
+const response = await fetch('https://kas.example.com/api/wrap', {
+  method: 'POST',
+  body: JSON.stringify({ key: myKey })
+});
+const wrappedKey = await response.json();
+
+// WASM handles encryption with the wrapped key
+const tdf = tdf_create(data, kasUrl, JSON.stringify(policy));
+```
+
+If you need full KAS integration, use the native Rust SDK which includes:
+- KAS rewrap protocol
+- OAuth authentication
+- Public key fetching
+- RSA key wrapping
+
+See `examples/create_tdf_platform.rs` and `examples/kas_decrypt.rs` for native KAS usage.
+
 ## Security Considerations
 
 - All cryptographic operations use the same secure primitives as the native Rust library
