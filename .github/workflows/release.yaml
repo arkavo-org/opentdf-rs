@@ -1,42 +1,35 @@
-name: WASM Release
+name: Release
 
 on:
   push:
     branches:
       - main
-    paths:
-      - 'crates/wasm/**'
-      - 'src/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/wasm-release.yml'
     tags:
-      - 'v*'
-  workflow_dispatch:
+      - '[0-9]*'
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-and-release:
-    name: Build and Release WASM
+  build:
+    name: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
       packages: write
 
     steps:
-      - name: Checkout code
+      - name: checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Install Rust toolchain
+      - name: setup-rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
 
-      - name: Cache cargo registry
+      - name: cache-registry
         uses: actions/cache@v4
         with:
           path: ~/.cargo/registry
@@ -44,7 +37,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-registry-
 
-      - name: Cache cargo index
+      - name: cache-git
         uses: actions/cache@v4
         with:
           path: ~/.cargo/git
@@ -52,7 +45,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-git-
 
-      - name: Cache target directory
+      - name: cache-target
         uses: actions/cache@v4
         with:
           path: target
@@ -60,42 +53,40 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-target-wasm-release-
 
-      - name: Setup Node.js
+      - name: setup-node
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           registry-url: 'https://npm.pkg.github.com'
           scope: '@arkavo-org'
 
-      - name: Install wasm-pack
+      - name: install-wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
-      - name: Build WASM for Web (Release)
+      - name: build-wasm
         working-directory: crates/wasm
         run: wasm-pack build --release --target web --out-dir pkg-web --scope arkavo-org
 
-      - name: Run tests
+      - name: test-wasm
         working-directory: crates/wasm
         run: wasm-pack test --headless --firefox
 
-      - name: Publish to GitHub Packages (Web)
+      - name: publish-npm
         if: startsWith(github.ref, 'refs/tags/')
         working-directory: crates/wasm/pkg-web
         run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create package archives
+      - name: create-archive
         run: |
           cd crates/wasm
-          # Create web package
           tar -czf ../../opentdf-wasm-web.tar.gz -C pkg-web .
 
-      - name: Generate checksums
-        run: |
-          sha256sum opentdf-wasm-web.tar.gz > opentdf-wasm-web.tar.gz.sha256
+      - name: generate-checksum
+        run: sha256sum opentdf-wasm-web.tar.gz > opentdf-wasm-web.tar.gz.sha256
 
-      - name: Get version info
+      - name: get-version
         id: version
         run: |
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
@@ -106,7 +97,7 @@ jobs:
             echo "is_release=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Create GitHub Release (for tags)
+      - name: create-release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
@@ -142,7 +133,7 @@ jobs:
           draft: false
           prerelease: false
 
-      - name: Upload artifacts (for main branch)
+      - name: upload-artifacts
         if: github.ref == 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v4
         with:
@@ -152,7 +143,7 @@ jobs:
             opentdf-wasm-web.tar.gz.sha256
           retention-days: 90
 
-      - name: Generate build summary
+      - name: summary
         run: |
           echo "## WASM Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
