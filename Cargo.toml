@@ -41,7 +41,7 @@ members = ["crates/protocol", "crates/crypto", "crates/wasm"]
 version = "0.5.0"
 
 [features]
-default = []
+default = ["kas"]
 mcp = []
 kas = ["reqwest", "tokio", "jsonwebtoken", "opentdf-crypto/kas"]
 
