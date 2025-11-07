@@ -9,7 +9,10 @@
 //! cargo run --example create_tdf_platform --features kas -- /tmp/test-platform.tdf
 //! ```
 
-use opentdf::{wrap_key_with_rsa_oaep, Policy, TdfArchiveBuilder, TdfEncryption, TdfManifest};
+use opentdf::{
+    manifest::{IntegrityInformationExt, KeyAccessExt, TdfManifestExt},
+    wrap_key_with_rsa_oaep, Policy, TdfArchiveBuilder, TdfEncryption, TdfManifest,
+};
 use std::env;
 
 #[tokio::main]

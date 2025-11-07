@@ -2,14 +2,14 @@
 //!
 //! This module provides a clean, fluent API for common TDF operations.
 
-use crate::archive::{TdfArchiveBuilder, TdfError};
+use crate::archive::{TdfArchiveBuilder, TdfArchiveMemoryBuilder, TdfError};
+use crate::manifest::{IntegrityInformationExt, KeyAccessExt, TdfManifest, TdfManifestExt};
+use crate::policy::Policy;
+use opentdf_crypto::TdfEncryption;
+use std::path::Path;
 
 #[cfg(feature = "kas")]
 use crate::archive::TdfArchive;
-use crate::crypto::TdfEncryption;
-use crate::manifest::TdfManifest;
-use crate::policy::Policy;
-use std::path::Path;
 
 #[cfg(feature = "kas")]
 use crate::kas::KasClient;
@@ -78,27 +78,9 @@ impl Tdf {
         TdfEncryptFileBuilder::new(input.as_ref().to_path_buf(), output.as_ref().to_path_buf())
     }
 
-    /// Decrypt a TDF file using KAS
+    /// Decrypt TDF data using a builder pattern
     ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// # use opentdf::{Tdf, kas::KasClient};
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let kas_client = KasClient::new("https://kas.example.com", "token")?;
-    /// let plaintext = Tdf::decrypt_file("encrypted.tdf", &kas_client).await?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    #[cfg(feature = "kas")]
-    pub async fn decrypt_file(
-        path: impl AsRef<Path>,
-        kas_client: &KasClient,
-    ) -> Result<Vec<u8>, TdfError> {
-        TdfArchive::open_and_decrypt(path, kas_client).await
-    }
-
-    /// Decrypt TDF data using KAS
+    /// Returns a builder that allows setting KAS client and output options.
     ///
     /// # Examples
     ///
@@ -107,16 +89,38 @@ impl Tdf {
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let kas_client = KasClient::new("https://kas.example.com", "token")?;
     /// let tdf_data = std::fs::read("encrypted.tdf")?;
-    /// let plaintext = Tdf::decrypt(&tdf_data, &kas_client).await?;
+    /// let plaintext = Tdf::decrypt(tdf_data)
+    ///     .kas_client(kas_client)
+    ///     .to_bytes()
+    ///     .await?;
     /// # Ok(())
     /// # }
     /// ```
     #[cfg(feature = "kas")]
-    pub async fn decrypt(tdf_data: &[u8], kas_client: &KasClient) -> Result<Vec<u8>, TdfError> {
-        let cursor = std::io::Cursor::new(tdf_data);
-        let mut archive = TdfArchive::new(cursor)?;
-        let entry = archive.by_index()?;
-        entry.decrypt_with_kas(kas_client).await
+    pub fn decrypt(data: impl Into<Vec<u8>>) -> TdfDecryptBuilder {
+        TdfDecryptBuilder::new(data.into())
+    }
+
+    /// Decrypt a TDF file using a builder pattern
+    ///
+    /// Returns a builder that allows setting KAS client and output options.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use opentdf::{Tdf, kas::KasClient};
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let kas_client = KasClient::new("https://kas.example.com", "token")?;
+    /// let plaintext = Tdf::decrypt_file("encrypted.tdf")
+    ///     .kas_client(kas_client)
+    ///     .to_bytes()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "kas")]
+    pub fn decrypt_file(path: impl AsRef<Path>) -> TdfDecryptFileBuilder {
+        TdfDecryptFileBuilder::new(path.as_ref().to_path_buf())
     }
 }
 
@@ -142,24 +146,28 @@ impl TdfEncryptBuilder {
     }
 
     /// Set the KAS URL for key access
+    #[must_use]
     pub fn kas_url(mut self, url: impl Into<String>) -> Self {
         self.kas_url = Some(url.into());
         self
     }
 
     /// Set the access control policy
+    #[must_use]
     pub fn policy(mut self, policy: Policy) -> Self {
         self.policy = Some(policy);
         self
     }
 
     /// Set the MIME type for the encrypted data
+    #[must_use]
     pub fn mime_type(mut self, mime_type: impl Into<String>) -> Self {
         self.mime_type = Some(mime_type.into());
         self
     }
 
     /// Set the segment size for encryption (default: 2MB)
+    #[must_use]
     pub fn segment_size(mut self, size: usize) -> Self {
         self.segment_size = size;
         self
@@ -167,34 +175,49 @@ impl TdfEncryptBuilder {
 
     /// Build and return encrypted TDF as bytes
     pub fn to_bytes(self) -> Result<Vec<u8>, TdfError> {
-        let temp_file = tempfile::NamedTempFile::new()?;
-        let temp_path = temp_file.path();
+        let (manifest, segments, _encryption) = self.prepare_tdf()?;
 
-        self.write_to_file(temp_path)?;
-
-        let bytes = std::fs::read(temp_path)?;
-        Ok(bytes)
+        // Use in-memory builder
+        let mut builder = TdfArchiveMemoryBuilder::new();
+        builder.add_entry_with_segments(&manifest, &segments, 0)?;
+        builder.finish()
     }
 
     /// Build and write encrypted TDF to file
     pub fn to_file(self, path: impl AsRef<Path>) -> Result<(), TdfError> {
-        self.write_to_file(path.as_ref())
+        let (manifest, segments, _encryption) = self.prepare_tdf()?;
+
+        // Use file-based builder
+        let mut builder = TdfArchiveBuilder::new(path.as_ref())?;
+        builder.add_entry_with_segments(&manifest, &segments, 0)?;
+        builder.finish()?;
+        Ok(())
     }
 
-    fn write_to_file(self, path: &Path) -> Result<(), TdfError> {
+    /// Prepare TDF components (manifest, segments, encryption)
+    ///
+    /// This shared method is used by both to_bytes() and to_file()
+    fn prepare_tdf(self) -> Result<(TdfManifest, Vec<Vec<u8>>, TdfEncryption), TdfError> {
         // Validate required fields
         let kas_url = self
             .kas_url
-            .ok_or_else(|| TdfError::Structure("KAS URL is required".to_string()))?;
+            .ok_or_else(|| TdfError::MissingRequiredField { field: "kas_url" })?;
 
         // Create encryption
-        let tdf_encryption = TdfEncryption::new()
-            .map_err(|e| TdfError::Structure(format!("Encryption setup failed: {}", e)))?;
+        let tdf_encryption = TdfEncryption::new().map_err(|e| TdfError::CryptoError {
+            algorithm: "AES-256-GCM".to_string(),
+            reason: "Encryption setup failed".to_string(),
+            source: Some(Box::new(e)),
+        })?;
 
         // Encrypt with segments
         let segmented = tdf_encryption
             .encrypt_with_segments(&self.data, self.segment_size)
-            .map_err(|e| TdfError::Structure(format!("Encryption failed: {}", e)))?;
+            .map_err(|e| TdfError::CryptoError {
+                algorithm: "AES-256-GCM".to_string(),
+                reason: "Encryption failed".to_string(),
+                source: Some(Box::new(e)),
+            })?;
 
         // Build manifest
         let mut manifest = TdfManifest::new("0.payload".to_string(), kas_url);
@@ -209,17 +232,24 @@ impl TdfEncryptBuilder {
         if let Some(policy) = self.policy {
             manifest
                 .set_policy(&policy)
-                .map_err(|e| TdfError::Structure(format!("Policy binding failed: {}", e)))?;
+                .map_err(|e| TdfError::PolicyValidationFailed {
+                    policy_id: policy.uuid.clone(),
+                    errors: vec![e.to_string()],
+                })?;
 
             // Generate policy binding
             let policy_json = policy
                 .to_json()
-                .map_err(|e| TdfError::Structure(format!("Policy serialization failed: {}", e)))?;
+                .map_err(|e| TdfError::PolicyValidationFailed {
+                    policy_id: policy.uuid.clone(),
+                    errors: vec![format!("Policy serialization failed: {}", e)],
+                })?;
 
             manifest.encryption_information.key_access[0]
                 .generate_policy_binding_raw(&policy_json, tdf_encryption.payload_key())
-                .map_err(|e| {
-                    TdfError::Structure(format!("Policy binding generation failed: {}", e))
+                .map_err(|e| TdfError::PolicyValidationFailed {
+                    policy_id: policy.uuid.clone(),
+                    errors: vec![format!("Policy binding generation failed: {}", e)],
                 })?;
         }
 
@@ -254,14 +284,13 @@ impl TdfEncryptBuilder {
             .encryption_information
             .integrity_information
             .generate_root_signature(&segmented.gmac_tags, tdf_encryption.payload_key())
-            .map_err(|e| TdfError::Structure(format!("Root signature generation failed: {}", e)))?;
+            .map_err(|e| TdfError::CryptoError {
+                algorithm: "HMAC-SHA256".to_string(),
+                reason: format!("Root signature generation failed: {}", e),
+                source: None,
+            })?;
 
-        // Create archive
-        let mut builder = TdfArchiveBuilder::new(path)?;
-        builder.add_entry_with_segments(&manifest, &segmented.segments, 0)?;
-        builder.finish()?;
-
-        Ok(())
+        Ok((manifest, segmented.segments, tdf_encryption))
     }
 }
 
@@ -289,24 +318,28 @@ impl TdfEncryptFileBuilder {
     }
 
     /// Set the KAS URL for key access
+    #[must_use]
     pub fn kas_url(mut self, url: impl Into<String>) -> Self {
         self.kas_url = Some(url.into());
         self
     }
 
     /// Set the access control policy
+    #[must_use]
     pub fn policy(mut self, policy: Policy) -> Self {
         self.policy = Some(policy);
         self
     }
 
     /// Set the MIME type for the encrypted file
+    #[must_use]
     pub fn mime_type(mut self, mime_type: impl Into<String>) -> Self {
         self.mime_type = Some(mime_type.into());
         self
     }
 
     /// Set the segment size for encryption (default: 2MB)
+    #[must_use]
     pub fn segment_size(mut self, size: usize) -> Self {
         self.segment_size = size;
         self
@@ -333,6 +366,97 @@ impl TdfEncryptFileBuilder {
         builder = builder.segment_size(self.segment_size);
 
         builder.to_file(self.output_path)
+    }
+}
+
+/// Builder for decrypting TDF data
+///
+/// Provides a fluent API for TDF decryption with optional KAS integration.
+#[cfg(feature = "kas")]
+pub struct TdfDecryptBuilder {
+    data: Vec<u8>,
+    kas_client: Option<KasClient>,
+}
+
+#[cfg(feature = "kas")]
+impl TdfDecryptBuilder {
+    pub(crate) fn new(data: Vec<u8>) -> Self {
+        Self {
+            data,
+            kas_client: None,
+        }
+    }
+
+    /// Set the KAS client for key unwrapping
+    #[must_use]
+    pub fn kas_client(mut self, client: KasClient) -> Self {
+        self.kas_client = Some(client);
+        self
+    }
+
+    /// Decrypt and return plaintext as bytes
+    pub async fn to_bytes(self) -> Result<Vec<u8>, TdfError> {
+        let kas_client = self
+            .kas_client
+            .ok_or_else(|| TdfError::MissingRequiredField {
+                field: "kas_client",
+            })?;
+
+        let cursor = std::io::Cursor::new(self.data);
+        let mut archive = TdfArchive::new(cursor)?;
+        let entry = archive.by_index()?;
+        entry.decrypt_with_kas(&kas_client).await
+    }
+
+    /// Decrypt and write plaintext to file
+    pub async fn to_file(self, path: impl AsRef<Path>) -> Result<(), TdfError> {
+        let plaintext = self.to_bytes().await?;
+        std::fs::write(path, plaintext)?;
+        Ok(())
+    }
+}
+
+/// Builder for decrypting TDF files
+///
+/// Provides a fluent API for file-based TDF decryption with optional KAS integration.
+#[cfg(feature = "kas")]
+pub struct TdfDecryptFileBuilder {
+    input_path: std::path::PathBuf,
+    kas_client: Option<KasClient>,
+}
+
+#[cfg(feature = "kas")]
+impl TdfDecryptFileBuilder {
+    pub(crate) fn new(input_path: std::path::PathBuf) -> Self {
+        Self {
+            input_path,
+            kas_client: None,
+        }
+    }
+
+    /// Set the KAS client for key unwrapping
+    #[must_use]
+    pub fn kas_client(mut self, client: KasClient) -> Self {
+        self.kas_client = Some(client);
+        self
+    }
+
+    /// Decrypt and return plaintext as bytes
+    pub async fn to_bytes(self) -> Result<Vec<u8>, TdfError> {
+        let kas_client = self
+            .kas_client
+            .ok_or_else(|| TdfError::MissingRequiredField {
+                field: "kas_client",
+            })?;
+
+        TdfArchive::open_and_decrypt(self.input_path, &kas_client).await
+    }
+
+    /// Decrypt and write plaintext to file
+    pub async fn to_file(self, output_path: impl AsRef<Path>) -> Result<(), TdfError> {
+        let plaintext = self.to_bytes().await?;
+        std::fs::write(output_path, plaintext)?;
+        Ok(())
     }
 }
 
@@ -388,7 +512,9 @@ mod tests {
         let result = Tdf::encrypt(data).to_bytes();
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("KAS URL"));
+        let err = result.unwrap_err();
+        assert_eq!(err.error_code(), "OPENTDF_E_FIELD_REQUIRED");
+        assert!(err.to_string().contains("kas_url"));
     }
 
     #[test]

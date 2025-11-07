@@ -8,13 +8,21 @@ mod kas_mock_tests {
     use mockito::Server;
     use opentdf::{
         kas::{KasClient, KeyType},
+        manifest::TdfManifestExt,
         TdfManifest,
     };
 
     /// Helper to create a valid mock KAS rewrap response
     fn create_mock_rewrap_response(wrapped_key_b64: &str, session_public_key_pem: &str) -> String {
         serde_json::json!({
-            "entityWrappedKey": wrapped_key_b64,
+            "responses": [{
+                "policyId": "00000000-0000-0000-0000-000000000000",
+                "results": [{
+                    "keyAccessObjectId": "kao-0",
+                    "status": "permit",
+                    "entityWrappedKey": wrapped_key_b64
+                }]
+            }],
             "sessionPublicKey": session_public_key_pem
         })
         .to_string()
@@ -31,7 +39,7 @@ mod kas_mock_tests {
             name: "clearance".to_string(),
         };
         let policy = Policy::new(
-            "test-policy-uuid".to_string(),
+            "00000000-0000-0000-0000-000000000000".to_string(), // Valid UUID format (36 chars)
             vec![AttributePolicy::condition(
                 attr_id,
                 Operator::Equals,
@@ -65,7 +73,7 @@ mod kas_mock_tests {
 
         // Create a mock endpoint that validates the request format
         let mock = server
-            .mock("POST", "/v2/rewrap")
+            .mock("POST", "/kas/v2/rewrap")
             .match_header("Authorization", "Bearer mock-token")
             .match_header("Content-Type", "application/json")
             .match_body(mockito::Matcher::Regex(r#".*"signedRequestToken":"eyJ.*"#.to_string()))
@@ -80,7 +88,9 @@ mod kas_mock_tests {
         let kas_url = server.url();
         let client = KasClient::new(&kas_url, "mock-token").unwrap();
 
-        let manifest = create_test_manifest_with_policy(format!("{}/kas", kas_url));
+        // Note: manifest URL should match what's in key_access[0].url
+        // The client will append /kas/v2/rewrap to its base_url
+        let manifest = create_test_manifest_with_policy(kas_url.clone());
 
         // This will fail at unwrap_key stage but validates request format
         let result = client.rewrap_standard_tdf(&manifest).await;
@@ -97,7 +107,7 @@ mod kas_mock_tests {
         let mut server = Server::new_async().await;
 
         let _mock = server
-            .mock("POST", "/v2/rewrap")
+            .mock("POST", "/kas/v2/rewrap")
             .with_status(401)
             .with_header("content-type", "application/json")
             .with_body(r#"{"error": "Unauthorized"}"#)
@@ -106,14 +116,16 @@ mod kas_mock_tests {
         let kas_url = server.url();
         let client = KasClient::new(&kas_url, "invalid-token").unwrap();
 
-        let manifest = create_test_manifest_with_policy(format!("{}/kas", kas_url));
+        let manifest = create_test_manifest_with_policy(kas_url.clone());
 
         let result = client.rewrap_standard_tdf(&manifest).await;
 
         assert!(result.is_err(), "Should fail with 401");
         let err = result.unwrap_err();
         assert!(
-            err.to_string().contains("401") || err.to_string().contains("Unauthorized"),
+            err.to_string().contains("Authentication")
+                || err.to_string().contains("401")
+                || err.to_string().contains("Unauthorized"),
             "Error should indicate authentication failure: {}",
             err
         );
@@ -124,7 +136,7 @@ mod kas_mock_tests {
         let mut server = Server::new_async().await;
 
         let _mock = server
-            .mock("POST", "/v2/rewrap")
+            .mock("POST", "/kas/v2/rewrap")
             .with_status(403)
             .with_header("content-type", "application/json")
             .with_body(r#"{"error": "Access denied: insufficient permissions"}"#)
@@ -133,7 +145,7 @@ mod kas_mock_tests {
         let kas_url = server.url();
         let client = KasClient::new(&kas_url, "valid-token").unwrap();
 
-        let manifest = create_test_manifest_with_policy(format!("{}/kas", kas_url));
+        let manifest = create_test_manifest_with_policy(kas_url.clone());
 
         let result = client.rewrap_standard_tdf(&manifest).await;
 
@@ -151,7 +163,7 @@ mod kas_mock_tests {
         let mut server = Server::new_async().await;
 
         let _mock = server
-            .mock("POST", "/v2/rewrap")
+            .mock("POST", "/kas/v2/rewrap")
             .with_status(500)
             .with_header("content-type", "application/json")
             .with_body(r#"{"error": "Internal server error"}"#)
@@ -160,7 +172,7 @@ mod kas_mock_tests {
         let kas_url = server.url();
         let client = KasClient::new(&kas_url, "valid-token").unwrap();
 
-        let manifest = create_test_manifest_with_policy(format!("{}/kas", kas_url));
+        let manifest = create_test_manifest_with_policy(kas_url.clone());
 
         let result = client.rewrap_standard_tdf(&manifest).await;
 
@@ -178,7 +190,7 @@ mod kas_mock_tests {
         let mut server = Server::new_async().await;
 
         let _mock = server
-            .mock("POST", "/v2/rewrap")
+            .mock("POST", "/kas/v2/rewrap")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"{"invalid": "response"}"#)
@@ -187,7 +199,7 @@ mod kas_mock_tests {
         let kas_url = server.url();
         let client = KasClient::new(&kas_url, "valid-token").unwrap();
 
-        let manifest = create_test_manifest_with_policy(format!("{}/kas", kas_url));
+        let manifest = create_test_manifest_with_policy(kas_url.clone());
 
         let result = client.rewrap_standard_tdf(&manifest).await;
 
@@ -206,7 +218,7 @@ mod kas_mock_tests {
         let kas_url = "http://192.0.2.1:9999"; // TEST-NET address, should timeout
         let client = KasClient::new(kas_url, "token").unwrap();
 
-        let manifest = create_test_manifest_with_policy(format!("{}/kas", kas_url));
+        let manifest = create_test_manifest_with_policy(kas_url.to_string());
 
         let result = client.rewrap_standard_tdf(&manifest).await;
 
@@ -269,7 +281,7 @@ mod kas_mock_tests {
         let mut server = Server::new_async().await;
 
         let _mock = server
-            .mock("POST", "/v2/rewrap")
+            .mock("POST", "/kas/v2/rewrap")
             .match_header("Authorization", "Bearer test-token")
             .match_body(mockito::Matcher::Regex(
                 r#""signedRequestToken":"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+""#
@@ -277,13 +289,13 @@ mod kas_mock_tests {
             ))
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"{"entityWrappedKey": "test", "sessionPublicKey": "test"}"#)
+            .with_body(create_mock_rewrap_response("test", "test"))
             .create();
 
         let kas_url = server.url();
         let client = KasClient::new(&kas_url, "test-token").unwrap();
 
-        let manifest = create_test_manifest_with_policy(format!("{}/kas", kas_url));
+        let manifest = create_test_manifest_with_policy(kas_url.clone());
 
         // Attempt rewrap - will fail at unwrap but validates JWT format
         let _result = client.rewrap_standard_tdf(&manifest).await;

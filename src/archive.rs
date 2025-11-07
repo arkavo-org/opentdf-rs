@@ -10,7 +10,16 @@ use zip::write::FileOptions;
 use zip::{ZipArchive, ZipWriter};
 
 #[cfg(feature = "kas")]
-use crate::kas::{KasClient, KasError};
+use opentdf_protocol::KasError;
+
+#[cfg(feature = "kas")]
+use crate::kas::KasClient;
+
+#[cfg(feature = "kas")]
+use crate::TdfEncryption;
+
+#[cfg(feature = "kas")]
+use crate::manifest::IntegrityInformationExt;
 
 #[derive(Debug)]
 pub struct TdfArchive<R: Read + Seek> {
@@ -47,17 +56,21 @@ impl<'a> TdfEntry<'a> {
     /// ```
     #[cfg(feature = "kas")]
     pub async fn decrypt_with_kas(&self, kas_client: &KasClient) -> Result<Vec<u8>, TdfError> {
-        use crate::crypto::TdfEncryption;
         use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 
         // Unwrap the payload key using KAS
+        // KasClient handles JWT signing internally
         let payload_key = kas_client.rewrap_standard_tdf(&self.manifest).await?;
 
         // Create TDF encryption instance with the unwrapped payload key from KAS
         // IMPORTANT: Use with_payload_key() not with_policy_key()!
         // The key from KAS IS the payload key, not a policy key
-        let tdf_encryption = TdfEncryption::with_payload_key(&payload_key)
-            .map_err(|e| TdfError::CryptoError("Invalid key from KAS".to_string(), Box::new(e)))?;
+        let tdf_encryption =
+            TdfEncryption::with_payload_key(&payload_key).map_err(|e| TdfError::CryptoError {
+                algorithm: "AES-256-GCM".to_string(),
+                reason: "Invalid key from KAS".to_string(),
+                source: Some(Box::new(e)),
+            })?;
 
         // Check if this is a segmented TDF (modern format) or legacy (single block)
         let segments = &self
@@ -68,10 +81,23 @@ impl<'a> TdfEntry<'a> {
 
         if !segments.is_empty() {
             // Modern segmented format
+            // Convert Segment structs to (plaintext_size, encrypted_size) tuples
+            let segment_sizes: Vec<(u64, u64)> = segments
+                .iter()
+                .map(|s| {
+                    (
+                        s.segment_size.unwrap_or(0),
+                        s.encrypted_segment_size.unwrap_or(0),
+                    )
+                })
+                .collect();
+
             let (plaintext, gmac_tags) = tdf_encryption
-                .decrypt_with_segments(&self.payload, segments)
-                .map_err(|e| {
-                    TdfError::CryptoError("Segment decryption failed".to_string(), Box::new(e))
+                .decrypt_with_segments(&self.payload, &segment_sizes)
+                .map_err(|e| TdfError::CryptoError {
+                    algorithm: "AES-256-GCM-segments".to_string(),
+                    reason: "Segment decryption failed".to_string(),
+                    source: Some(Box::new(e)),
                 })?;
 
             // Verify root signature for integrity
@@ -79,11 +105,10 @@ impl<'a> TdfEntry<'a> {
                 .encryption_information
                 .integrity_information
                 .verify_root_signature(&gmac_tags, &payload_key)
-                .map_err(|e| {
-                    TdfError::CryptoError(
-                        "Root signature verification failed".to_string(),
-                        Box::new(e),
-                    )
+                .map_err(|e| TdfError::CryptoError {
+                    algorithm: "GMAC-SHA256".to_string(),
+                    reason: format!("Root signature verification failed: {}", e),
+                    source: None,
                 })?;
 
             Ok(plaintext)
@@ -92,7 +117,10 @@ impl<'a> TdfEntry<'a> {
             let iv_b64 = &self.manifest.encryption_information.method.iv;
             let iv = BASE64
                 .decode(iv_b64)
-                .map_err(|e| TdfError::DecryptionError(format!("Invalid IV encoding: {}", e)))?;
+                .map_err(|e| TdfError::DecryptionFailed {
+                    reason: format!("Invalid IV encoding: {}", e),
+                    algorithm: Some("Base64".to_string()),
+                })?;
 
             // Create decryption cipher
             use aes_gcm::{
@@ -100,13 +128,20 @@ impl<'a> TdfEntry<'a> {
                 Aes256Gcm, Nonce,
             };
 
-            let cipher = Aes256Gcm::new_from_slice(&payload_key)
-                .map_err(|_| TdfError::DecryptionError("Invalid key length".to_string()))?;
+            let cipher = Aes256Gcm::new_from_slice(&payload_key).map_err(|_| {
+                TdfError::DecryptionFailed {
+                    reason: "Invalid key length".to_string(),
+                    algorithm: Some("AES-256-GCM".to_string()),
+                }
+            })?;
             let nonce = Nonce::from_slice(&iv);
 
             // Decrypt the payload
             let plaintext = cipher.decrypt(nonce, self.payload.as_ref()).map_err(|e| {
-                TdfError::DecryptionError(format!("AES-GCM decryption failed: {}", e))
+                TdfError::DecryptionFailed {
+                    reason: format!("AES-GCM decryption failed: {}", e),
+                    algorithm: Some("AES-256-GCM".to_string()),
+                }
             })?;
 
             Ok(plaintext)
@@ -118,21 +153,135 @@ impl<'a> TdfEntry<'a> {
 pub enum TdfError {
     #[error("ZIP error: {0}")]
     ZipError(#[from] zip::result::ZipError),
+
     #[error("JSON error: {0}")]
     JsonError(#[from] serde_json::Error),
+
     #[error("IO error: {0}")]
     IoError(#[from] io::Error),
-    #[error("Invalid TDF structure: {0}")]
-    Structure(String),
+
+    #[error("Invalid manifest: field '{field}' - {reason}")]
+    InvalidManifest {
+        field: String,
+        reason: String,
+        suggestion: Option<String>,
+    },
+
+    #[error("Invalid TDF structure: {reason}")]
+    InvalidStructure {
+        reason: String,
+        expected: Option<String>,
+    },
+
+    #[error("Missing required field: {field}")]
+    MissingRequiredField { field: &'static str },
+
+    #[error("Invalid KAS URL: {url} - {reason}")]
+    InvalidKasUrl { url: String, reason: KasUrlError },
+
+    #[error("Cryptographic operation failed: {algorithm} - {reason}")]
+    CryptoError {
+        algorithm: String,
+        reason: String,
+        #[source]
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
+
     #[cfg(feature = "kas")]
     #[error("KAS error: {0}")]
     KasError(#[from] KasError),
+
     #[cfg(feature = "kas")]
-    #[error("Decryption failed: {0}")]
-    DecryptionError(String),
-    #[cfg(feature = "kas")]
-    #[error("Cryptographic operation failed: {0}")]
-    CryptoError(String, #[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("Decryption failed: {reason}")]
+    DecryptionFailed {
+        reason: String,
+        algorithm: Option<String>,
+    },
+
+    #[error("Policy validation failed for policy '{policy_id}': {errors:?}")]
+    PolicyValidationFailed {
+        policy_id: String,
+        errors: Vec<String>,
+    },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum KasUrlError {
+    #[error("URL must use HTTPS scheme, not HTTP")]
+    NotHttps,
+
+    #[error("Invalid URL scheme: {0}")]
+    InvalidScheme(String),
+
+    #[error("Malformed URL: {0}")]
+    MalformedUrl(String),
+
+    #[error("Missing host in URL")]
+    MissingHost,
+}
+
+impl TdfError {
+    /// Returns true if this error might be resolved by retrying the operation
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            TdfError::IoError(_) => true,
+            #[cfg(feature = "kas")]
+            TdfError::KasError(kas_err) => kas_err.is_retryable(),
+            _ => false,
+        }
+    }
+
+    /// Returns a suggestion for how to fix this error, if available
+    pub fn suggestion(&self) -> Option<&str> {
+        match self {
+            TdfError::InvalidManifest { suggestion, .. } => suggestion.as_deref(),
+            TdfError::InvalidKasUrl {
+                reason: KasUrlError::NotHttps,
+                ..
+            } => Some("Use HTTPS URLs for KAS endpoints (e.g., https://kas.example.com)"),
+            TdfError::MissingRequiredField { field } if *field == "kas_url" => {
+                Some("Provide a KAS URL using .kas_url() on the builder")
+            }
+            _ => None,
+        }
+    }
+
+    /// Returns a stable error code for programmatic error handling
+    ///
+    /// Error codes follow the format: `OPENTDF_E_<CATEGORY>_<SPECIFIC>`
+    /// These codes are stable across versions and safe for:
+    /// - Cross-language bindings (FFI, WASM, etc.)
+    /// - Programmatic error handling
+    /// - Error telemetry and monitoring
+    ///
+    /// # Example
+    /// ```
+    /// # use opentdf::TdfError;
+    /// # fn handle_error(err: TdfError) {
+    /// match err.error_code() {
+    ///     "OPENTDF_E_FIELD_REQUIRED" => { /* handle missing field */ }
+    ///     "OPENTDF_E_KAS" => { /* handle KAS error */ }
+    ///     _ => { /* handle unknown error */ }
+    /// }
+    /// # }
+    /// ```
+    pub fn error_code(&self) -> &'static str {
+        match self {
+            TdfError::ZipError(_) => "OPENTDF_E_ARCHIVE_ZIP",
+            TdfError::JsonError(_) => "OPENTDF_E_ARCHIVE_JSON",
+            TdfError::IoError(_) => "OPENTDF_E_IO",
+            TdfError::InvalidManifest { .. } => "OPENTDF_E_MANIFEST_INVALID",
+            TdfError::InvalidStructure { .. } => "OPENTDF_E_STRUCTURE_INVALID",
+            TdfError::MissingRequiredField { .. } => "OPENTDF_E_FIELD_REQUIRED",
+            TdfError::InvalidKasUrl { .. } => "OPENTDF_E_KAS_URL_INVALID",
+            TdfError::CryptoError { .. } => "OPENTDF_E_CRYPTO",
+            #[cfg(feature = "kas")]
+            TdfError::KasError(_) => "OPENTDF_E_KAS",
+            #[cfg(feature = "kas")]
+            TdfError::DecryptionFailed { .. } => "OPENTDF_E_DECRYPTION_FAILED",
+            TdfError::PolicyValidationFailed { .. } => "OPENTDF_E_POLICY_VALIDATION",
+        }
+    }
 }
 
 impl TdfArchive<File> {
@@ -204,7 +353,10 @@ impl<R: Read + Seek> TdfArchive<R> {
         // Read manifest
         let manifest = {
             let mut manifest_file = self.zip_archive.by_name(&manifest_name).map_err(|_| {
-                TdfError::Structure(format!("Missing manifest file: {}", manifest_name))
+                TdfError::InvalidStructure {
+                    reason: format!("Missing manifest file: {}", manifest_name),
+                    expected: Some("TDF archive should contain manifest.json files".to_string()),
+                }
             })?;
             let mut manifest_contents = String::new();
             manifest_file.read_to_string(&mut manifest_contents)?;
@@ -214,7 +366,10 @@ impl<R: Read + Seek> TdfArchive<R> {
         // Read payload
         let payload = {
             let mut payload_file = self.zip_archive.by_name(&payload_name).map_err(|_| {
-                TdfError::Structure(format!("Missing payload file: {}", payload_name))
+                TdfError::InvalidStructure {
+                    reason: format!("Missing payload file: {}", payload_name),
+                    expected: Some("TDF archive should contain .payload files".to_string()),
+                }
             })?;
             let mut payload = Vec::new();
             payload_file.read_to_end(&mut payload)?;
@@ -451,7 +606,7 @@ mod tests {
         use tempfile::NamedTempFile;
 
         // Create test data for multiple entries
-        let entries = vec![
+        let entries = [
             (
                 TdfManifest::new(
                     "0.payload".to_string(),

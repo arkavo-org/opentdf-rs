@@ -19,7 +19,8 @@ wasm-opt = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-opentdf = { path = "../.." }
+opentdf = { path = "../..", default-features = false }
+opentdf-protocol = { path = "../protocol", version = "0.5.0" }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 serde = { version = "1.0", features = ["derive"] }
@@ -28,8 +29,8 @@ serde-wasm-bindgen = "0.6"
 js-sys = "0.3"
 console_error_panic_hook = "0.1"
 base64 = "0.22"
-chrono = { version = "0.4.35", features = ["serde", "wasmbind"] }
-uuid = { version = "1.8.0", features = ["v4", "serde", "js"] }
+chrono = { version = "0.4", features = ["serde", "wasmbind"] }
+uuid = { version = "1.11", features = ["v4", "serde", "js"] }
 getrandom = { version = "0.2", features = ["js"] }
 
 # KAS (Key Access Service) dependencies

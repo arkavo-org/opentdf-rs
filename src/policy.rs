@@ -6,18 +6,207 @@ use std::ops::Not;
 use thiserror::Error;
 
 /// Attribute-Based Access Control Policy Error
+/// Validation error with structured information
+#[derive(Debug, Clone)]
+pub struct ValidationError {
+    pub field: String,
+    pub error_type: ValidationErrorType,
+    pub message: String,
+    pub suggestion: Option<String>,
+}
+
+impl std::fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.field, self.message)?;
+        if let Some(suggestion) = &self.suggestion {
+            write!(f, " (suggestion: {})", suggestion)?;
+        }
+        Ok(())
+    }
+}
+
+/// Types of validation errors
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValidationErrorType {
+    Required,
+    InvalidFormat,
+    OutOfRange,
+    FqnParseError,
+    NamespaceNotRegistered,
+    InvalidUuid,
+    EmptyList,
+}
+
 #[derive(Debug, Error)]
 pub enum PolicyError {
-    #[error("Invalid attribute format: {0}")]
-    InvalidAttribute(String),
-    #[error("Invalid operator: {0}")]
-    InvalidOperator(String),
-    #[error("Invalid value type: {0}")]
-    InvalidValueType(String),
-    #[error("Policy evaluation error: {0}")]
-    EvaluationError(String),
+    #[error("Invalid attribute: {fqn} - {reason}")]
+    InvalidAttribute { fqn: String, reason: String },
+
+    #[error("Invalid operator '{operator}' in context: {context}")]
+    InvalidOperator { operator: String, context: String },
+
+    #[error("Invalid value type for attribute '{attribute}': expected {expected}, got {actual}")]
+    InvalidValueType {
+        attribute: String,
+        expected: String,
+        actual: String,
+    },
+
+    #[error("Policy evaluation error: {reason}")]
+    EvaluationError {
+        reason: String,
+        attribute: Option<String>,
+    },
+
+    #[error("Policy validation failed with {} error(s)", .0.len())]
+    ValidationFailed(Vec<ValidationError>),
+
     #[error("Serialization error: {0}")]
     SerializationError(#[from] serde_json::Error),
+
+    #[error("FQN parse error: {0}")]
+    FqnError(#[from] FqnError),
+}
+
+/// FQN (Fully Qualified Name) parsing and validation errors
+#[derive(Debug, Error, Clone)]
+pub enum FqnError {
+    #[error("Invalid URL scheme: expected '{expected}', found '{found}'")]
+    InvalidScheme {
+        expected: &'static str,
+        found: String,
+    },
+
+    #[error("URL must use HTTPS scheme: {url}")]
+    NotHttps { url: String },
+
+    #[error("FQN missing required /attr/ structure: {url}")]
+    MissingAttrStructure { url: String },
+
+    #[error("Invalid namespace '{namespace}': {reason}")]
+    InvalidNamespace { namespace: String, reason: String },
+
+    #[error("Namespace not registered: {namespace}")]
+    NamespaceNotRegistered { namespace: String },
+
+    #[error("Malformed URL: {0}")]
+    MalformedUrl(String),
+
+    #[error("Missing required component: {component}")]
+    MissingComponent { component: &'static str },
+}
+
+impl FqnError {
+    /// Returns the error kind for programmatic handling
+    pub fn kind(&self) -> FqnErrorKind {
+        match self {
+            FqnError::InvalidScheme { .. } => FqnErrorKind::InvalidScheme,
+            FqnError::NotHttps { .. } => FqnErrorKind::NotHttps,
+            FqnError::MissingAttrStructure { .. } => FqnErrorKind::MissingAttrStructure,
+            FqnError::InvalidNamespace { .. } => FqnErrorKind::InvalidNamespace,
+            FqnError::NamespaceNotRegistered { .. } => FqnErrorKind::NamespaceNotRegistered,
+            FqnError::MalformedUrl(_) => FqnErrorKind::MalformedUrl,
+            FqnError::MissingComponent { .. } => FqnErrorKind::MissingComponent,
+        }
+    }
+
+    /// Returns a hint for how to fix this error
+    pub fn hint(&self) -> &'static str {
+        match self {
+            FqnError::InvalidScheme { expected, .. } => {
+                if *expected == "https" {
+                    "Use HTTPS scheme: https://example.com/attr/name/value/val"
+                } else {
+                    "Use correct URL scheme"
+                }
+            }
+            FqnError::NotHttps { .. } => {
+                "FQNs must use HTTPS for security. Example: https://example.com/attr/name/value/val"
+            }
+            FqnError::MissingAttrStructure { .. } => {
+                "FQN must follow format: https://<namespace>/attr/<name>/value/<value>"
+            }
+            FqnError::InvalidNamespace { .. } => {
+                "Namespace must be a valid domain-like identifier (lowercase, no special chars)"
+            }
+            FqnError::NamespaceNotRegistered { .. } => {
+                "Register the namespace using NamespaceRegistry::register() before use"
+            }
+            FqnError::MalformedUrl(_) => "Ensure URL is properly formatted with scheme://host/path",
+            FqnError::MissingComponent { component } => match *component {
+                "namespace" => "Provide a namespace: https://namespace.com/...",
+                "name" => "Provide an attribute name: .../attr/name/...",
+                _ => "Ensure all required FQN components are present",
+            },
+        }
+    }
+
+    /// Returns a stable error code
+    pub fn error_code(&self) -> &'static str {
+        match self {
+            FqnError::InvalidScheme { .. } => "OPENTDF_E_FQN_SCHEME_INVALID",
+            FqnError::NotHttps { .. } => "OPENTDF_E_FQN_NOT_HTTPS",
+            FqnError::MissingAttrStructure { .. } => "OPENTDF_E_FQN_STRUCTURE",
+            FqnError::InvalidNamespace { .. } => "OPENTDF_E_FQN_NAMESPACE_INVALID",
+            FqnError::NamespaceNotRegistered { .. } => "OPENTDF_E_FQN_NAMESPACE_UNREGISTERED",
+            FqnError::MalformedUrl(_) => "OPENTDF_E_FQN_MALFORMED",
+            FqnError::MissingComponent { .. } => "OPENTDF_E_FQN_COMPONENT_MISSING",
+        }
+    }
+}
+
+/// Error kind for programmatic FQN error handling
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FqnErrorKind {
+    InvalidScheme,
+    NotHttps,
+    MissingAttrStructure,
+    InvalidNamespace,
+    NamespaceNotRegistered,
+    MalformedUrl,
+    MissingComponent,
+}
+
+impl PolicyError {
+    /// Returns true if this error might be resolved by retrying with different input
+    pub fn is_retryable(&self) -> bool {
+        matches!(self, PolicyError::SerializationError(_))
+    }
+
+    /// Returns a suggestion for how to fix this error, if available
+    pub fn suggestion(&self) -> Option<&str> {
+        match self {
+            PolicyError::InvalidAttribute { .. } => {
+                Some("Use AttributeFqn::parse() to validate FQN format")
+            }
+            PolicyError::ValidationFailed(errors) if !errors.is_empty() => {
+                errors[0].suggestion.as_deref()
+            }
+            PolicyError::FqnError(FqnError::NotHttps { .. }) => Some(
+                "Use HTTPS URLs for attribute FQNs (e.g., https://example.com/attr/name/value/val)",
+            ),
+            PolicyError::FqnError(FqnError::MissingAttrStructure { .. }) => {
+                Some("FQN must follow format: https://<namespace>/attr/<name>/value/<value>")
+            }
+            _ => None,
+        }
+    }
+
+    /// Returns a stable error code for programmatic error handling
+    ///
+    /// Error codes follow the format: `OPENTDF_E_<CATEGORY>_<SPECIFIC>`
+    /// These codes are stable across versions and safe for cross-language bindings.
+    pub fn error_code(&self) -> &'static str {
+        match self {
+            PolicyError::InvalidAttribute { .. } => "OPENTDF_E_POLICY_ATTRIBUTE_INVALID",
+            PolicyError::InvalidOperator { .. } => "OPENTDF_E_POLICY_OPERATOR_INVALID",
+            PolicyError::InvalidValueType { .. } => "OPENTDF_E_POLICY_VALUE_TYPE",
+            PolicyError::EvaluationError { .. } => "OPENTDF_E_POLICY_EVALUATION",
+            PolicyError::ValidationFailed(_) => "OPENTDF_E_POLICY_VALIDATION",
+            PolicyError::SerializationError(_) => "OPENTDF_E_POLICY_SERIALIZATION",
+            PolicyError::FqnError(_) => "OPENTDF_E_FQN",
+        }
+    }
 }
 
 /// Attribute namespace and name
@@ -39,10 +228,10 @@ impl AttributeIdentifier {
     pub fn from_string(s: &str) -> Result<Self, PolicyError> {
         let parts: Vec<&str> = s.split(':').collect();
         if parts.len() != 2 {
-            return Err(PolicyError::InvalidAttribute(format!(
-                "Attribute must be in format 'namespace:name', got: {}",
-                s
-            )));
+            return Err(PolicyError::InvalidAttribute {
+                fqn: s.to_string(),
+                reason: "Attribute must be in format 'namespace:name'".to_string(),
+            });
         }
         Ok(Self::new(parts[0], parts[1]))
     }
@@ -391,9 +580,10 @@ impl AttributePolicy {
 
         // Final result should be on the stack
         if results.len() != 1 {
-            return Err(PolicyError::EvaluationError(
-                "Invalid policy evaluation state".to_string(),
-            ));
+            return Err(PolicyError::EvaluationError {
+                reason: "Invalid policy evaluation state".to_string(),
+                attribute: None,
+            });
         }
 
         Ok(results[0])
@@ -495,6 +685,109 @@ impl Policy {
         after_start && before_end
     }
 
+    /// Validate the policy structure and return all errors found
+    ///
+    /// This performs comprehensive validation including:
+    /// - UUID format validation
+    /// - Time window consistency (valid_from < valid_to)
+    /// - Attribute policy structure validation
+    /// - Dissemination list validation
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use opentdf::prelude::*;
+    ///
+    /// let policy = PolicyBuilder::new()
+    ///     .id_auto()
+    ///     .dissemination(["user@example.com"])
+    ///     .attribute_fqn("https://example.com/attr/clearance/value/secret")?
+    ///     .build()?;
+    ///
+    /// // Validate the policy
+    /// policy.validate()?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn validate(&self) -> Result<(), PolicyError> {
+        let mut errors = Vec::new();
+
+        // Validate UUID format
+        if let Err(e) = uuid::Uuid::parse_str(&self.uuid) {
+            errors.push(ValidationError {
+                field: "uuid".to_string(),
+                error_type: ValidationErrorType::InvalidFormat,
+                message: format!("Invalid UUID format: {}", e),
+                suggestion: Some(
+                    "Use PolicyBuilder::id_auto() to generate a valid UUID".to_string(),
+                ),
+            });
+        }
+
+        // Validate time window
+        if let (Some(from), Some(to)) = (self.valid_from, self.valid_to) {
+            if from >= to {
+                errors.push(ValidationError {
+                    field: "time_window".to_string(),
+                    error_type: ValidationErrorType::OutOfRange,
+                    message: format!("valid_from ({}) must be before valid_to ({})", from, to),
+                    suggestion: Some("Ensure valid_from is earlier than valid_to".to_string()),
+                });
+            }
+        }
+
+        // Validate attribute policies
+        for (idx, attr_policy) in self.body.attributes.iter().enumerate() {
+            if let Err(e) = validate_policy(attr_policy) {
+                errors.push(ValidationError {
+                    field: format!("attributes[{}]", idx),
+                    error_type: ValidationErrorType::InvalidFormat,
+                    message: format!("Invalid attribute policy: {}", e),
+                    suggestion: None,
+                });
+            }
+        }
+
+        // Validate dissemination list
+        if self.body.dissem.is_empty() && !self.body.attributes.is_empty() {
+            errors.push(ValidationError {
+                field: "dissem".to_string(),
+                error_type: ValidationErrorType::EmptyList,
+                message: "Dissemination list is empty but attributes are defined".to_string(),
+                suggestion: Some(
+                    "Add at least one dissemination entity or remove all attributes".to_string(),
+                ),
+            });
+        }
+
+        // Check for duplicate dissemination entities
+        let mut seen = std::collections::HashSet::new();
+        for (idx, entity) in self.body.dissem.iter().enumerate() {
+            if entity.trim().is_empty() {
+                errors.push(ValidationError {
+                    field: format!("dissem[{}]", idx),
+                    error_type: ValidationErrorType::InvalidFormat,
+                    message: "Empty dissemination entity".to_string(),
+                    suggestion: Some("Remove empty entries from dissemination list".to_string()),
+                });
+            } else if !seen.insert(entity) {
+                errors.push(ValidationError {
+                    field: format!("dissem[{}]", idx),
+                    error_type: ValidationErrorType::InvalidFormat,
+                    message: format!("Duplicate dissemination entity: {}", entity),
+                    suggestion: Some(
+                        "Remove duplicate entries from dissemination list".to_string(),
+                    ),
+                });
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(PolicyError::ValidationFailed(errors))
+        }
+    }
+
     /// Evaluate the policy against a set of attributes at the current time
     ///
     /// This method first validates the policy structure, then checks time validity,
@@ -529,6 +822,167 @@ impl Policy {
     }
 }
 
+/// Builder for creating Policy instances with ergonomic defaults
+///
+/// # Example
+///
+/// ```
+/// use opentdf::prelude::*;
+///
+/// let policy = PolicyBuilder::new()
+///     .id_auto()  // Auto-generate UUID
+///     .dissem("user@example.com")
+///     .attribute_fqn("https://example.com/attr/classification/value/secret")?
+///     .valid_for_days(30)
+///     .build()?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug, Default)]
+pub struct PolicyBuilder {
+    uuid: Option<String>,
+    valid_from: Option<DateTime<Utc>>,
+    valid_to: Option<DateTime<Utc>>,
+    attributes: Vec<AttributePolicy>,
+    dissem: Vec<String>,
+}
+
+impl PolicyBuilder {
+    /// Create a new PolicyBuilder
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set a specific UUID for the policy
+    #[must_use]
+    pub fn id(mut self, uuid: impl Into<String>) -> Self {
+        self.uuid = Some(uuid.into());
+        self
+    }
+
+    /// Auto-generate a UUID v4 for the policy
+    #[must_use]
+    pub fn id_auto(mut self) -> Self {
+        self.uuid = Some(uuid::Uuid::new_v4().to_string());
+        self
+    }
+
+    /// Add an attribute policy condition
+    #[must_use]
+    pub fn attribute(mut self, policy: AttributePolicy) -> Self {
+        self.attributes.push(policy);
+        self
+    }
+
+    /// Add an attribute from an FQN string (convenience method)
+    ///
+    /// Creates an equality condition for the attribute value specified in the FQN.
+    /// For example: "https://example.com/attr/classification/value/secret"
+    /// will require classification == "secret"
+    pub fn attribute_fqn(mut self, fqn: impl AsRef<str>) -> Result<Self, PolicyError> {
+        use crate::fqn::AttributeFqn;
+
+        let parsed = AttributeFqn::parse(fqn.as_ref())?;
+        let identifier = parsed.to_identifier();
+
+        if let Some(value) = parsed.get_value() {
+            // Has value - create equality condition
+            self.attributes
+                .push(AttributePolicy::Condition(AttributeCondition {
+                    attribute: identifier,
+                    operator: Operator::Equals,
+                    value: Some(AttributeValue::String(value.to_string())),
+                }));
+        } else {
+            // No value - just check presence
+            self.attributes
+                .push(AttributePolicy::Condition(AttributeCondition {
+                    attribute: identifier,
+                    operator: Operator::Present,
+                    value: None,
+                }));
+        }
+
+        Ok(self)
+    }
+
+    /// Add multiple attribute policies
+    #[must_use]
+    pub fn attributes(mut self, policies: impl IntoIterator<Item = AttributePolicy>) -> Self {
+        self.attributes.extend(policies);
+        self
+    }
+
+    /// Add a dissemination target (entity authorized to access)
+    #[must_use]
+    pub fn dissem(mut self, target: impl Into<String>) -> Self {
+        self.dissem.push(target.into());
+        self
+    }
+
+    /// Add multiple dissemination targets
+    #[must_use]
+    pub fn dissemination(mut self, targets: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.dissem.extend(targets.into_iter().map(|t| t.into()));
+        self
+    }
+
+    /// Set the validity start time
+    #[must_use]
+    pub fn valid_from(mut self, time: DateTime<Utc>) -> Self {
+        self.valid_from = Some(time);
+        self
+    }
+
+    /// Set the validity end time
+    #[must_use]
+    pub fn valid_to(mut self, time: DateTime<Utc>) -> Self {
+        self.valid_to = Some(time);
+        self
+    }
+
+    /// Set validity window (convenience for setting both start and end)
+    #[must_use]
+    pub fn valid_window(mut self, from: DateTime<Utc>, to: DateTime<Utc>) -> Self {
+        self.valid_from = Some(from);
+        self.valid_to = Some(to);
+        self
+    }
+
+    /// Set validity for a duration from now
+    #[must_use]
+    pub fn valid_for(mut self, duration: chrono::Duration) -> Self {
+        let now = Utc::now();
+        self.valid_from = Some(now);
+        self.valid_to = Some(now + duration);
+        self
+    }
+
+    /// Set validity for a number of days from now (convenience)
+    #[must_use]
+    pub fn valid_for_days(self, days: i64) -> Self {
+        self.valid_for(chrono::Duration::days(days))
+    }
+
+    /// Build the Policy
+    ///
+    /// If no UUID was set, one will be auto-generated.
+    pub fn build(self) -> Result<Policy, PolicyError> {
+        let uuid = self
+            .uuid
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+        Ok(Policy {
+            uuid,
+            valid_from: self.valid_from,
+            valid_to: self.valid_to,
+            body: PolicyBody {
+                attributes: self.attributes,
+                dissem: self.dissem,
+            },
+        })
+    }
+}
+
 /// Define clearance level hierarchies
 ///
 /// This allows for a configurable approach to hierarchical attribute values
@@ -550,12 +1004,16 @@ impl Default for ClearanceHierarchy {
     }
 }
 
-lazy_static::lazy_static! {
-    /// Global instance of clearance hierarchy
-    pub static ref CLEARANCE_HIERARCHY: ClearanceHierarchy = {
+/// Global instance of clearance hierarchy
+pub static CLEARANCE_HIERARCHY: std::sync::OnceLock<ClearanceHierarchy> =
+    std::sync::OnceLock::new();
+
+/// Get the clearance hierarchy, initializing it if needed
+fn get_clearance_hierarchy() -> &'static ClearanceHierarchy {
+    CLEARANCE_HIERARCHY.get_or_init(|| {
         // In a production environment, this could be loaded from configuration
         ClearanceHierarchy::default()
-    };
+    })
 }
 
 /// Validate a policy for correctness before evaluation
@@ -585,10 +1043,11 @@ fn validate_condition(condition: &AttributeCondition) -> Result<(), PolicyError>
 
     // For other operators, value is required
     if condition.value.is_none() {
-        return Err(PolicyError::InvalidValueType(format!(
-            "Operator {:?} requires a value",
-            condition.operator
-        )));
+        return Err(PolicyError::InvalidValueType {
+            attribute: condition.attribute.as_string(),
+            expected: "a value".to_string(),
+            actual: "None".to_string(),
+        });
     }
 
     // Validate value types based on operator
@@ -597,10 +1056,11 @@ fn validate_condition(condition: &AttributeCondition) -> Result<(), PolicyError>
             // String array operations
             Operator::AllOf | Operator::AnyOf => {
                 if !matches!(value, AttributeValue::StringArray(_)) {
-                    return Err(PolicyError::InvalidValueType(format!(
-                        "Operator {:?} requires a string array value",
-                        condition.operator
-                    )));
+                    return Err(PolicyError::InvalidValueType {
+                        attribute: condition.attribute.as_string(),
+                        expected: "string array".to_string(),
+                        actual: format!("{:?}", value),
+                    });
                 }
             }
 
@@ -610,20 +1070,22 @@ fn validate_condition(condition: &AttributeCondition) -> Result<(), PolicyError>
                     value,
                     AttributeValue::StringArray(_) | AttributeValue::NumberArray(_)
                 ) {
-                    return Err(PolicyError::InvalidValueType(format!(
-                        "Operator {:?} requires an array value",
-                        condition.operator
-                    )));
+                    return Err(PolicyError::InvalidValueType {
+                        attribute: condition.attribute.as_string(),
+                        expected: "array (string or number)".to_string(),
+                        actual: format!("{:?}", value),
+                    });
                 }
             }
 
             // String operations
             Operator::Contains => {
                 if !matches!(value, AttributeValue::String(_)) {
-                    return Err(PolicyError::InvalidValueType(format!(
-                        "Operator {:?} requires a string value",
-                        condition.operator
-                    )));
+                    return Err(PolicyError::InvalidValueType {
+                        attribute: condition.attribute.as_string(),
+                        expected: "string".to_string(),
+                        actual: format!("{:?}", value),
+                    });
                 }
             }
 
@@ -636,10 +1098,11 @@ fn validate_condition(condition: &AttributeCondition) -> Result<(), PolicyError>
                     value,
                     AttributeValue::Number(_) | AttributeValue::DateTime(_)
                 ) {
-                    return Err(PolicyError::InvalidValueType(format!(
-                        "Operator {:?} requires a numeric or datetime value",
-                        condition.operator
-                    )));
+                    return Err(PolicyError::InvalidValueType {
+                        attribute: condition.attribute.as_string(),
+                        expected: "number or datetime".to_string(),
+                        actual: format!("{:?}", value),
+                    });
                 }
             }
 
@@ -681,9 +1144,10 @@ fn evaluate_condition(
     let expected_value = match &condition.value {
         Some(value) => value,
         None => {
-            return Err(PolicyError::EvaluationError(
-                "Value required for this operator".to_string(),
-            ))
+            return Err(PolicyError::EvaluationError {
+                reason: "Value required for this operator".to_string(),
+                attribute: Some(condition.attribute.as_string()),
+            })
         }
     };
 
@@ -703,43 +1167,57 @@ fn evaluate_condition(
             (AttributeValue::String(haystack), AttributeValue::String(needle)) => {
                 Ok(haystack.contains(needle.as_str()))
             }
-            _ => Err(PolicyError::InvalidValueType(
-                "Contains operator requires string values".to_string(),
-            )),
+            _ => Err(PolicyError::InvalidValueType {
+                attribute: condition.attribute.as_string(),
+                expected: "string values".to_string(),
+                actual: format!("attr={:?}, value={:?}", attr_value, expected_value),
+            }),
         },
         Operator::In => match expected_value {
             AttributeValue::StringArray(values) => match attr_value {
                 AttributeValue::String(s) => Ok(values.contains(s)),
-                _ => Err(PolicyError::InvalidValueType(
-                    "In operator with string array requires string attribute".to_string(),
-                )),
+                _ => Err(PolicyError::InvalidValueType {
+                    attribute: condition.attribute.as_string(),
+                    expected: "string".to_string(),
+                    actual: format!("{:?}", attr_value),
+                }),
             },
             AttributeValue::NumberArray(values) => match attr_value {
                 AttributeValue::Number(n) => Ok(values.contains(n)),
-                _ => Err(PolicyError::InvalidValueType(
-                    "In operator with number array requires number attribute".to_string(),
-                )),
+                _ => Err(PolicyError::InvalidValueType {
+                    attribute: condition.attribute.as_string(),
+                    expected: "number".to_string(),
+                    actual: format!("{:?}", attr_value),
+                }),
             },
-            _ => Err(PolicyError::InvalidValueType(
-                "In operator requires array value".to_string(),
-            )),
+            _ => Err(PolicyError::InvalidValueType {
+                attribute: condition.attribute.as_string(),
+                expected: "array value".to_string(),
+                actual: format!("{:?}", expected_value),
+            }),
         },
         Operator::NotIn => match expected_value {
             AttributeValue::StringArray(values) => match attr_value {
                 AttributeValue::String(s) => Ok(!values.contains(s)),
-                _ => Err(PolicyError::InvalidValueType(
-                    "NotIn operator with string array requires string attribute".to_string(),
-                )),
+                _ => Err(PolicyError::InvalidValueType {
+                    attribute: condition.attribute.as_string(),
+                    expected: "string".to_string(),
+                    actual: format!("{:?}", attr_value),
+                }),
             },
             AttributeValue::NumberArray(values) => match attr_value {
                 AttributeValue::Number(n) => Ok(!values.contains(n)),
-                _ => Err(PolicyError::InvalidValueType(
-                    "NotIn operator with number array requires number attribute".to_string(),
-                )),
+                _ => Err(PolicyError::InvalidValueType {
+                    attribute: condition.attribute.as_string(),
+                    expected: "number".to_string(),
+                    actual: format!("{:?}", attr_value),
+                }),
             },
-            _ => Err(PolicyError::InvalidValueType(
-                "NotIn operator requires array value".to_string(),
-            )),
+            _ => Err(PolicyError::InvalidValueType {
+                attribute: condition.attribute.as_string(),
+                expected: "array value".to_string(),
+                actual: format!("{:?}", expected_value),
+            }),
         },
         Operator::MinimumOf => {
             // Used for hierarchical attributes where higher values include privileges of lower ones
@@ -756,7 +1234,7 @@ fn evaluate_condition(
                     let b_upper = b.to_uppercase();
 
                     // Use the configurable hierarchy
-                    let hierarchy = &*CLEARANCE_HIERARCHY;
+                    let hierarchy = get_clearance_hierarchy();
 
                     // Get level values, defaulting to 0 for unknown values
                     let level_a = hierarchy.levels.get(&a_upper).copied().unwrap_or(0);
@@ -782,7 +1260,7 @@ fn evaluate_condition(
                     let b_upper = b.to_uppercase();
 
                     // Use the configurable hierarchy
-                    let hierarchy = &*CLEARANCE_HIERARCHY;
+                    let hierarchy = get_clearance_hierarchy();
 
                     // Get level values, defaulting to 0 for unknown values
                     let level_a = hierarchy.levels.get(&a_upper).copied().unwrap_or(0);
@@ -798,17 +1276,21 @@ fn evaluate_condition(
             (AttributeValue::StringArray(required), AttributeValue::StringArray(actual)) => {
                 Ok(required.iter().all(|r| actual.contains(r)))
             }
-            _ => Err(PolicyError::InvalidValueType(
-                "AllOf operator requires string arrays".to_string(),
-            )),
+            _ => Err(PolicyError::InvalidValueType {
+                attribute: condition.attribute.as_string(),
+                expected: "string arrays".to_string(),
+                actual: format!("expected={:?}, actual={:?}", expected_value, attr_value),
+            }),
         },
         Operator::AnyOf => match (expected_value, attr_value) {
             (AttributeValue::StringArray(required), AttributeValue::StringArray(actual)) => {
                 Ok(required.iter().any(|r| actual.contains(r)))
             }
-            _ => Err(PolicyError::InvalidValueType(
-                "AnyOf operator requires string arrays".to_string(),
-            )),
+            _ => Err(PolicyError::InvalidValueType {
+                attribute: condition.attribute.as_string(),
+                expected: "string arrays".to_string(),
+                actual: format!("expected={:?}, actual={:?}", expected_value, attr_value),
+            }),
         },
         // These operators are handled above
         Operator::Present | Operator::NotPresent => {
@@ -845,9 +1327,11 @@ where
             // Compare timestamps for date comparisons
             Ok(compare(a.timestamp() as f64, b.timestamp() as f64))
         }
-        _ => Err(PolicyError::InvalidValueType(
-            "Numeric comparison requires number or datetime values".to_string(),
-        )),
+        _ => Err(PolicyError::InvalidValueType {
+            attribute: "unknown".to_string(),
+            expected: "number or datetime".to_string(),
+            actual: format!("actual={:?}, expected={:?}", actual, expected),
+        }),
     }
 }
 
@@ -1193,4 +1677,167 @@ fn test_empty_policy_serialization_compatibility() {
     let parsed = Policy::from_json(&json_str).unwrap();
     assert_eq!(parsed.body.attributes.len(), 0);
     assert_eq!(parsed.body.dissem.len(), 0);
+}
+
+#[test]
+fn test_policy_validate_valid_policy() {
+    // Create a valid policy using the builder
+    let policy = PolicyBuilder::new()
+        .id_auto()
+        .attribute_fqn("https://example.com/attr/clearance/value/secret")
+        .unwrap()
+        .dissemination(["user@example.com"])
+        .build()
+        .unwrap();
+
+    // Should pass validation
+    assert!(policy.validate().is_ok());
+}
+
+#[test]
+fn test_policy_validate_invalid_uuid() {
+    // Create a policy with invalid UUID
+    let policy = Policy::new("not-a-valid-uuid".to_string(), vec![], vec![]);
+
+    let result = policy.validate();
+    assert!(result.is_err());
+
+    if let Err(PolicyError::ValidationFailed(errors)) = result {
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].field, "uuid");
+        assert_eq!(errors[0].error_type, ValidationErrorType::InvalidFormat);
+        assert!(errors[0].suggestion.is_some());
+    } else {
+        panic!("Expected ValidationFailed error");
+    }
+}
+
+#[test]
+fn test_policy_validate_invalid_time_window() {
+    use chrono::Duration;
+
+    let now = Utc::now();
+    let future = now + Duration::days(7);
+    let past = now - Duration::days(7);
+
+    // Create a policy where valid_from is after valid_to
+    let mut policy = PolicyBuilder::new()
+        .id_auto()
+        .dissemination(["user@example.com"])
+        .build()
+        .unwrap();
+
+    policy.valid_from = Some(future);
+    policy.valid_to = Some(past);
+
+    let result = policy.validate();
+    assert!(result.is_err());
+
+    if let Err(PolicyError::ValidationFailed(errors)) = result {
+        assert!(errors.iter().any(|e| e.field == "time_window"));
+        assert!(errors
+            .iter()
+            .any(|e| e.error_type == ValidationErrorType::OutOfRange));
+    } else {
+        panic!("Expected ValidationFailed error");
+    }
+}
+
+#[test]
+fn test_policy_validate_empty_dissem_with_attributes() {
+    // Create a policy with attributes but no dissemination list
+    let attr_policy = AttributePolicy::condition(
+        AttributeIdentifier::new("example.com", "clearance"),
+        Operator::Equals,
+        AttributeValue::String("secret".to_string()),
+    );
+
+    let policy = Policy::new(uuid::Uuid::new_v4().to_string(), vec![attr_policy], vec![]);
+
+    let result = policy.validate();
+    assert!(result.is_err());
+
+    if let Err(PolicyError::ValidationFailed(errors)) = result {
+        assert!(errors.iter().any(|e| e.field == "dissem"));
+        assert!(errors
+            .iter()
+            .any(|e| e.error_type == ValidationErrorType::EmptyList));
+    } else {
+        panic!("Expected ValidationFailed error");
+    }
+}
+
+#[test]
+fn test_policy_validate_duplicate_dissem_entities() {
+    // Create a policy with duplicate dissemination entities
+    let policy = PolicyBuilder::new()
+        .id_auto()
+        .attribute_fqn("https://example.com/attr/clearance/value/secret")
+        .unwrap()
+        .dissemination(["user@example.com", "admin@example.com", "user@example.com"])
+        .build()
+        .unwrap();
+
+    let result = policy.validate();
+    assert!(result.is_err());
+
+    if let Err(PolicyError::ValidationFailed(errors)) = result {
+        assert!(errors.iter().any(|e| e.field.starts_with("dissem[")));
+        assert!(errors
+            .iter()
+            .any(|e| e.message.contains("Duplicate dissemination entity")));
+    } else {
+        panic!("Expected ValidationFailed error");
+    }
+}
+
+#[test]
+fn test_policy_validate_empty_dissem_entry() {
+    // Create a policy with empty dissemination entity
+    let mut policy = PolicyBuilder::new()
+        .id_auto()
+        .attribute_fqn("https://example.com/attr/clearance/value/secret")
+        .unwrap()
+        .dissemination(["user@example.com"])
+        .build()
+        .unwrap();
+
+    // Manually add empty entry
+    policy.body.dissem.push("".to_string());
+    policy.body.dissem.push("  ".to_string()); // whitespace only
+
+    let result = policy.validate();
+    assert!(result.is_err());
+
+    if let Err(PolicyError::ValidationFailed(errors)) = result {
+        assert!(errors.len() >= 2); // At least 2 empty entries
+        assert!(errors
+            .iter()
+            .any(|e| e.message.contains("Empty dissemination entity")));
+    } else {
+        panic!("Expected ValidationFailed error");
+    }
+}
+
+#[test]
+fn test_policy_validate_multiple_errors() {
+    // Create a policy with multiple validation errors
+    let mut policy = Policy::new("invalid-uuid".to_string(), vec![], vec![]);
+
+    // Add invalid time window
+    let now = Utc::now();
+    policy.valid_from = Some(now);
+    policy.valid_to = Some(now - chrono::Duration::days(1));
+
+    let result = policy.validate();
+    assert!(result.is_err());
+
+    if let Err(PolicyError::ValidationFailed(errors)) = result {
+        // Should have at least 2 errors (invalid UUID, invalid time window)
+        assert!(errors.len() >= 2);
+        assert!(errors.iter().any(|e| e.field == "uuid"));
+        assert!(errors.iter().any(|e| e.field == "time_window"));
+    } else {
+        panic!("Expected ValidationFailed error");
+    }
 }

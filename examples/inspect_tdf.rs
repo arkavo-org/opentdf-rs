@@ -2,7 +2,7 @@
 //!
 //! This example inspects TDF files without attempting decryption.
 
-use opentdf::TdfArchive;
+use opentdf::{manifest::TdfManifestExt, TdfArchive};
 use std::env;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -8,22 +8,23 @@
 //! ## Standard TDF (TDF3, ZTDF) - RSA-2048:
 //! 1. Generate ephemeral RSA-2048 key pair
 //! 2. Build unsigned rewrap request with manifest data
-//! 3. Sign request with JWT (ES256)
+//! 3. Accept pre-signed JWT token (ES256) - see `examples/jwt_helper.rs`
 //! 4. POST to KAS `/v2/rewrap` endpoint
 //! 5. Receive RSA-encrypted wrapped key
-//! 6. Unwrap key using RSA-OAEP (SHA-256)
+//! 6. Unwrap key using RSA-OAEP (SHA-1 default, SHA-256 available)
 //!
 //! ## NanoTDF - EC P-256:
 //! 1. Generate ephemeral EC P-256 key pair
 //! 2. Build unsigned rewrap request with manifest data
-//! 3. Sign request with JWT (ES256)
+//! 3. Accept pre-signed JWT token (ES256) - see `examples/jwt_helper.rs`
 //! 4. POST to KAS `/v2/rewrap` endpoint
-
-// Allow deprecated warnings for Nonce::from_slice() which is the correct API for aes-gcm 0.10.x
-// This will be resolved when aes-gcm updates to generic-array 1.x
-#![allow(deprecated)]
 //! 5. Receive wrapped key and session public key
 //! 6. Unwrap key using ECDH + HKDF + AES-GCM
+//!
+//! # JWT Token Creation
+//!
+//! This client requires pre-signed JWT tokens. For a complete JWT helper implementation,
+//! see `examples/jwt_helper.rs`.
 //!
 //! # Example
 //!
@@ -42,171 +43,40 @@
 //!     "http://kas.example.com".to_string()
 //! );
 //!
-//! // Unwrap a key from a TDF manifest
+//! // Unwrap a key from a TDF manifest (JWT signing handled internally)
 //! let payload_key = client.rewrap_standard_tdf(&manifest).await?;
 //! # Ok(())
 //! # }
 //! ```
 
+// Allow deprecated warnings for Nonce::from_slice() which is the correct API for aes-gcm 0.10.x
+// This will be resolved when aes-gcm updates to generic-array 1.x
+#![allow(deprecated)]
+
 use crate::manifest::TdfManifest;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use serde::{Deserialize, Serialize};
-use thiserror::Error;
+use opentdf_protocol::{kas::Policy, KasError, *};
 
 #[cfg(feature = "kas")]
 use {
+    crate::hkdf::Hkdf,
+    crate::p256::{
+        pkcs8::{DecodePublicKey, EncodePublicKey},
+        PublicKey, SecretKey,
+    },
+    crate::pkcs8::LineEnding,
+    crate::rsa::{Oaep, RsaPrivateKey, RsaPublicKey},
+    crate::sha1::Sha1,
+    crate::sha2::{Digest, Sha256},
     aes_gcm::{
         aead::{Aead, KeyInit},
         Aes256Gcm, Nonce,
     },
-    hkdf::Hkdf,
-    p256::{
-        ecdsa::{signature::Signer, SigningKey},
-        pkcs8::{DecodePublicKey, EncodePublicKey},
-        PublicKey, SecretKey,
-    },
-    pkcs8::LineEnding,
     reqwest::Client,
-    rsa::{Oaep, RsaPrivateKey, RsaPublicKey},
-    serde_json::json,
-    sha1::Sha1,
-    sha2::{Digest, Sha256},
-    std::time::{SystemTime, UNIX_EPOCH},
 };
 
-/// KAS client errors
-#[derive(Debug, Error)]
-pub enum KasError {
-    #[error("HTTP error: {0}")]
-    HttpError(String),
-
-    #[error("Access denied: {0}")]
-    AccessDenied(String),
-
-    #[error("Authentication failed")]
-    AuthenticationFailed,
-
-    #[error("Invalid response: {0}")]
-    InvalidResponse(String),
-
-    #[error("Key unwrapping failed: {0}")]
-    UnwrapError(String),
-
-    #[error("Cryptographic error: {0}")]
-    CryptoError(String),
-
-    #[error("JSON serialization error: {0}")]
-    SerializationError(#[from] serde_json::Error),
-
-    #[error("Base64 decode error: {0}")]
-    Base64Error(#[from] base64::DecodeError),
-
-    #[cfg(feature = "kas")]
-    #[error("Reqwest error: {0}")]
-    ReqwestError(#[from] reqwest::Error),
-
-    #[cfg(feature = "kas")]
-    #[error("JWT error: {0}")]
-    JwtError(String),
-
-    #[cfg(feature = "kas")]
-    #[error("PKCS8 error: {0}")]
-    Pkcs8Error(String),
-}
-
-/// Unsigned rewrap request structure (before JWT signing)
-#[derive(Debug, Serialize, Deserialize)]
-pub struct UnsignedRewrapRequest {
-    #[serde(rename = "clientPublicKey")]
-    pub client_public_key: String,
-    pub requests: Vec<PolicyRequest>,
-}
-
-/// Individual policy request entry
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PolicyRequest {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub algorithm: Option<String>,
-    pub policy: Policy,
-    #[serde(rename = "keyAccessObjects")]
-    pub key_access_objects: Vec<KeyAccessObjectWrapper>,
-}
-
-/// Policy structure
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Policy {
-    pub id: String,
-    pub body: String, // Base64-encoded policy
-}
-
-/// Key access object wrapper
-#[derive(Debug, Serialize, Deserialize)]
-pub struct KeyAccessObjectWrapper {
-    #[serde(rename = "keyAccessObjectId")]
-    pub key_access_object_id: String,
-    #[serde(rename = "keyAccessObject")]
-    pub key_access_object: KeyAccessObject,
-}
-
-/// Key access object details
-#[derive(Debug, Serialize, Deserialize)]
-pub struct KeyAccessObject {
-    #[serde(rename = "type")]
-    pub key_type: String,
-    pub url: String,
-    pub protocol: String,
-    #[serde(rename = "wrappedKey")]
-    pub wrapped_key: String,
-    #[serde(rename = "policyBinding")]
-    pub policy_binding: KasPolicyBinding,
-    #[serde(rename = "encryptedMetadata", skip_serializing_if = "Option::is_none")]
-    pub encrypted_metadata: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub kid: Option<String>,
-}
-
-/// Policy binding for KAS requests
-#[derive(Debug, Serialize, Deserialize)]
-pub struct KasPolicyBinding {
-    pub hash: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub algorithm: Option<String>,
-}
-
-/// Signed rewrap request wrapper
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SignedRewrapRequest {
-    pub signed_request_token: String,
-}
-
-/// Rewrap response structure
-#[derive(Debug, Serialize, Deserialize)]
-pub struct RewrapResponse {
-    pub responses: Vec<PolicyRewrapResult>,
-    #[serde(rename = "sessionPublicKey")]
-    pub session_public_key: Option<String>,
-}
-
-/// Policy rewrap result
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PolicyRewrapResult {
-    #[serde(rename = "policyId")]
-    pub policy_id: String,
-    pub results: Vec<KeyAccessRewrapResult>,
-}
-
-/// Individual key access rewrap result
-#[derive(Debug, Serialize, Deserialize)]
-pub struct KeyAccessRewrapResult {
-    #[serde(rename = "keyAccessObjectId")]
-    pub key_access_object_id: String,
-    pub status: String,
-    #[serde(rename = "kasWrappedKey")]
-    pub kas_wrapped_key: Option<String>,
-    #[serde(rename = "entityWrappedKey")]
-    pub entity_wrapped_key: Option<String>, // Legacy field
-    pub error: Option<String>,
-}
+// NOTE: KAS protocol types are now imported from opentdf-protocol crate
+// The types below (KasError, UnsignedRewrapRequest, etc.) are re-exported from there
 
 /// Key type for TDF encryption
 #[cfg(feature = "kas")]
@@ -237,7 +107,7 @@ pub enum EphemeralKeyPair {
 impl EphemeralKeyPair {
     /// Generate a new ephemeral key pair of the specified type
     pub fn new(key_type: KeyType) -> Result<Self, KasError> {
-        use rand::rngs::OsRng;
+        use crate::rand::rngs::OsRng;
 
         match key_type {
             KeyType::EC => {
@@ -246,7 +116,7 @@ impl EphemeralKeyPair {
                 let public_key = private_key.public_key();
 
                 let public_key_pem = public_key
-                    .to_public_key_pem(p256::pkcs8::LineEnding::LF)
+                    .to_public_key_pem(crate::p256::pkcs8::LineEnding::LF)
                     .map_err(|e| KasError::Pkcs8Error(e.to_string()))?;
 
                 Ok(EphemeralKeyPair::EC {
@@ -257,9 +127,11 @@ impl EphemeralKeyPair {
             KeyType::RSA => {
                 // Generate RSA-2048 key pair for Standard TDF
                 let bits = 2048;
-                let private_key = RsaPrivateKey::new(&mut OsRng, bits).map_err(|e| {
-                    KasError::CryptoError(format!("RSA key generation failed: {}", e))
-                })?;
+                let private_key =
+                    RsaPrivateKey::new(&mut OsRng, bits).map_err(|e| KasError::CryptoError {
+                        operation: "RSA_key_generation".to_string(),
+                        reason: format!("RSA key generation failed: {}", e),
+                    })?;
 
                 let public_key = RsaPublicKey::from(&private_key);
 
@@ -285,12 +157,15 @@ impl EphemeralKeyPair {
 }
 
 /// KAS client for rewrap protocol
+///
+/// This client handles JWT signing internally using an ephemeral RSA key pair.
+/// The JWT contains the rewrap request and is signed with RS256.
 #[cfg(feature = "kas")]
 pub struct KasClient {
     http_client: Client,
     base_url: String,
     oauth_token: String,
-    signing_key: SigningKey,
+    signing_key: RsaPrivateKey,
 }
 
 #[cfg(feature = "kas")]
@@ -301,17 +176,31 @@ impl KasClient {
     ///
     /// * `base_url` - Base URL of the KAS service (e.g., "http://kas.example.com")
     /// * `oauth_token` - OAuth bearer token for authentication
+    ///
+    /// # Note
+    ///
+    /// This client generates an ephemeral RSA-2048 key pair for signing JWT rewrap requests.
+    /// The JWT signature is verified by KAS when DPoP is enabled, otherwise it's parsed without verification.
     pub fn new(
         base_url: impl Into<String>,
         oauth_token: impl Into<String>,
     ) -> Result<Self, KasError> {
+        use crate::rand::rngs::OsRng;
+
         let http_client = Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
-            .map_err(|e| KasError::HttpError(e.to_string()))?;
+            .map_err(|e| KasError::HttpError {
+                status: 0,
+                message: format!("Failed to build HTTP client: {}", e),
+            })?;
 
-        // Generate signing key for JWT
-        let signing_key = SigningKey::random(&mut rand::rngs::OsRng);
+        // Generate RSA-2048 key pair for JWT signing (DPoP key)
+        let signing_key =
+            RsaPrivateKey::new(&mut OsRng, 2048).map_err(|e| KasError::CryptoError {
+                operation: "generate_signing_key".to_string(),
+                reason: format!("Failed to generate RSA signing key: {}", e),
+            })?;
 
         Ok(Self {
             http_client,
@@ -325,26 +214,33 @@ impl KasClient {
     ///
     /// This performs the complete KAS rewrap flow:
     /// 1. Generate RSA-2048 ephemeral key pair (Standard TDF uses RSA)
-    /// 2. Build and sign rewrap request
-    /// 3. POST to KAS
-    /// 4. Unwrap the returned key using RSA-OAEP
+    /// 2. Build unsigned rewrap request
+    /// 3. Sign request with internal signing key to create JWT (RS256)
+    /// 4. POST to KAS /v2/rewrap endpoint with signed JWT
+    /// 5. Unwrap the returned key using RSA-OAEP
+    ///
+    /// # Arguments
+    ///
+    /// * `manifest` - TDF manifest containing the wrapped key
     ///
     /// Returns the unwrapped payload key ready for TDF decryption
     pub async fn rewrap_standard_tdf(&self, manifest: &TdfManifest) -> Result<Vec<u8>, KasError> {
         // Generate RSA ephemeral key pair for Standard TDF
         let ephemeral_key_pair = EphemeralKeyPair::new(KeyType::RSA)?;
 
-        // Build the rewrap request
+        // Build the unsigned rewrap request
         let unsigned_request = self.build_rewrap_request(manifest, &ephemeral_key_pair)?;
 
-        // Sign the request with JWT
-        let signed_token = self.create_signed_jwt(&unsigned_request)?;
+        // Create and sign JWT with the unsigned request
+        let signed_request_token = self.sign_rewrap_request(&unsigned_request)?;
+
+        // Wrap the signed token in SignedRewrapRequest per OpenTDF protocol
         let signed_request = SignedRewrapRequest {
-            signed_request_token: signed_token,
+            signed_request_token,
         };
 
         // Make the HTTP request to KAS
-        let rewrap_endpoint = format!("{}/v2/rewrap", self.base_url);
+        let rewrap_endpoint = format!("{}/kas/v2/rewrap", self.base_url);
 
         let response = self
             .http_client
@@ -353,7 +249,11 @@ impl KasClient {
             .header("Content-Type", "application/json")
             .json(&signed_request)
             .send()
-            .await?;
+            .await
+            .map_err(|e| KasError::HttpError {
+                status: 0,
+                message: format!("HTTP request failed: {}", e),
+            })?;
 
         // Handle HTTP errors
         let status = response.status();
@@ -361,14 +261,29 @@ impl KasClient {
             let error_body = response.text().await.unwrap_or_default();
 
             return Err(match status.as_u16() {
-                401 => KasError::AuthenticationFailed,
-                403 => KasError::AccessDenied(error_body.clone()),
-                _ => KasError::HttpError(format!("HTTP {}: {}", status, error_body)),
+                401 => KasError::AuthenticationFailed {
+                    reason: "Invalid or missing OAuth token".to_string(),
+                },
+                403 => KasError::AccessDenied {
+                    resource: "KAS endpoint".to_string(),
+                    reason: error_body.clone(),
+                },
+                _ => KasError::HttpError {
+                    status: status.as_u16(),
+                    message: format!("HTTP {}: {}", status, error_body),
+                },
             });
         }
 
         // Parse response
-        let rewrap_response: RewrapResponse = response.json().await?;
+        let rewrap_response: RewrapResponse =
+            response
+                .json()
+                .await
+                .map_err(|e| KasError::InvalidResponse {
+                    reason: format!("Failed to parse JSON response: {}", e),
+                    expected: Some("RewrapResponse".to_string()),
+                })?;
 
         // Extract the wrapped key and session public key
         let (wrapped_key, session_public_key_pem) = self.extract_wrapped_key(&rewrap_response)?;
@@ -378,6 +293,62 @@ impl KasClient {
             self.unwrap_key(&wrapped_key, &session_public_key_pem, &ephemeral_key_pair)?;
 
         Ok(payload_key)
+    }
+
+    /// Sign an unsigned rewrap request to create a JWT
+    ///
+    /// Creates a JWT with the following structure:
+    /// ```json
+    /// {
+    ///   "requestBody": "<json-serialized-UnsignedRewrapRequest>",
+    ///   "iat": <timestamp>,
+    ///   "exp": <timestamp+60>
+    /// }
+    /// ```
+    ///
+    /// The JWT is signed with RS256 using the client's internal signing key.
+    fn sign_rewrap_request(&self, request: &UnsignedRewrapRequest) -> Result<String, KasError> {
+        use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+        use serde::{Deserialize, Serialize};
+
+        #[derive(Debug, Serialize, Deserialize)]
+        struct Claims {
+            #[serde(rename = "requestBody")]
+            request_body: String,
+            iat: i64,
+            exp: i64,
+        }
+
+        // Serialize the unsigned request to JSON
+        let request_json = serde_json::to_string(request).map_err(KasError::SerializationError)?;
+
+        // Create JWT claims
+        let now = chrono::Utc::now().timestamp();
+        let claims = Claims {
+            request_body: request_json,
+            iat: now,
+            exp: now + 60, // 60 second expiration
+        };
+
+        // Convert RSA private key to PKCS#1 DER format for jsonwebtoken
+        use crate::rsa::pkcs1::EncodeRsaPrivateKey;
+        let key_der = self
+            .signing_key
+            .to_pkcs1_der()
+            .map_err(|e| KasError::Pkcs8Error(format!("Failed to encode signing key: {}", e)))?;
+
+        let encoding_key = EncodingKey::from_rsa_der(key_der.as_bytes());
+
+        // Sign the JWT with RS256
+        let token =
+            encode(&Header::new(Algorithm::RS256), &claims, &encoding_key).map_err(|e| {
+                KasError::JwtError {
+                    operation: "sign_jwt".to_string(),
+                    reason: format!("Failed to sign JWT: {}", e),
+                }
+            })?;
+
+        Ok(token)
     }
 
     /// Extract policy UUID from base64-encoded policy JSON
@@ -391,21 +362,30 @@ impl KasClient {
             .map_err(KasError::Base64Error)?;
 
         // Parse JSON
-        let policy_json: serde_json::Value = serde_json::from_slice(&policy_bytes)
-            .map_err(|e| KasError::HttpError(format!("Failed to parse policy JSON: {}", e)))?;
+        let policy_json: serde_json::Value =
+            serde_json::from_slice(&policy_bytes).map_err(|e| KasError::InvalidResponse {
+                reason: format!("Failed to parse policy JSON: {}", e),
+                expected: Some("valid JSON policy".to_string()),
+            })?;
 
         // Extract UUID field
         let uuid = policy_json
             .get("uuid")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| KasError::HttpError("Policy missing 'uuid' field".to_string()))?;
+            .ok_or_else(|| KasError::InvalidResponse {
+                reason: "Policy missing 'uuid' field".to_string(),
+                expected: Some("uuid field in policy".to_string()),
+            })?;
 
         // Validate UUID format (should be 36 characters with hyphens)
         if uuid.len() != 36 {
-            return Err(KasError::HttpError(format!(
-                "Invalid UUID format: expected 36 characters, got {}",
-                uuid.len()
-            )));
+            return Err(KasError::InvalidResponse {
+                reason: format!(
+                    "Invalid UUID format: expected 36 characters, got {}",
+                    uuid.len()
+                ),
+                expected: Some("36-character UUID".to_string()),
+            });
         }
 
         Ok(uuid.to_string())
@@ -468,68 +448,28 @@ impl KasClient {
         })
     }
 
-    /// Create a signed JWT (ES256) for the rewrap request
-    fn create_signed_jwt(&self, request: &UnsignedRewrapRequest) -> Result<String, KasError> {
-        // Serialize request body to JSON
-        let request_body = serde_json::to_string(request)?;
-
-        // Get current timestamp
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|e| KasError::JwtError(e.to_string()))?
-            .as_secs();
-
-        // Create custom JWT with requestBody claim
-        let header = json!({
-            "alg": "ES256",
-            "typ": "JWT"
-        });
-
-        // IMPORTANT: requestBody MUST be a string, not a JSON object
-        // The KAS server expects: token.Get("requestBody").(string)
-        // See platform/service/kas/access/rewrap.go:146-149
-        let payload = json!({
-            "requestBody": request_body,
-            "iat": now,
-            "exp": now + 60
-        });
-
-        // Encode header and payload as base64url
-        let header_b64 = self.base64url_encode(&serde_json::to_vec(&header)?);
-        let payload_b64 = self.base64url_encode(&serde_json::to_vec(&payload)?);
-
-        // Create signing input
-        let signing_input = format!("{}.{}", header_b64, payload_b64);
-
-        // Sign with P-256 key
-        let signature: p256::ecdsa::Signature = self.signing_key.sign(signing_input.as_bytes());
-
-        // Encode signature as base64url
-        let signature_b64 = self.base64url_encode(&signature.to_bytes());
-
-        Ok(format!("{}.{}", signing_input, signature_b64))
-    }
-
-    /// Encode data as base64url (URL-safe, no padding)
-    fn base64url_encode(&self, data: &[u8]) -> String {
-        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-        URL_SAFE_NO_PAD.encode(data)
-    }
-
     /// Extract wrapped key from rewrap response
     fn extract_wrapped_key(
         &self,
         response: &RewrapResponse,
     ) -> Result<(Vec<u8>, String), KasError> {
-        let policy_result = response
-            .responses
-            .first()
-            .ok_or_else(|| KasError::InvalidResponse("Empty response".to_string()))?;
+        let policy_result =
+            response
+                .responses
+                .first()
+                .ok_or_else(|| KasError::InvalidResponse {
+                    reason: "Empty response from KAS".to_string(),
+                    expected: Some("at least one policy response".to_string()),
+                })?;
 
-        let key_result = policy_result
-            .results
-            .first()
-            .ok_or_else(|| KasError::InvalidResponse("No key results".to_string()))?;
+        let key_result =
+            policy_result
+                .results
+                .first()
+                .ok_or_else(|| KasError::InvalidResponse {
+                    reason: "No key results in response".to_string(),
+                    expected: Some("at least one key result".to_string()),
+                })?;
 
         // Check status
         if key_result.status != "permit" {
@@ -537,7 +477,10 @@ impl KasClient {
                 .error
                 .clone()
                 .unwrap_or_else(|| "Access denied".to_string());
-            return Err(KasError::AccessDenied(error_msg));
+            return Err(KasError::AccessDenied {
+                resource: "key".to_string(),
+                reason: error_msg,
+            });
         }
 
         // Get wrapped key (try kasWrappedKey first, then entityWrappedKey for legacy)
@@ -545,7 +488,10 @@ impl KasClient {
             .kas_wrapped_key
             .as_ref()
             .or(key_result.entity_wrapped_key.as_ref())
-            .ok_or_else(|| KasError::InvalidResponse("Missing wrapped key".to_string()))?;
+            .ok_or_else(|| KasError::InvalidResponse {
+                reason: "Missing wrapped key in response".to_string(),
+                expected: Some("kasWrappedKey or entityWrappedKey".to_string()),
+            })?;
 
         let wrapped_key = BASE64.decode(wrapped_key_b64)?;
 
@@ -553,7 +499,10 @@ impl KasClient {
         let session_public_key = response
             .session_public_key
             .as_ref()
-            .ok_or_else(|| KasError::InvalidResponse("Missing session public key".to_string()))?
+            .ok_or_else(|| KasError::InvalidResponse {
+                reason: "Missing session public key in response".to_string(),
+                expected: Some("sessionPublicKey".to_string()),
+            })?
             .clone();
 
         Ok((wrapped_key, session_public_key))
@@ -595,7 +544,10 @@ impl KasClient {
                 let padding = Oaep::new::<Sha1>();
 
                 let payload_key = private_key.decrypt(padding, wrapped_key).map_err(|e| {
-                    KasError::UnwrapError(format!("RSA-OAEP decryption failed: {}", e))
+                    KasError::UnwrapError {
+                        algorithm: "RSA-OAEP".to_string(),
+                        reason: format!("RSA-OAEP decryption failed: {}", e),
+                    }
                 })?;
 
                 Ok(payload_key)
@@ -604,12 +556,13 @@ impl KasClient {
                 // EC/ECDH unwrap for NanoTDF
                 // Parse session public key from PEM
                 let session_public_key = PublicKey::from_public_key_pem(session_public_key_pem)
-                    .map_err(|e| {
-                        KasError::CryptoError(format!("Failed to parse session public key: {}", e))
+                    .map_err(|e| KasError::CryptoError {
+                        operation: "parse_session_public_key".to_string(),
+                        reason: format!("Failed to parse session public key: {}", e),
                     })?;
 
                 // Perform ECDH key agreement
-                let shared_secret = p256::elliptic_curve::ecdh::diffie_hellman(
+                let shared_secret = crate::p256::ecdh::diffie_hellman(
                     private_key.to_nonzero_scalar(),
                     session_public_key.as_affine(),
                 );
@@ -622,26 +575,38 @@ impl KasClient {
                 let hkdf = Hkdf::<Sha256>::new(Some(&salt), shared_secret.raw_secret_bytes());
                 let mut symmetric_key = [0u8; 32];
                 hkdf.expand(&[], &mut symmetric_key)
-                    .map_err(|e| KasError::CryptoError(format!("HKDF expansion failed: {}", e)))?;
+                    .map_err(|e| KasError::CryptoError {
+                        operation: "HKDF".to_string(),
+                        reason: format!("HKDF expansion failed: {}", e),
+                    })?;
 
                 // Unwrap key using AES-GCM
                 // Format: nonce (12 bytes) || ciphertext || tag (16 bytes)
                 if wrapped_key.len() < 28 {
-                    return Err(KasError::UnwrapError(format!(
-                        "Wrapped key too short: {} bytes",
-                        wrapped_key.len()
-                    )));
+                    return Err(KasError::UnwrapError {
+                        algorithm: "ECDH-AES-GCM".to_string(),
+                        reason: format!(
+                            "Wrapped key too short: {} bytes (expected at least 28)",
+                            wrapped_key.len()
+                        ),
+                    });
                 }
 
                 let nonce = Nonce::from_slice(&wrapped_key[..12]);
                 let ciphertext_and_tag = &wrapped_key[12..];
 
                 let cipher = Aes256Gcm::new_from_slice(&symmetric_key).map_err(|e| {
-                    KasError::CryptoError(format!("Failed to create cipher: {}", e))
+                    KasError::CryptoError {
+                        operation: "AES-GCM-init".to_string(),
+                        reason: format!("Failed to create cipher: {}", e),
+                    }
                 })?;
 
                 let payload_key = cipher.decrypt(nonce, ciphertext_and_tag).map_err(|e| {
-                    KasError::UnwrapError(format!("AES-GCM decryption failed: {}", e))
+                    KasError::UnwrapError {
+                        algorithm: "AES-GCM".to_string(),
+                        reason: format!("AES-GCM decryption failed: {}", e),
+                    }
                 })?;
 
                 Ok(payload_key)

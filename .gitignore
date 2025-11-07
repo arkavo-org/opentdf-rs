@@ -34,3 +34,4 @@ Cargo.lock
 # Arkavo local files
 .arkavo/memory_server/
 .arkavo/prompts/
+*.backup

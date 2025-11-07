@@ -1,50 +1,49 @@
 [package]
 name = "opentdf"
-version = "0.4.3"
+version = "0.5.0"
 edition = "2021"
 description = "Rust implementation of OpenTDF (Trusted Data Format)"
 license = "Apache-2.0"
 repository = "https://github.com/arkavo-org/opentdf-rs"
 
 [dependencies]
-zip = { version = "2.2.0", default-features = false, features = ["deflate"] }
-serde_json = "1.0.132"
-serde = { version = "1.0.214", features = ["derive"] }
-base64 = "0.22.1"
-hex = "0.4"
-hmac = "0.12.1"
-sha2 = "0.10.8"
-thiserror = "1.0.67"
-tempfile = "3.13.0"
-aes-gcm = "0.10.3"
-rand = "0.8.5"
-chrono = { version = "0.4.35", features = ["serde"] }
-uuid = { version = "1.8.0", features = ["v4", "serde"] }
-lazy_static = "1.4.0"
-# KAS client dependencies
+# New modular crates
+opentdf-protocol = { path = "crates/protocol", version = "0.5.0" }
+opentdf-crypto = { path = "crates/crypto", version = "0.5.0" }
+
+# Core dependencies
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+base64 = "0.22"
+thiserror = "2.0"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.11", features = ["v4", "serde"] }
+aes-gcm = "0.10"
+
+# KAS client dependencies (simplified, crypto moved to opentdf-crypto)
 reqwest = { version = "0.12", features = ["json"], optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
-p256 = { version = "0.13", features = ["ecdsa", "pem"], optional = true }
-hkdf = { version = "0.12", optional = true }
-jwt-simple = { version = "0.12", optional = true }
-rsa = { version = "0.9", features = ["sha2"], optional = true }
-pkcs8 = { version = "0.10", features = ["pem"], optional = true }
-sha1 = { version = "0.10", optional = true }
+jsonwebtoken = { version = "9", optional = true }
 
 [dev-dependencies]
-mockito = "1.5"
+tempfile = "3.14"
+mockito = "1.6"
 criterion = "0.5"
+# Required for jwt_helper.rs example
+p256 = { version = "0.13", features = ["ecdsa", "pem"] }
+rand = "0.8"
 
 [workspace]
-members = ["crates/mcp-server", "crates/wasm"]
+members = ["crates/protocol", "crates/crypto", "crates/wasm"]
 
 [workspace.package]
-version = "0.4.3"
+version = "0.5.0"
 
 [features]
-default = []
+default = ["kas"]
 mcp = []
-kas = ["reqwest", "tokio", "p256", "hkdf", "jwt-simple", "rsa", "pkcs8", "sha1"]
+kas = ["reqwest", "tokio", "jsonwebtoken", "opentdf-crypto/kas"]
 
 [profile.release]
 opt-level = "z"
@@ -61,6 +60,10 @@ required-features = ["kas"]
 
 [[example]]
 name = "create_tdf_platform"
+required-features = ["kas"]
+
+[[example]]
+name = "jwt_helper"
 required-features = ["kas"]
 
 [[bench]]

@@ -1,7 +1,4 @@
-use opentdf::{
-    AttributeIdentifier, AttributePolicy, AttributeValue, Policy, TdfArchive,
-    TdfArchiveMemoryBuilder, TdfEncryption, TdfManifest,
-};
+use opentdf::prelude::*;
 use std::collections::HashMap;
 use std::io::Cursor;
 use wasm_bindgen::prelude::*;
@@ -285,16 +282,24 @@ async fn _tdf_decrypt_with_kas_impl(tdf_data: &str, kas_token: &str) -> Result<S
     // Read encrypted payload from archive
     let payload_bytes = entry.payload;
 
+    // Convert segments to the expected format: (plaintext_size, encrypted_size)
+    let segment_tuples: Vec<(u64, u64)> = entry
+        .manifest
+        .encryption_information
+        .integrity_information
+        .segments
+        .iter()
+        .map(|seg| {
+            (
+                seg.segment_size.unwrap_or(0),
+                seg.encrypted_segment_size.unwrap_or(0),
+            )
+        })
+        .collect();
+
     // Decrypt using segment information
     let (plaintext, _gmac_tags) = tdf_encryption
-        .decrypt_with_segments(
-            &payload_bytes,
-            &entry
-                .manifest
-                .encryption_information
-                .integrity_information
-                .segments,
-        )
+        .decrypt_with_segments(&payload_bytes, &segment_tuples)
         .map_err(|e| format!("Decryption failed: {}", e))?;
 
     // Step 8: Return base64-encoded plaintext
