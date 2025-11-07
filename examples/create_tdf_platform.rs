@@ -9,9 +9,7 @@
 //! cargo run --example create_tdf_platform --features kas -- /tmp/test-platform.tdf
 //! ```
 
-use opentdf::{
-    wrap_key_with_rsa_oaep, Policy, TdfArchiveBuilder, TdfEncryption, TdfManifest,
-};
+use opentdf::{wrap_key_with_rsa_oaep, Policy, TdfArchiveBuilder, TdfEncryption, TdfManifest};
 use std::env;
 
 #[tokio::main]
@@ -25,8 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Get KAS URL from environment
-    let kas_url =
-        env::var("KAS_URL").unwrap_or_else(|_| "http://localhost:8080/kas".to_string());
+    let kas_url = env::var("KAS_URL").unwrap_or_else(|_| "http://localhost:8080/kas".to_string());
 
     println!("=== Creating TDF with KAS Integration ===");
     println!("KAS URL:  {}", kas_url);
@@ -36,14 +33,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Prepare test data
     let plaintext = b"Hello from Rust! This TDF is compatible with all OpenTDF implementations.";
 
-    println!("Plaintext ({} bytes): {}", plaintext.len(), String::from_utf8_lossy(plaintext));
+    println!(
+        "Plaintext ({} bytes): {}",
+        plaintext.len(),
+        String::from_utf8_lossy(plaintext)
+    );
     println!();
 
     // Step 1: Fetch KAS public key
     println!("1. Fetching KAS public key...");
     let http_client = reqwest::Client::new();
-    let kas_key_response =
-        opentdf::kas_key::fetch_kas_public_key(&kas_url, &http_client).await?;
+    let kas_key_response = opentdf::kas_key::fetch_kas_public_key(&kas_url, &http_client).await?;
     println!("   ✓ Fetched key ID: {}", kas_key_response.kid);
     println!();
 
@@ -51,15 +51,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("2. Encrypting data...");
     let tdf_encryption = TdfEncryption::new()?;
     let segmented = tdf_encryption.encrypt_with_segments(plaintext, 2 * 1024 * 1024)?; // 2MB segments
-    println!("   ✓ Data encrypted with {} segments", segmented.segment_info.len());
+    println!(
+        "   ✓ Data encrypted with {} segments",
+        segmented.segment_info.len()
+    );
     println!();
 
     // Step 3: Wrap the payload key with KAS public key
     println!("3. Wrapping payload key with KAS public key...");
-    let wrapped_key = wrap_key_with_rsa_oaep(
-        tdf_encryption.payload_key(),
-        &kas_key_response.public_key,
-    )?;
+    let wrapped_key =
+        wrap_key_with_rsa_oaep(tdf_encryption.payload_key(), &kas_key_response.public_key)?;
     println!("   ✓ Key wrapped ({} bytes base64)", wrapped_key.len());
     println!();
 
@@ -140,7 +141,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== ✓ SUCCESS! ==");
     println!();
     println!("To decrypt with Go otdfctl:");
-    println!("  /Users/paul/Projects/opentdf/otdfctl/otdfctl decrypt {} \\", output_path);
+    println!(
+        "  /Users/paul/Projects/opentdf/otdfctl/otdfctl decrypt {} \\",
+        output_path
+    );
     println!("    --host http://localhost:8080 \\");
     println!("    --tls-no-verify \\");
     println!("    --with-client-creds '{{\"clientId\":\"opentdf\",\"clientSecret\":\"secret\"}}'");
