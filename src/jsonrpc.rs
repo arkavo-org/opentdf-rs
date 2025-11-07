@@ -42,13 +42,13 @@
 // This will be resolved when aes-gcm updates to generic-array 1.x
 #![allow(deprecated)]
 
-use crate::crypto::{EncryptionError, TdfEncryption};
 use crate::manifest::{
-    EncryptionInformation, EncryptionMethod, IntegrityInformation, KeyAccess, Payload,
-    RootSignature, Segment, TdfManifest,
+    EncryptionInformation, EncryptionMethod, IntegrityInformation, IntegrityInformationExt,
+    KeyAccess, Payload, RootSignature, Segment, TdfManifest,
 };
 use crate::policy::Policy;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use opentdf_crypto::{calculate_policy_binding, EncryptionError, TdfEncryption};
 use serde::{Deserialize, Serialize};
 
 /// TDF envelope for JSON-RPC protocols with inline payload
@@ -260,7 +260,7 @@ impl TdfJsonRpcBuilder {
         let policy_b64 = BASE64.encode(policy_json.as_bytes());
 
         // Calculate policy binding hash
-        let policy_hash = KeyAccess::calculate_policy_binding(&policy_b64, payload_key)
+        let policy_hash = calculate_policy_binding(&policy_b64, payload_key)
             .map_err(|_| EncryptionError::KeyGenerationError)?;
 
         // Create key access object
@@ -423,7 +423,7 @@ mod tests {
         // Create policy binding
         let policy_json = serde_json::to_string(&policy).expect("Failed to serialize policy");
         let policy_b64 = BASE64.encode(policy_json.as_bytes());
-        let policy_hash = KeyAccess::calculate_policy_binding(&policy_b64, &payload_key)
+        let policy_hash = calculate_policy_binding(&policy_b64, &payload_key)
             .expect("Failed to calculate policy binding");
 
         // Create key access object

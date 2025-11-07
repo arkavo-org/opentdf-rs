@@ -7,7 +7,7 @@ license = "Apache-2.0"
 repository = "https://github.com/arkavo-org/opentdf-rs"
 
 [dependencies]
-opentdf = { path = "../..", features = ["kas"] }
+opentdf = { path = "../..", version = "0.5.0", features = ["kas"] }
 tokio = { version = "1.36.0", features = ["full"] }
 futures = "0.3.31"
 serde = { version = "1.0.214", features = ["derive"] }

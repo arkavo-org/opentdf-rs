@@ -1,4 +1,5 @@
 use opentdf::{
+    manifest::{KeyAccessExt, TdfManifestExt},
     AttributeIdentifier, AttributePolicy, AttributeValue, Policy, PolicyBody, TdfArchive,
     TdfArchiveMemoryBuilder, TdfEncryption, TdfManifest,
 };

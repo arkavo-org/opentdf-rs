@@ -3,13 +3,13 @@
 //! This module provides a clean, fluent API for common TDF operations.
 
 use crate::archive::{TdfArchiveBuilder, TdfError};
+use crate::manifest::{IntegrityInformationExt, KeyAccessExt, TdfManifest, TdfManifestExt};
+use crate::policy::Policy;
+use opentdf_crypto::TdfEncryption;
+use std::path::Path;
 
 #[cfg(feature = "kas")]
 use crate::archive::TdfArchive;
-use crate::crypto::TdfEncryption;
-use crate::manifest::TdfManifest;
-use crate::policy::Policy;
-use std::path::Path;
 
 #[cfg(feature = "kas")]
 use crate::kas::KasClient;

@@ -10,7 +10,10 @@ use zip::write::FileOptions;
 use zip::{ZipArchive, ZipWriter};
 
 #[cfg(feature = "kas")]
-use crate::kas::{KasClient, KasError};
+use crate::kas::KasClient;
+
+#[cfg(feature = "kas")]
+use opentdf_protocol::KasError;
 
 #[derive(Debug)]
 pub struct TdfArchive<R: Read + Seek> {
@@ -47,7 +50,6 @@ impl<'a> TdfEntry<'a> {
     /// ```
     #[cfg(feature = "kas")]
     pub async fn decrypt_with_kas(&self, kas_client: &KasClient) -> Result<Vec<u8>, TdfError> {
-        use crate::crypto::TdfEncryption;
         use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 
         // Unwrap the payload key using KAS
