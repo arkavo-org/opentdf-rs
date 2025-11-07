@@ -245,6 +245,43 @@ impl std::fmt::Display for AttributeFqn {
     }
 }
 
+impl std::str::FromStr for AttributeFqn {
+    type Err = FqnError;
+
+    /// Parse an FQN from a string using default validation rules
+    ///
+    /// # Example
+    /// ```
+    /// use opentdf::fqn::AttributeFqn;
+    /// use std::str::FromStr;
+    ///
+    /// let fqn = AttributeFqn::from_str("https://example.com/attr/clearance/value/secret")?;
+    /// assert_eq!(fqn.get_namespace(), "example.com");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s)
+    }
+}
+
+impl<'a> TryFrom<&'a str> for AttributeFqn {
+    type Error = FqnError;
+
+    /// Convert from a string slice using default validation rules
+    ///
+    /// # Example
+    /// ```
+    /// use opentdf::fqn::AttributeFqn;
+    ///
+    /// let fqn: AttributeFqn = "https://example.com/attr/name/value/val".try_into()?;
+    /// assert_eq!(fqn.get_name(), "name");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    fn try_from(s: &'a str) -> Result<Self, Self::Error> {
+        Self::parse(s)
+    }
+}
+
 /// FQN validation rules
 #[derive(Debug, Clone)]
 pub struct FqnValidationRules {

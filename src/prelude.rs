@@ -19,7 +19,7 @@ pub use crate::archive::{TdfArchive, TdfArchiveBuilder, TdfError};
 pub use crate::fqn::{AttributeFqn, FqnValidationRules, NamespaceRegistry};
 pub use crate::policy::{
     AttributeCondition, AttributeIdentifier, AttributePolicy, AttributeValue, FqnError,
-    LogicalOperator, Operator, Policy, PolicyBuilder, PolicyError, ValidationError,
+    FqnErrorKind, LogicalOperator, Operator, Policy, PolicyBuilder, PolicyError, ValidationError,
     ValidationErrorType,
 };
 pub use crate::tdf::{Tdf, TdfEncryptBuilder, TdfEncryptFileBuilder};

@@ -96,6 +96,79 @@ pub enum FqnError {
     MissingComponent { component: &'static str },
 }
 
+impl FqnError {
+    /// Returns the error kind for programmatic handling
+    pub fn kind(&self) -> FqnErrorKind {
+        match self {
+            FqnError::InvalidScheme { .. } => FqnErrorKind::InvalidScheme,
+            FqnError::NotHttps { .. } => FqnErrorKind::NotHttps,
+            FqnError::MissingAttrStructure { .. } => FqnErrorKind::MissingAttrStructure,
+            FqnError::InvalidNamespace { .. } => FqnErrorKind::InvalidNamespace,
+            FqnError::NamespaceNotRegistered { .. } => FqnErrorKind::NamespaceNotRegistered,
+            FqnError::MalformedUrl(_) => FqnErrorKind::MalformedUrl,
+            FqnError::MissingComponent { .. } => FqnErrorKind::MissingComponent,
+        }
+    }
+
+    /// Returns a hint for how to fix this error
+    pub fn hint(&self) -> &'static str {
+        match self {
+            FqnError::InvalidScheme { expected, .. } => {
+                if *expected == "https" {
+                    "Use HTTPS scheme: https://example.com/attr/name/value/val"
+                } else {
+                    "Use correct URL scheme"
+                }
+            }
+            FqnError::NotHttps { .. } => {
+                "FQNs must use HTTPS for security. Example: https://example.com/attr/name/value/val"
+            }
+            FqnError::MissingAttrStructure { .. } => {
+                "FQN must follow format: https://<namespace>/attr/<name>/value/<value>"
+            }
+            FqnError::InvalidNamespace { .. } => {
+                "Namespace must be a valid domain-like identifier (lowercase, no special chars)"
+            }
+            FqnError::NamespaceNotRegistered { .. } => {
+                "Register the namespace using NamespaceRegistry::register() before use"
+            }
+            FqnError::MalformedUrl(_) => {
+                "Ensure URL is properly formatted with scheme://host/path"
+            }
+            FqnError::MissingComponent { component } => match *component {
+                "namespace" => "Provide a namespace: https://namespace.com/...",
+                "name" => "Provide an attribute name: .../attr/name/...",
+                _ => "Ensure all required FQN components are present",
+            },
+        }
+    }
+
+    /// Returns a stable error code
+    pub fn error_code(&self) -> &'static str {
+        match self {
+            FqnError::InvalidScheme { .. } => "OPENTDF_E_FQN_SCHEME_INVALID",
+            FqnError::NotHttps { .. } => "OPENTDF_E_FQN_NOT_HTTPS",
+            FqnError::MissingAttrStructure { .. } => "OPENTDF_E_FQN_STRUCTURE",
+            FqnError::InvalidNamespace { .. } => "OPENTDF_E_FQN_NAMESPACE_INVALID",
+            FqnError::NamespaceNotRegistered { .. } => "OPENTDF_E_FQN_NAMESPACE_UNREGISTERED",
+            FqnError::MalformedUrl(_) => "OPENTDF_E_FQN_MALFORMED",
+            FqnError::MissingComponent { .. } => "OPENTDF_E_FQN_COMPONENT_MISSING",
+        }
+    }
+}
+
+/// Error kind for programmatic FQN error handling
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FqnErrorKind {
+    InvalidScheme,
+    NotHttps,
+    MissingAttrStructure,
+    InvalidNamespace,
+    NamespaceNotRegistered,
+    MalformedUrl,
+    MissingComponent,
+}
+
 impl PolicyError {
     /// Returns true if this error might be resolved by retrying with different input
     pub fn is_retryable(&self) -> bool {
@@ -121,16 +194,19 @@ impl PolicyError {
         }
     }
 
-    /// Returns an error code for programmatic error handling
+    /// Returns a stable error code for programmatic error handling
+    ///
+    /// Error codes follow the format: `OPENTDF_E_<CATEGORY>_<SPECIFIC>`
+    /// These codes are stable across versions and safe for cross-language bindings.
     pub fn error_code(&self) -> &'static str {
         match self {
-            PolicyError::InvalidAttribute { .. } => "INVALID_ATTRIBUTE",
-            PolicyError::InvalidOperator { .. } => "INVALID_OPERATOR",
-            PolicyError::InvalidValueType { .. } => "INVALID_VALUE_TYPE",
-            PolicyError::EvaluationError { .. } => "EVALUATION_ERROR",
-            PolicyError::ValidationFailed(_) => "VALIDATION_FAILED",
-            PolicyError::SerializationError(_) => "SERIALIZATION_ERROR",
-            PolicyError::FqnError(_) => "FQN_ERROR",
+            PolicyError::InvalidAttribute { .. } => "OPENTDF_E_POLICY_ATTRIBUTE_INVALID",
+            PolicyError::InvalidOperator { .. } => "OPENTDF_E_POLICY_OPERATOR_INVALID",
+            PolicyError::InvalidValueType { .. } => "OPENTDF_E_POLICY_VALUE_TYPE",
+            PolicyError::EvaluationError { .. } => "OPENTDF_E_POLICY_EVALUATION",
+            PolicyError::ValidationFailed(_) => "OPENTDF_E_POLICY_VALIDATION",
+            PolicyError::SerializationError(_) => "OPENTDF_E_POLICY_SERIALIZATION",
+            PolicyError::FqnError(_) => "OPENTDF_E_FQN",
         }
     }
 }

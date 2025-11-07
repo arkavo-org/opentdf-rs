@@ -513,7 +513,7 @@ mod tests {
 
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert_eq!(err.error_code(), "MISSING_REQUIRED_FIELD");
+        assert_eq!(err.error_code(), "OPENTDF_E_FIELD_REQUIRED");
         assert!(err.to_string().contains("kas_url"));
     }
 

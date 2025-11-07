@@ -216,22 +216,40 @@ impl TdfError {
         }
     }
 
-    /// Returns an error code for programmatic error handling
+    /// Returns a stable error code for programmatic error handling
+    ///
+    /// Error codes follow the format: `OPENTDF_E_<CATEGORY>_<SPECIFIC>`
+    /// These codes are stable across versions and safe for:
+    /// - Cross-language bindings (FFI, WASM, etc.)
+    /// - Programmatic error handling
+    /// - Error telemetry and monitoring
+    ///
+    /// # Example
+    /// ```
+    /// # use opentdf::TdfError;
+    /// # fn handle_error(err: TdfError) {
+    /// match err.error_code() {
+    ///     "OPENTDF_E_FIELD_REQUIRED" => { /* handle missing field */ }
+    ///     "OPENTDF_E_KAS" => { /* handle KAS error */ }
+    ///     _ => { /* handle unknown error */ }
+    /// }
+    /// # }
+    /// ```
     pub fn error_code(&self) -> &'static str {
         match self {
-            TdfError::ZipError(_) => "ZIP_ERROR",
-            TdfError::JsonError(_) => "JSON_ERROR",
-            TdfError::IoError(_) => "IO_ERROR",
-            TdfError::InvalidManifest { .. } => "INVALID_MANIFEST",
-            TdfError::InvalidStructure { .. } => "INVALID_STRUCTURE",
-            TdfError::MissingRequiredField { .. } => "MISSING_REQUIRED_FIELD",
-            TdfError::InvalidKasUrl { .. } => "INVALID_KAS_URL",
-            TdfError::CryptoError { .. } => "CRYPTO_ERROR",
+            TdfError::ZipError(_) => "OPENTDF_E_ARCHIVE_ZIP",
+            TdfError::JsonError(_) => "OPENTDF_E_ARCHIVE_JSON",
+            TdfError::IoError(_) => "OPENTDF_E_IO",
+            TdfError::InvalidManifest { .. } => "OPENTDF_E_MANIFEST_INVALID",
+            TdfError::InvalidStructure { .. } => "OPENTDF_E_STRUCTURE_INVALID",
+            TdfError::MissingRequiredField { .. } => "OPENTDF_E_FIELD_REQUIRED",
+            TdfError::InvalidKasUrl { .. } => "OPENTDF_E_KAS_URL_INVALID",
+            TdfError::CryptoError { .. } => "OPENTDF_E_CRYPTO",
             #[cfg(feature = "kas")]
-            TdfError::KasError(_) => "KAS_ERROR",
+            TdfError::KasError(_) => "OPENTDF_E_KAS",
             #[cfg(feature = "kas")]
-            TdfError::DecryptionFailed { .. } => "DECRYPTION_FAILED",
-            TdfError::PolicyValidationFailed { .. } => "POLICY_VALIDATION_FAILED",
+            TdfError::DecryptionFailed { .. } => "OPENTDF_E_DECRYPTION_FAILED",
+            TdfError::PolicyValidationFailed { .. } => "OPENTDF_E_POLICY_VALIDATION",
         }
     }
 }

@@ -88,8 +88,8 @@ pub use archive::{TdfArchive, TdfArchiveBuilder, TdfArchiveMemoryBuilder, TdfErr
 // Policy types
 pub use policy::{
     AttributeCondition, AttributeIdentifier, AttributePolicy, AttributeValue, FqnError,
-    LogicalOperator, Operator, Policy, PolicyBody, PolicyBuilder, PolicyError, ValidationError,
-    ValidationErrorType,
+    FqnErrorKind, LogicalOperator, Operator, Policy, PolicyBody, PolicyBuilder, PolicyError,
+    ValidationError, ValidationErrorType,
 };
 
 // FQN types
