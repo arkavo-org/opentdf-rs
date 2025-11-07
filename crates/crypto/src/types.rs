@@ -5,6 +5,9 @@
 
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+#[cfg(feature = "kas")]
+use zeroize::Zeroizing;
+
 /// AES-256 key (32 bytes) that zeroizes on drop
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct AesKey(pub(crate) [u8; 32]);

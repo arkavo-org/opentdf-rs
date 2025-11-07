@@ -29,6 +29,9 @@ tokio = { version = "1", features = ["full"], optional = true }
 tempfile = "3.14"
 mockito = "1.6"
 criterion = "0.5"
+# Required for jwt_helper.rs example
+p256 = { version = "0.13", features = ["ecdsa", "pem"] }
+rand = "0.8"
 
 [workspace]
 members = ["crates/protocol", "crates/crypto", "crates/wasm"]
@@ -56,6 +59,10 @@ required-features = ["kas"]
 
 [[example]]
 name = "create_tdf_platform"
+required-features = ["kas"]
+
+[[example]]
+name = "jwt_helper"
 required-features = ["kas"]
 
 [[bench]]

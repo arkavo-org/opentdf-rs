@@ -15,7 +15,7 @@ hmac = "0.12"
 base64 = "0.22"
 
 # Security hardening
-zeroize = { version = "1.8", features = ["derive"] }
+zeroize = { version = "1.8", features = ["derive", "alloc"] }
 subtle = "2.6"
 hex = "0.4"
 

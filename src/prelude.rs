@@ -15,7 +15,7 @@
 //! ```
 
 // Re-export core types
-pub use crate::archive::{TdfArchive, TdfArchiveBuilder, TdfError};
+pub use crate::archive::{TdfArchive, TdfArchiveBuilder, TdfArchiveMemoryBuilder, TdfError};
 pub use crate::fqn::{AttributeFqn, FqnValidationRules, NamespaceRegistry};
 pub use crate::policy::{
     AttributeCondition, AttributeIdentifier, AttributePolicy, AttributeValue, FqnError,
@@ -31,6 +31,11 @@ pub use crate::tdf::{TdfDecryptBuilder, TdfDecryptFileBuilder};
 pub use opentdf_protocol::{
     EncryptionInformation, EncryptionMethod, IntegrityInformation, KeyAccess, Payload,
     PolicyBinding, RootSignature, Segment, TdfManifest,
+};
+
+// Re-export crypto types
+pub use opentdf_crypto::{
+    EncryptedPayload, EncryptionError, SegmentInfo, SegmentedPayload, TdfEncryption,
 };
 
 // **Auto-import extension traits** - this is the key improvement!
