@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use wasm_bindgen::prelude::*;
 
+mod kas;
+
 // Set up panic hook for better error messages in the browser
 #[wasm_bindgen(start)]
 pub fn init() {
@@ -56,7 +58,10 @@ impl WasmResult {
     }
 }
 
-/// Create a TDF archive with encrypted data
+/// Create a TDF archive with encrypted data (async)
+///
+/// This function fetches the KAS public key and wraps the DEK securely.
+/// The DEK never leaves the WASM environment.
 ///
 /// # Arguments
 /// * `data` - Base64-encoded data to encrypt
@@ -64,62 +69,76 @@ impl WasmResult {
 /// * `policy_json` - JSON string containing the policy
 ///
 /// # Returns
-/// Base64-encoded TDF archive
+/// Promise resolving to WasmResult with base64-encoded TDF archive
 #[wasm_bindgen]
-pub fn tdf_create(data: &str, kas_url: &str, policy_json: &str) -> WasmResult {
-    match _tdf_create_impl(data, kas_url, policy_json) {
+pub async fn tdf_create(data: String, kas_url: String, policy_json: String) -> WasmResult {
+    match _tdf_create_impl(&data, &kas_url, &policy_json).await {
         Ok(result) => WasmResult::ok(result),
         Err(e) => WasmResult::err(e),
     }
 }
 
-fn _tdf_create_impl(data: &str, kas_url: &str, policy_json: &str) -> Result<String, String> {
+async fn _tdf_create_impl(data: &str, kas_url: &str, policy_json: &str) -> Result<String, String> {
     use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 
-    // Decode base64 input data
+    // Step 1: Fetch KAS public key from the server
+    let kas_key_response = kas::fetch_kas_public_key(kas_url).await?;
+
+    // Step 2: Decode base64 input data
     let data_bytes = BASE64
         .decode(data)
         .map_err(|e| format!("Failed to decode data: {}", e))?;
 
-    // Parse policy
+    // Step 3: Parse policy
     let policy: Policy =
         serde_json::from_str(policy_json).map_err(|e| format!("Failed to parse policy: {}", e))?;
 
-    // Create TDF encryption instance with generated keys
+    // Step 4: Create TDF encryption instance with generated keys
     let tdf_encryption =
         TdfEncryption::new().map_err(|e| format!("Failed to create encryption: {}", e))?;
 
-    // Encrypt the data
+    // Step 5: Encrypt the data
     let encrypted_payload = tdf_encryption
         .encrypt(&data_bytes)
         .map_err(|e| format!("Failed to encrypt: {}", e))?;
 
-    // Decode the base64-encoded ciphertext
+    // Step 6: Wrap the payload key with KAS public key using RSA-OAEP
+    let wrapped_key = kas::wrap_key_with_rsa_oaep(
+        tdf_encryption.payload_key(),
+        &kas_key_response.public_key,
+    )?;
+
+    // Step 7: Decode the base64-encoded ciphertext
     let ciphertext_bytes = BASE64
         .decode(&encrypted_payload.ciphertext)
         .map_err(|e| format!("Failed to decode ciphertext: {}", e))?;
 
-    // Create manifest
+    // Step 8: Create manifest
     let mut manifest = TdfManifest::new("0.payload".to_string(), kas_url.to_string());
+    manifest.encryption_information.method.algorithm = "AES-256-GCM".to_string();
 
-    // Set policy on manifest
+    // Step 9: Set policy on manifest
     manifest
         .set_policy(&policy)
         .map_err(|e| format!("Failed to set policy: {}", e))?;
 
-    // Set IV from encrypted payload
+    // Step 10: Generate policy binding
+    let policy_json_bytes = policy
+        .to_json()
+        .map_err(|e| format!("Failed to serialize policy: {}", e))?;
+
+    manifest.encryption_information.key_access[0]
+        .generate_policy_binding_raw(&policy_json_bytes, tdf_encryption.payload_key())
+        .map_err(|e| format!("Failed to generate policy binding: {}", e))?;
+
+    // Step 11: Set wrapped key and kid
+    manifest.encryption_information.key_access[0].wrapped_key = wrapped_key;
+    manifest.encryption_information.key_access[0].kid = Some(kas_key_response.kid);
+
+    // Step 12: Set IV from encrypted payload
     manifest.encryption_information.method.iv = encrypted_payload.iv.clone();
 
-    // Update key access with encrypted key
-    if let Some(key_access) = manifest.encryption_information.key_access.first_mut() {
-        key_access.wrapped_key = encrypted_payload.encrypted_key.clone();
-        key_access.policy_binding = PolicyBinding {
-            alg: "HS256".to_string(),
-            hash: encrypted_payload.policy_key_hash.clone(),
-        };
-    }
-
-    // Build TDF archive in memory
+    // Step 13: Build TDF archive in memory
     let mut builder = TdfArchiveMemoryBuilder::new();
     builder
         .add_entry(&manifest, &ciphertext_bytes, 0)
@@ -129,7 +148,7 @@ fn _tdf_create_impl(data: &str, kas_url: &str, policy_json: &str) -> Result<Stri
         .finish()
         .map_err(|e| format!("Failed to finish archive: {}", e))?;
 
-    // Encode result as base64
+    // Step 14: Encode result as base64
     Ok(BASE64.encode(&tdf_bytes))
 }
 
