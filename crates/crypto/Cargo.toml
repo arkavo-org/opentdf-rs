@@ -8,7 +8,9 @@ repository = "https://github.com/arkavo-org/opentdf-rs"
 
 [dependencies]
 # Core cryptography
+aes = "0.8"  # For AES-256 block cipher
 aes-gcm = "0.10"
+typenum = "1.17"  # For AES-GCM variable tag sizes
 rand = "0.8"
 sha2 = "0.10"
 hmac = "0.12"
@@ -26,6 +28,9 @@ serde_json = "1.0"
 # Error handling
 thiserror = "2.0"
 
+# Protocol types (for NanoTDF)
+opentdf-protocol = { path = "../protocol" }
+
 # KAS feature dependencies (RSA, EC, HKDF)
 # Note: rsa 0.9 has a future incompatibility warning (num-bigint-dig)
 # but 0.10 is still RC and has breaking API changes
@@ -38,8 +43,15 @@ sha1 = { version = "0.10", optional = true }
 hkdf = { version = "0.12", optional = true }
 pkcs8 = { version = "0.10", features = ["pem"], optional = true }
 
+# Mbed TLS for full GCM tag size support (including 64-bit tags - NanoTDF default)
+# TODO: Complete Mbed TLS integration - currently under development
+mbedtls = { version = "0.13", default-features = false, features = ["std", "aesni"], optional = true }
+
 [features]
-default = []
+default = ["kas"]  # Enable KAS features by default for NanoTDF support
 kas = ["rsa", "p256", "p384", "p521", "k256", "sha1", "hkdf", "pkcs8"]
+# Use Mbed TLS for NanoTDF GCM operations (supports 64-128 bit tags, 64-bit is NanoTDF default)
+# NOTE: This feature is under development. Use RustCrypto (96-128 bit tags) for now.
+nanotdf-mbedtls = ["mbedtls"]
 
 [dev-dependencies]

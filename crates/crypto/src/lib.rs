@@ -50,8 +50,8 @@ pub use hmac::{
 };
 pub use kem::{KemError, KeyEncapsulation};
 pub use tdf::{
-    EncryptedPayload, NanoTdf, NanoTdfBuilder, NanoTdfHeader, SegmentInfo, SegmentedPayload,
-    TdfEncryption,
+    EncryptedPayload, NanoTdf, NanoTdfBuilder, NanoTdfError, NanoTdfPayload, NanoTdfSignature,
+    SegmentInfo, SegmentedPayload, TdfEncryption,
 };
 pub use types::{AesKey, KeyError, Nonce96, PayloadKey, PolicyKey};
 

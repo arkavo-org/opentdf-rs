@@ -1,36 +1,12 @@
-//! NanoTDF Cryptographic Operations
+//! NanoTDF Cryptographic Operations using Mbed TLS
 //!
-//! This module implements NanoTDF-specific encryption with:
-//! - Variable-length GCM tags (96-128 bits currently, 64-bit support planned)
-//! - 3-byte IVs (24 bits)
-//! - GMAC policy binding
-//! - ECDSA signature support
-//!
-//! ## Current Limitation
-//! **64-bit GCM tags**: The NanoTDF spec default of 64-bit tags is not yet supported.
-//! RustCrypto's aes-gcm crate only supports 96-128 bit tags due to a sealed trait limitation.
-//!
-//! ## Roadmap
-//! - ✅ 96-128 bit GCM tags (current, using RustCrypto)
-//! - 🚧 64-bit GCM tags via Mbed TLS backend (in development, use `nanotdf-mbedtls` feature when ready)
-//! - Use 96-bit tags for now, which provides good security while we complete 64-bit support
+//! This backend provides full GCM tag size support (64-128 bits) using Mbed TLS.
+//! This is the recommended backend for NanoTDF as 64-bit tags are the spec default.
 
 use crate::types::AesKey;
+use mbedtls::cipher::{Cipher, Decryption, Encryption, Fresh};
 use rand::RngCore;
 use thiserror::Error;
-
-// Conditional imports based on backend
-#[cfg(not(feature = "nanotdf-mbedtls"))]
-use aes_gcm::{
-    aead::{generic_array::GenericArray, Aead, KeyInit, Payload},
-    Aes256Gcm as Aes256Gcm128, // Standard 128-bit tag
-    Key,
-};
-#[cfg(not(feature = "nanotdf-mbedtls"))]
-use typenum::{U12, U13, U14, U15};
-
-#[cfg(feature = "nanotdf-mbedtls")]
-use mbedtls::cipher::{Cipher, Decryption, Encryption, Fresh};
 
 /// NanoTDF encryption errors
 #[derive(Debug, Error)]
@@ -52,16 +28,23 @@ pub enum NanoTdfCryptoError {
 
     #[error("Payload too large: {0} bytes (max 16777215)")]
     PayloadTooLarge(usize),
+
+    #[error("Mbed TLS error: {0}")]
+    MbedTlsError(String),
+}
+
+impl From<mbedtls::Error> for NanoTdfCryptoError {
+    fn from(err: mbedtls::Error) -> Self {
+        NanoTdfCryptoError::MbedTlsError(format!("{:?}", err))
+    }
 }
 
 /// Tag size for AES-256-GCM
 ///
-/// Without `nanotdf-mbedtls` feature: Only 96-128 bit tags supported (RustCrypto limitation)
-/// With `nanotdf-mbedtls` feature: Full 64-128 bit tag support via Mbed TLS
+/// Mbed TLS backend supports full 64-128 bit tag range
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TagSize {
-    /// 64-bit tag (8 bytes) - Only available with `nanotdf-mbedtls` feature
-    #[cfg(feature = "nanotdf-mbedtls")]
+    /// 64-bit tag (8 bytes) - NanoTDF default
     Bits64 = 8,
     /// 96-bit tag (12 bytes)
     Bits96 = 12,
@@ -89,7 +72,6 @@ impl TagSize {
     /// Create from byte count
     pub fn from_bytes(bytes: usize) -> Result<Self, NanoTdfCryptoError> {
         match bytes {
-            #[cfg(feature = "nanotdf-mbedtls")]
             8 => Ok(TagSize::Bits64),
             12 => Ok(TagSize::Bits96),
             13 => Ok(TagSize::Bits104),
@@ -148,16 +130,7 @@ impl NanoTdfIv {
     pub const POLICY_IV: Self = Self([0x00, 0x00, 0x00]);
 }
 
-// Type aliases for different tag sizes using AES-256
-// Note: aes-gcm crate only supports 96-128 bit tags (12-16 bytes)
-// 64-bit tags are NOT supported by RustCrypto aes-gcm
-type Aes256Gcm96 = aes_gcm::AesGcm<aes::Aes256, U12, U12>; // 12-byte nonce, 12-byte tag (96-bit)
-type Aes256Gcm104 = aes_gcm::AesGcm<aes::Aes256, U12, U13>; // 12-byte nonce, 13-byte tag (104-bit)
-type Aes256Gcm112 = aes_gcm::AesGcm<aes::Aes256, U12, U14>; // 12-byte nonce, 14-byte tag (112-bit)
-type Aes256Gcm120 = aes_gcm::AesGcm<aes::Aes256, U12, U15>; // 12-byte nonce, 15-byte tag (120-bit)
-                                                            // Aes256Gcm128 imported above as the standard variant (12-byte nonce, 16-byte tag, 128-bit)
-
-/// Encrypt data with AES-256-GCM using NanoTDF parameters
+/// Encrypt data with AES-256-GCM using NanoTDF parameters (Mbed TLS backend)
 ///
 /// # Arguments
 /// * `key` - AES-256 key
@@ -173,48 +146,33 @@ pub fn encrypt(
     plaintext: &[u8],
     tag_size: TagSize,
 ) -> Result<Vec<u8>, NanoTdfCryptoError> {
-    let nonce_bytes = iv.to_gcm_nonce();
+    use mbedtls::cipher::raw::{CipherId, CipherMode};
 
-    match tag_size {
-        TagSize::Bits96 => {
-            let cipher = Aes256Gcm96::new(Key::<Aes256Gcm96>::from_slice(key.as_slice()));
-            let nonce = GenericArray::from_slice(&nonce_bytes);
-            cipher
-                .encrypt(nonce, plaintext)
-                .map_err(|_| NanoTdfCryptoError::EncryptionFailed)
-        }
-        TagSize::Bits104 => {
-            let cipher = Aes256Gcm104::new(Key::<Aes256Gcm104>::from_slice(key.as_slice()));
-            let nonce = GenericArray::from_slice(&nonce_bytes);
-            cipher
-                .encrypt(nonce, plaintext)
-                .map_err(|_| NanoTdfCryptoError::EncryptionFailed)
-        }
-        TagSize::Bits112 => {
-            let cipher = Aes256Gcm112::new(Key::<Aes256Gcm112>::from_slice(key.as_slice()));
-            let nonce = GenericArray::from_slice(&nonce_bytes);
-            cipher
-                .encrypt(nonce, plaintext)
-                .map_err(|_| NanoTdfCryptoError::EncryptionFailed)
-        }
-        TagSize::Bits120 => {
-            let cipher = Aes256Gcm120::new(Key::<Aes256Gcm120>::from_slice(key.as_slice()));
-            let nonce = GenericArray::from_slice(&nonce_bytes);
-            cipher
-                .encrypt(nonce, plaintext)
-                .map_err(|_| NanoTdfCryptoError::EncryptionFailed)
-        }
-        TagSize::Bits128 => {
-            let cipher = Aes256Gcm128::new(Key::<Aes256Gcm128>::from_slice(key.as_slice()));
-            let nonce = GenericArray::from_slice(&nonce_bytes);
-            cipher
-                .encrypt(nonce, plaintext)
-                .map_err(|_| NanoTdfCryptoError::EncryptionFailed)
-        }
-    }
+    // Create AES-256-GCM cipher in encryption mode
+    let mut cipher = Cipher::<Encryption, _, _>::new(CipherId::Aes, CipherMode::GCM, 256)?;
+
+    // Set key and IV
+    cipher.set_key_iv(Encryption, key.as_slice(), Some(&iv.to_gcm_nonce()))?;
+
+    // Prepare output buffer
+    let mut ciphertext = vec![0u8; plaintext.len() + tag_size.bytes()];
+
+    // Encrypt with GCM
+    let (len, tag) = cipher.encrypt_auth(
+        &[],  // No AAD
+        plaintext,
+        &mut ciphertext[..plaintext.len()],
+        tag_size.bytes(),
+    )?;
+
+    // Append tag
+    ciphertext[len..len + tag.len()].copy_from_slice(&tag);
+    ciphertext.truncate(len + tag.len());
+
+    Ok(ciphertext)
 }
 
-/// Decrypt data with AES-256-GCM using NanoTDF parameters
+/// Decrypt data with AES-256-GCM using NanoTDF parameters (Mbed TLS backend)
 ///
 /// # Arguments
 /// * `key` - AES-256 key
@@ -238,90 +196,69 @@ pub fn decrypt(
         });
     }
 
-    let nonce_bytes = iv.to_gcm_nonce();
+    use mbedtls::cipher::raw::{CipherId, CipherMode};
 
-    match tag_size {
-        TagSize::Bits96 => {
-            let cipher = Aes256Gcm96::new(Key::<Aes256Gcm96>::from_slice(key.as_slice()));
-            let nonce = GenericArray::from_slice(&nonce_bytes);
-            cipher
-                .decrypt(nonce, ciphertext_and_tag)
-                .map_err(|_| NanoTdfCryptoError::DecryptionFailed)
-        }
-        TagSize::Bits104 => {
-            let cipher = Aes256Gcm104::new(Key::<Aes256Gcm104>::from_slice(key.as_slice()));
-            let nonce = GenericArray::from_slice(&nonce_bytes);
-            cipher
-                .decrypt(nonce, ciphertext_and_tag)
-                .map_err(|_| NanoTdfCryptoError::DecryptionFailed)
-        }
-        TagSize::Bits112 => {
-            let cipher = Aes256Gcm112::new(Key::<Aes256Gcm112>::from_slice(key.as_slice()));
-            let nonce = GenericArray::from_slice(&nonce_bytes);
-            cipher
-                .decrypt(nonce, ciphertext_and_tag)
-                .map_err(|_| NanoTdfCryptoError::DecryptionFailed)
-        }
-        TagSize::Bits120 => {
-            let cipher = Aes256Gcm120::new(Key::<Aes256Gcm120>::from_slice(key.as_slice()));
-            let nonce = GenericArray::from_slice(&nonce_bytes);
-            cipher
-                .decrypt(nonce, ciphertext_and_tag)
-                .map_err(|_| NanoTdfCryptoError::DecryptionFailed)
-        }
-        TagSize::Bits128 => {
-            let cipher = Aes256Gcm128::new(Key::<Aes256Gcm128>::from_slice(key.as_slice()));
-            let nonce = GenericArray::from_slice(&nonce_bytes);
-            cipher
-                .decrypt(nonce, ciphertext_and_tag)
-                .map_err(|_| NanoTdfCryptoError::DecryptionFailed)
-        }
-    }
+    // Split ciphertext and tag
+    let ciphertext_len = ciphertext_and_tag.len() - tag_size.bytes();
+    let ciphertext = &ciphertext_and_tag[..ciphertext_len];
+    let tag = &ciphertext_and_tag[ciphertext_len..];
+
+    // Create AES-256-GCM cipher in decryption mode
+    let mut cipher = Cipher::<Decryption, _, _>::new(CipherId::Aes, CipherMode::GCM, 256)?;
+
+    // Set key and IV
+    cipher.set_key_iv(Decryption, key.as_slice(), Some(&iv.to_gcm_nonce()))?;
+
+    // Prepare output buffer
+    let mut plaintext = vec![0u8; ciphertext_len];
+
+    // Decrypt with GCM
+    let len = cipher.decrypt_auth(
+        &[],  // No AAD
+        ciphertext,
+        &mut plaintext,
+        tag,
+    )?;
+
+    plaintext.truncate(len);
+    Ok(plaintext)
 }
 
-/// Generate GMAC tag for policy binding
+/// Generate GMAC tag for policy binding (Mbed TLS backend)
 ///
 /// GMAC is GCM with empty plaintext - the AAD becomes the message to authenticate.
-/// Uses 96-bit (12-byte) tag as minimum supported by Rust aes-gcm crate.
+/// Uses 64-bit (8-byte) tag as NanoTDF default.
 pub fn generate_gmac(
     key: &AesKey,
     iv: &NanoTdfIv,
     data: &[u8],
-) -> Result<[u8; 12], NanoTdfCryptoError> {
-    // GMAC uses 96-bit tag (minimum supported)
-    let cipher = Aes256Gcm96::new(Key::<Aes256Gcm96>::from_slice(key.as_slice()));
-    let nonce_bytes = iv.to_gcm_nonce();
+) -> Result<[u8; 8], NanoTdfCryptoError> {
+    use mbedtls::cipher::raw::{CipherId, CipherMode};
+
+    // GMAC uses 64-bit tag (NanoTDF default)
+    let mut cipher = Cipher::<Encryption, _, _>::new(CipherId::Aes, CipherMode::GCM, 256)?;
+    cipher.set_key_iv(Encryption, key.as_slice(), Some(&iv.to_gcm_nonce()))?;
 
     // GMAC: encrypt empty plaintext with AAD
-    let payload = Payload {
-        msg: &[],
-        aad: data,
-    };
+    let mut output = vec![];
+    let (_, tag) = cipher.encrypt_auth(
+        data,  // AAD is the data to authenticate
+        &[],   // Empty plaintext
+        &mut output,
+        8,     // 64-bit tag
+    )?;
 
-    let nonce = GenericArray::from_slice(&nonce_bytes);
-    let result = cipher
-        .encrypt(nonce, payload)
-        .map_err(|_| NanoTdfCryptoError::EncryptionFailed)?;
-
-    // Result is just the tag (12 bytes for GMAC)
-    if result.len() != 12 {
-        return Err(NanoTdfCryptoError::InvalidTagLength {
-            expected: 12,
-            actual: result.len(),
-        });
-    }
-
-    let mut gmac = [0u8; 12];
-    gmac.copy_from_slice(&result);
+    let mut gmac = [0u8; 8];
+    gmac.copy_from_slice(&tag[..8]);
     Ok(gmac)
 }
 
-/// Verify GMAC tag for policy binding
+/// Verify GMAC tag for policy binding (Mbed TLS backend)
 pub fn verify_gmac(
     key: &AesKey,
     iv: &NanoTdfIv,
     data: &[u8],
-    expected_tag: &[u8; 12],
+    expected_tag: &[u8; 8],
 ) -> Result<bool, NanoTdfCryptoError> {
     let computed_tag = generate_gmac(key, iv, data)?;
 
@@ -349,6 +286,7 @@ mod tests {
         let plaintext = b"Test all NanoTDF tag sizes!";
 
         let tag_sizes = [
+            TagSize::Bits64,
             TagSize::Bits96,
             TagSize::Bits104,
             TagSize::Bits112,
@@ -374,15 +312,15 @@ mod tests {
     }
 
     #[test]
-    fn test_96bit_tag() {
+    fn test_64bit_tag() {
         let key = AesKey::from_slice(&[0x42u8; 32]).unwrap();
         let iv = NanoTdfIv::random();
-        let plaintext = b"Compact NanoTDF with 96-bit tag";
+        let plaintext = b"Compact NanoTDF with 64-bit tag";
 
-        let ciphertext = encrypt(&key, &iv, plaintext, TagSize::Bits96).unwrap();
-        assert_eq!(ciphertext.len(), plaintext.len() + 12);
+        let ciphertext = encrypt(&key, &iv, plaintext, TagSize::Bits64).unwrap();
+        assert_eq!(ciphertext.len(), plaintext.len() + 8);
 
-        let decrypted = decrypt(&key, &iv, &ciphertext, TagSize::Bits96).unwrap();
+        let decrypted = decrypt(&key, &iv, &ciphertext, TagSize::Bits64).unwrap();
         assert_eq!(decrypted, plaintext);
     }
 
@@ -406,13 +344,13 @@ mod tests {
         let data = b"Policy data to authenticate";
 
         let gmac = generate_gmac(&key, &iv, data).unwrap();
-        assert_eq!(gmac.len(), 12);
+        assert_eq!(gmac.len(), 8);
 
         // Verify returns true for correct tag
         assert!(verify_gmac(&key, &iv, data, &gmac).unwrap());
 
         // Verify returns false for wrong tag
-        let wrong_gmac = [0u8; 12];
+        let wrong_gmac = [0u8; 8];
         assert!(!verify_gmac(&key, &iv, data, &wrong_gmac).unwrap());
     }
 
@@ -422,8 +360,8 @@ mod tests {
         let iv = NanoTdfIv::random();
         let plaintext = b"Test";
 
-        // Encrypt with 96-bit tag
-        let ciphertext = encrypt(&key, &iv, plaintext, TagSize::Bits96).unwrap();
+        // Encrypt with 64-bit tag
+        let ciphertext = encrypt(&key, &iv, plaintext, TagSize::Bits64).unwrap();
 
         // Try to decrypt with wrong tag size (should fail)
         let result = decrypt(&key, &iv, &ciphertext, TagSize::Bits128);
