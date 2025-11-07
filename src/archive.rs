@@ -316,6 +316,90 @@ impl TdfArchiveBuilder {
     }
 }
 
+/// In-memory TDF archive builder for WASM compatibility
+///
+/// This builder creates TDF archives entirely in memory without requiring filesystem access,
+/// making it suitable for WebAssembly environments.
+pub struct TdfArchiveMemoryBuilder {
+    writer: ZipWriter<io::Cursor<Vec<u8>>>,
+}
+
+impl TdfArchiveMemoryBuilder {
+    /// Creates a new in-memory TDF archive builder
+    pub fn new() -> Self {
+        Self {
+            writer: ZipWriter::new(io::Cursor::new(Vec::new())),
+        }
+    }
+
+    /// Adds a TDF entry to the archive
+    pub fn add_entry(
+        &mut self,
+        manifest: &TdfManifest,
+        payload: &[u8],
+        index: usize,
+    ) -> Result<(), TdfError> {
+        let manifest_json = manifest.to_json()?;
+
+        // Write manifest
+        self.writer.start_file::<_, ()>(
+            format!("{}.manifest.json", index),
+            FileOptions::default().compression_method(zip::CompressionMethod::Stored),
+        )?;
+        self.writer.write_all(manifest_json.as_bytes())?;
+
+        // Write payload
+        self.writer.start_file::<_, ()>(
+            format!("{}.payload", index),
+            FileOptions::default().compression_method(zip::CompressionMethod::Stored),
+        )?;
+        self.writer.write_all(payload)?;
+
+        Ok(())
+    }
+
+    /// Adds a TDF entry with segmented payload to the archive
+    pub fn add_entry_with_segments(
+        &mut self,
+        manifest: &TdfManifest,
+        segments: &[Vec<u8>],
+        index: usize,
+    ) -> Result<(), TdfError> {
+        let manifest_json = manifest.to_json()?;
+
+        // Write manifest
+        self.writer.start_file::<_, ()>(
+            format!("{}.manifest.json", index),
+            FileOptions::default().compression_method(zip::CompressionMethod::Stored),
+        )?;
+        self.writer.write_all(manifest_json.as_bytes())?;
+
+        // Write payload - concatenate all segments
+        self.writer.start_file::<_, ()>(
+            format!("{}.payload", index),
+            FileOptions::default().compression_method(zip::CompressionMethod::Stored),
+        )?;
+
+        for segment in segments {
+            self.writer.write_all(segment)?;
+        }
+
+        Ok(())
+    }
+
+    /// Finalizes the archive and returns the bytes
+    pub fn finish(self) -> Result<Vec<u8>, TdfError> {
+        let cursor = self.writer.finish()?;
+        Ok(cursor.into_inner())
+    }
+}
+
+impl Default for TdfArchiveMemoryBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

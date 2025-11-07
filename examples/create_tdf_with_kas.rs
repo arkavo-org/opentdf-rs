@@ -60,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // NEW API: Just 4 lines!
-    Tdf::encrypt(&plaintext)
+    Tdf::encrypt(plaintext.clone())
         .kas_url(&kas_url)
         .policy(policy)
         .to_file(&output_path)?;

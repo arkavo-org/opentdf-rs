@@ -1,0 +1,427 @@
+# OpenTDF WASM
+
+WebAssembly bindings for OpenTDF (Trusted Data Format), enabling data-centric security in both browser and Node.js environments.
+
+## Features
+
+- Create TDF archives with encrypted data
+- Read TDF archives and access manifests
+- Attribute-Based Access Control (ABAC) policy evaluation
+- Works in both browser and Node.js environments
+- Zero-copy operations where possible
+
+## Installation
+
+### From GitHub Packages (Recommended)
+
+The package is published to GitHub Packages. You'll need a GitHub account and a personal access token.
+
+**Step 1:** Create a GitHub [Personal Access Token](https://github.com/settings/tokens) with `read:packages` permission.
+
+**Step 2:** Configure npm to use GitHub Packages. Create/update `~/.npmrc`:
+
+```
+@arkavo-org:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=YOUR_GITHUB_TOKEN
+```
+
+**Step 3:** Install the package:
+
+```bash
+npm install @arkavo-org/opentdf-wasm
+```
+
+See [NPM_PUBLISHING.md](NPM_PUBLISHING.md) for detailed installation instructions, CI/CD setup, and troubleshooting.
+
+### From GitHub Releases
+
+Download pre-built WASM binaries without npm:
+
+```bash
+# Download and extract
+wget https://github.com/arkavo-org/opentdf-rs/releases/latest/download/opentdf-wasm-combined.tar.gz
+tar -xzf opentdf-wasm-combined.tar.gz
+
+# Contains web/ and node/ directories ready to use
+```
+
+## Usage
+
+### Browser
+
+```javascript
+import init, { tdf_create, tdf_read, tdf_decrypt_with_kas, access_evaluate, version } from '@arkavo-org/opentdf-wasm';
+
+// Initialize the WASM module
+await init();
+
+console.log('OpenTDF WASM version:', version());
+
+// Obtain OAuth token (example - your implementation will vary)
+const oauthToken = await getOAuthToken();
+
+// Create a TDF
+const data = btoa('Sensitive information'); // Base64 encode
+const policy = {
+  uuid: crypto.randomUUID(),
+  body: {
+    attributes: [],
+    dissem: ['user@example.com']
+  }
+};
+
+const result = await tdf_create(
+  data,
+  'https://kas.example.com/kas',
+  JSON.stringify(policy)
+);
+
+if (result.success) {
+  const tdfArchive = result.data; // Base64-encoded TDF
+  console.log('TDF created:', tdfArchive);
+
+  // Read the TDF manifest
+  const manifestResult = tdf_read(tdfArchive);
+  if (manifestResult.success) {
+    const manifest = JSON.parse(manifestResult.data);
+    console.log('Manifest:', manifest);
+  }
+
+  // Decrypt the TDF using KAS
+  const decryptResult = await tdf_decrypt_with_kas(tdfArchive, oauthToken);
+  if (decryptResult.success) {
+    const plaintext = atob(decryptResult.data); // Base64 decode
+    console.log('Decrypted:', plaintext);
+  } else {
+    console.error('Decryption error:', decryptResult.error);
+  }
+} else {
+  console.error('Error:', result.error);
+}
+```
+
+### Node.js
+
+```javascript
+const { tdf_create, tdf_read, tdf_decrypt_with_kas, access_evaluate, version } = require('@arkavo-org/opentdf-wasm');
+
+console.log('OpenTDF WASM version:', version());
+
+// Obtain OAuth token (example - your implementation will vary)
+const oauthToken = await getOAuthToken();
+
+// Create a TDF
+const data = Buffer.from('Sensitive information').toString('base64');
+const policy = {
+  uuid: require('crypto').randomUUID(),
+  body: {
+    attributes: [],
+    dissem: ['user@example.com']
+  }
+};
+
+const result = await tdf_create(
+  data,
+  'https://kas.example.com/kas',
+  JSON.stringify(policy)
+);
+
+if (result.success) {
+  const tdfArchive = result.data;
+  console.log('TDF created successfully');
+
+  // Read the TDF manifest
+  const manifestResult = tdf_read(tdfArchive);
+  if (manifestResult.success) {
+    const manifest = JSON.parse(manifestResult.data);
+    console.log('Manifest:', manifest);
+  }
+
+  // Decrypt the TDF using KAS
+  const decryptResult = await tdf_decrypt_with_kas(tdfArchive, oauthToken);
+  if (decryptResult.success) {
+    const plaintext = Buffer.from(decryptResult.data, 'base64').toString('utf8');
+    console.log('Decrypted:', plaintext);
+  } else {
+    console.error('Decryption error:', decryptResult.error);
+  }
+} else {
+  console.error('Error:', result.error);
+}
+```
+
+### Attribute-Based Access Control (ABAC)
+
+```javascript
+// Define an attribute policy
+const policy = {
+  attribute: {
+    namespace: "gov.example",
+    name: "clearance"
+  },
+  operator: "minimumOf",
+  value: "SECRET"
+};
+
+// User attributes
+const userAttributes = {
+  "gov.example:clearance": "TOP_SECRET",
+  "gov.example:department": "ENGINEERING"
+};
+
+// Evaluate access
+const accessResult = access_evaluate(
+  JSON.stringify(policy),
+  JSON.stringify(userAttributes)
+);
+
+if (accessResult.success) {
+  const granted = accessResult.data === 'true';
+  console.log('Access granted:', granted);
+} else {
+  console.error('Evaluation error:', accessResult.error);
+}
+```
+
+### Complex ABAC Policies
+
+```javascript
+// Create a policy requiring both clearance and department
+const complexPolicy = {
+  type: "AND",
+  conditions: [
+    {
+      attribute: {
+        namespace: "gov.example",
+        name: "clearance"
+      },
+      operator: "minimumOf",
+      value: "SECRET"
+    },
+    {
+      attribute: {
+        namespace: "gov.example",
+        name: "department"
+      },
+      operator: "in",
+      value: ["ENGINEERING", "EXECUTIVE"]
+    }
+  ]
+};
+
+// Create TDF with ABAC policy
+const fullPolicy = {
+  uuid: crypto.randomUUID(),
+  body: {
+    attributes: [complexPolicy],
+    dissem: ['user@example.com']
+  }
+};
+
+const result = tdf_create(
+  btoa('Classified data'),
+  'https://kas.example.com',
+  JSON.stringify(fullPolicy)
+);
+```
+
+## API Reference
+
+### `version(): string`
+
+Returns the version of the OpenTDF WASM library.
+
+### `tdf_create(data: string, kas_url: string, policy_json: string): WasmResult`
+
+Creates a TDF archive with encrypted data.
+
+**Parameters:**
+- `data`: Base64-encoded data to encrypt
+- `kas_url`: KAS (Key Access Service) URL
+- `policy_json`: JSON string containing the policy
+
+**Returns:** `WasmResult` with base64-encoded TDF archive in `data` field
+
+### `tdf_read(tdf_data: string): WasmResult`
+
+Reads a TDF archive and returns its manifest.
+
+**Parameters:**
+- `tdf_data`: Base64-encoded TDF archive
+
+**Returns:** `WasmResult` with JSON manifest in `data` field
+
+### `tdf_decrypt_with_kas(tdf_data: string, kas_token: string): Promise<WasmResult>`
+
+Decrypts a TDF archive using the KAS rewrap protocol (async).
+
+**Parameters:**
+- `tdf_data`: Base64-encoded TDF archive
+- `kas_token`: OAuth bearer token for KAS authentication
+
+**Returns:** Promise resolving to `WasmResult` with base64-encoded plaintext in `data` field
+
+**Flow:**
+1. Parses TDF manifest and extracts policy/key access info
+2. Generates ephemeral RSA-2048 key pair
+3. Builds and signs JWT rewrap request (ES256)
+4. POSTs to KAS `/v2/rewrap` endpoint with OAuth token
+5. Unwraps returned key using RSA-OAEP (SHA-1)
+6. Decrypts payload with AES-256-GCM
+
+**Error Handling:**
+- 401: Invalid OAuth token
+- 403: Access denied (policy evaluation failed)
+- Network errors: CORS or connectivity issues
+
+### `policy_create(policy_json: string): WasmResult`
+
+Creates and validates a policy from JSON.
+
+**Parameters:**
+- `policy_json`: JSON string containing policy definition
+
+**Returns:** `WasmResult` with validated policy JSON in `data` field
+
+### `access_evaluate(policy_json: string, attributes_json: string): WasmResult`
+
+Evaluates an attribute-based access control policy.
+
+**Parameters:**
+- `policy_json`: JSON string containing the attribute policy
+- `attributes_json`: JSON string containing user attributes as key-value pairs
+
+**Returns:** `WasmResult` with boolean string ("true"/"false") in `data` field
+
+### `attribute_identifier_create(identifier: string): WasmResult`
+
+Creates an attribute identifier from namespace:name format.
+
+**Parameters:**
+- `identifier`: String in format "namespace:name"
+
+**Returns:** `WasmResult` with JSON attribute identifier in `data` field
+
+### `WasmResult`
+
+All functions return a `WasmResult` object with the following properties:
+
+- `success: boolean` - Whether the operation succeeded
+- `data: string | null` - Result data if successful
+- `error: string | null` - Error message if failed
+
+## Building from Source
+
+### Prerequisites
+
+- Rust 1.70 or later
+- wasm-pack (`cargo install wasm-pack`)
+
+### Build for Web
+
+```bash
+cd crates/wasm
+wasm-pack build --target web --out-dir pkg-web
+```
+
+### Build for Node.js
+
+```bash
+cd crates/wasm
+wasm-pack build --target nodejs --out-dir pkg-node
+```
+
+### Build both targets
+
+```bash
+npm run build
+```
+
+## Testing
+
+```bash
+wasm-pack test --headless --firefox
+```
+
+## Size Optimization
+
+The WASM binary is optimized for size using:
+- `opt-level = "z"` - Optimize for size
+- `lto = true` - Link-time optimization
+- `codegen-units = 1` - Single codegen unit for better optimization
+- `wasm-opt` with `-O3` - Additional WebAssembly-specific optimization
+
+Typical bundle sizes:
+- Web: ~730 KB uncompressed, ~230 KB gzipped
+- Node.js: ~780 KB uncompressed, ~250 KB gzipped
+
+The bundle includes full KAS rewrap protocol with:
+- RSA-2048 key generation and OAEP encryption/decryption
+- P-256 ECDSA JWT signing (ES256)
+- AES-256-GCM encryption/decryption
+- Browser Fetch API integration
+
+## Browser Compatibility
+
+- Chrome/Edge: 84+
+- Firefox: 79+
+- Safari: 15+
+- All browsers with WebAssembly support
+
+## Node.js Compatibility
+
+- Node.js 14+ with WebAssembly support
+
+## KAS Integration
+
+The WASM module includes **full KAS (Key Access Service) integration** for both encryption and decryption:
+
+### Encryption (tdf_create)
+- Automatically fetches KAS public key via browser Fetch API
+- Wraps DEK with RSA-2048-OAEP (SHA-1 for Go SDK compatibility)
+- Creates TDF with proper policy binding
+- DEK never leaves WASM environment
+
+### Decryption (tdf_decrypt_with_kas)
+- Generates ephemeral RSA-2048 key pair
+- Signs JWT rewrap request with P-256 ECDSA (ES256)
+- POSTs to KAS `/v2/rewrap` endpoint with OAuth token
+- Unwraps returned key with RSA-OAEP
+- Decrypts payload with AES-256-GCM
+- All cryptographic operations happen in WASM
+
+### OAuth Token Management
+The WASM module requires an OAuth bearer token for KAS operations. Your application must:
+1. Obtain OAuth token from your identity provider
+2. Pass token to `tdf_create()` and `tdf_decrypt_with_kas()`
+3. Handle token refresh when needed
+
+### CORS Configuration
+KAS must be configured to allow CORS requests from your domain:
+```
+Access-Control-Allow-Origin: https://your-domain.com
+Access-Control-Allow-Methods: GET, POST, OPTIONS
+Access-Control-Allow-Headers: Authorization, Content-Type, Accept
+```
+
+### Security Guarantees
+✅ DEK never exposed in JavaScript
+✅ Ephemeral keys generated fresh for each operation
+✅ Full KAS authorization enforcement
+✅ Compatible with OpenTDF Go/Python SDKs
+✅ Proper zero-trust architecture
+
+## Security Considerations
+
+- All cryptographic operations use the same secure primitives as the native Rust library
+- Random number generation uses the browser's `crypto.getRandomValues()` or Node.js `crypto.randomBytes()`
+- Memory is automatically managed by WebAssembly
+- Sensitive data should be cleared from JavaScript variables after use
+
+## License
+
+Apache-2.0
+
+## Contributing
+
+See the main [OpenTDF-RS repository](https://github.com/arkavo-org/opentdf-rs) for contribution guidelines.

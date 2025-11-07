@@ -1,0 +1,121 @@
+name: WASM Feature Branch CI
+
+on:
+  push:
+    branches:
+      - 'claude/**'
+      - 'feature/**'
+    paths:
+      - 'crates/wasm/**'
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/wasm-feature.yml'
+  pull_request:
+    paths:
+      - 'crates/wasm/**'
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-wasm:
+    name: Build and Test WASM
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-git-
+
+      - name: Cache target directory
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-target-wasm-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-target-wasm-
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build WASM for Web
+        working-directory: crates/wasm
+        run: wasm-pack build --target web --out-dir pkg-web
+
+      - name: Build WASM for Node.js
+        working-directory: crates/wasm
+        run: wasm-pack build --target nodejs --out-dir pkg-node
+
+      - name: Check WASM bundle size
+        run: |
+          echo "### WASM Bundle Sizes" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### Web Target" >> $GITHUB_STEP_SUMMARY
+          ls -lh crates/wasm/pkg-web/*.wasm | awk '{print "- " $9 ": " $5}' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### Node.js Target" >> $GITHUB_STEP_SUMMARY
+          ls -lh crates/wasm/pkg-node/*.wasm | awk '{print "- " $9 ": " $5}' >> $GITHUB_STEP_SUMMARY
+
+      - name: Run tests
+        working-directory: crates/wasm
+        run: wasm-pack test --node
+
+      - name: Upload Web WASM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-web-${{ github.sha }}
+          path: crates/wasm/pkg-web/
+          retention-days: 7
+
+      - name: Upload Node.js WASM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-node-${{ github.sha }}
+          path: crates/wasm/pkg-node/
+          retention-days: 7
+
+  lint:
+    name: Lint WASM Code
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+          targets: wasm32-unknown-unknown
+
+      - name: Run rustfmt
+        working-directory: crates/wasm
+        run: cargo fmt -- --check
+
+      - name: Run clippy
+        working-directory: crates/wasm
+        run: cargo clippy --target wasm32-unknown-unknown -- -D warnings

@@ -649,6 +649,224 @@ Tdf::encrypt(b"Classified information")
     .to_file("classified.tdf")?;
 ```
 
+## WebAssembly (WASM) Support
+
+OpenTDF-RS can be compiled to WebAssembly and run in both browser and Node.js environments. This enables data-centric security directly in web applications without requiring a server-side component.
+
+### Installation
+
+#### From GitHub Packages
+
+Configure npm to use GitHub Packages for `@arkavo-org` scoped packages:
+
+```bash
+# Create/update .npmrc
+echo "@arkavo-org:registry=https://npm.pkg.github.com" >> .npmrc
+
+# Install the package
+npm install @arkavo-org/opentdf-wasm
+```
+
+#### From GitHub Releases
+
+Download pre-built WASM binaries from [GitHub Releases](https://github.com/arkavo-org/opentdf-rs/releases).
+
+### Quick Start
+
+#### Browser
+
+```javascript
+import init, { tdf_create, tdf_read, access_evaluate, version } from '@arkavo-org/opentdf-wasm';
+
+// Initialize the WASM module
+await init();
+
+console.log('OpenTDF version:', version());
+
+// Create a TDF
+const data = btoa('Sensitive information'); // Base64 encode
+const policy = {
+  uuid: crypto.randomUUID(),
+  body: {
+    attributes: [],
+    dissem: ['user@example.com']
+  }
+};
+
+const result = tdf_create(
+  data,
+  'https://kas.example.com',
+  JSON.stringify(policy)
+);
+
+if (result.success) {
+  console.log('TDF created:', result.data);
+}
+```
+
+#### Node.js
+
+```javascript
+const { tdf_create, version } = require('@arkavo-org/opentdf-wasm');
+
+console.log('OpenTDF version:', version());
+
+const data = Buffer.from('Sensitive information').toString('base64');
+const policy = {
+  uuid: require('crypto').randomUUID(),
+  body: {
+    attributes: [],
+    dissem: ['user@example.com']
+  }
+};
+
+const result = tdf_create(data, 'https://kas.example.com', JSON.stringify(policy));
+console.log('Success:', result.success);
+```
+
+### WASM Features
+
+- ✅ TDF archive creation with encryption
+- ✅ TDF manifest reading
+- ✅ Attribute-Based Access Control (ABAC) policy evaluation
+- ✅ Policy creation and validation
+- ✅ Works in browser and Node.js environments
+- ✅ Optimized for size (~200KB gzipped for web)
+
+### Building from Source
+
+```bash
+# Install wasm-pack
+cargo install wasm-pack
+
+# Build for web
+cd crates/wasm
+wasm-pack build --target web --out-dir pkg-web
+
+# Build for Node.js
+wasm-pack build --target nodejs --out-dir pkg-node
+```
+
+### GitHub Releases
+
+WASM artifacts are automatically built and published for:
+- **Feature branches**: Built on every push for testing (artifacts retained 7 days)
+- **Main branch**: Built and retained as latest artifacts (90 days)
+- **Tagged releases**: Full releases with downloadable archives and checksums
+
+Download options:
+- `opentdf-wasm-web.tar.gz` - Web browser target
+- `opentdf-wasm-node.tar.gz` - Node.js target
+- `opentdf-wasm-combined.tar.gz` - Both targets in one archive
+
+All releases include SHA256 checksums for verification.
+
+For complete WASM documentation, see [crates/wasm/README.md](crates/wasm/README.md).
+
+## Performance Benchmarks
+
+OpenTDF-RS includes comprehensive performance benchmarks for in-memory TDF operations, demonstrating production-ready performance across various file sizes.
+
+### Quick Summary
+
+| Operation | 1 KB | 100 KB | 1 MB |
+|-----------|------|--------|------|
+| TDF Creation | 38.9 µs | 838 µs | 10.5 ms |
+| TDF Reading | 7.8 µs | 60.6 µs | 580 µs |
+| Encryption | 26.7 µs | 625 µs | 5.78 ms |
+| Archive Building | 5.5 µs | 53.1 µs | 514 µs |
+
+**Throughput**: ~100 MiB/s sustained for complete TDF creation operations
+
+### Running Benchmarks
+
+```bash
+# Run all benchmarks
+cargo bench --bench memory_builder
+
+# View HTML reports
+open target/criterion/report/index.html
+```
+
+### Key Results
+
+- **Fast Small File Operations**: <40µs overhead for 1KB files
+- **Scalable Performance**: Consistent throughput from 1KB to 1MB+
+- **In-Memory Operations**: 1.86 GiB/s archive building (no filesystem bottleneck)
+- **WASM Compatible**: Zero filesystem dependencies, ideal for browser/WASI
+
+For detailed benchmark results and analysis, see [BENCHMARKS.md](BENCHMARKS.md).
+
+## WASI (WebAssembly System Interface) Support
+
+OpenTDF-RS works seamlessly in WASI environments, enabling secure TDF operations in sandboxed WebAssembly runtimes like Wasmtime.
+
+### What is WASI?
+
+WASI provides a standardized system interface for WebAssembly, offering:
+- Sandboxed execution with capability-based security
+- Cross-platform portability
+- Native-like performance
+- No filesystem dependencies required
+
+### Quick Start
+
+```bash
+# Install WASI target
+rustup target add wasm32-wasip1
+
+# Install Wasmtime
+curl https://wasmtime.dev/install.sh -sSf | bash
+
+# Build and run the test
+cd tests/wasi
+cargo build --target wasm32-wasip1 --release
+wasmtime target/wasm32-wasip1/release/opentdf-wasi-test.wasm
+```
+
+### Example Output
+
+```
+=== OpenTDF WASI Example ===
+
+Original data: Hello from WASI! This is confidential data.
+Data size: 43 bytes
+
+Creating policy...
+Policy created with UUID: c27f405b-d208-4610-ae24-f58c464714c1
+
+Encrypting data...
+Encryption successful!
+
+Building TDF archive in memory...
+TDF archive created!
+  Archive size: 1544 bytes
+
+Reading TDF archive from memory...
+Archive opened successfully
+
+=== WASI Test Complete ===
+✓ TDF creation (in-memory) - SUCCESS
+✓ TDF reading (in-memory) - SUCCESS
+✓ No filesystem operations required!
+```
+
+### What This Demonstrates
+
+- ✅ **Complete TDF Lifecycle**: Creation, encryption, and reading entirely in memory
+- ✅ **Zero Filesystem Access**: All operations use `io::Cursor<Vec<u8>>`
+- ✅ **WASI Sandbox**: Secure cryptographic operations in capability-based environment
+- ✅ **Cross-Platform**: Same binary runs on Linux, macOS, Windows with Wasmtime
+
+### Performance
+
+- **Binary Size**: ~2.1 MB (optimized WASM)
+- **Execution Time**: <50ms total
+- **Memory Usage**: ~5MB peak
+- **Startup Time**: <10ms
+
+For complete WASI documentation and advanced usage, see [tests/wasi/README.md](tests/wasi/README.md).
+
 ## License
 
 This project is licensed under [LICENSE].

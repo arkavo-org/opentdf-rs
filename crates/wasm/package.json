@@ -1,0 +1,37 @@
+{
+  "name": "@arkavo-org/opentdf-wasm",
+  "version": "0.4.0",
+  "description": "WebAssembly bindings for OpenTDF (Trusted Data Format)",
+  "main": "pkg/opentdf_wasm.js",
+  "types": "pkg/opentdf_wasm.d.ts",
+  "files": [
+    "pkg"
+  ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/arkavo-org/opentdf-rs"
+  },
+  "keywords": [
+    "opentdf",
+    "tdf",
+    "encryption",
+    "wasm",
+    "webassembly",
+    "security",
+    "abac"
+  ],
+  "author": "Arkavo",
+  "license": "Apache-2.0",
+  "scripts": {
+    "build": "wasm-pack build --target web --out-dir pkg-web && wasm-pack build --target nodejs --out-dir pkg-node",
+    "build:web": "wasm-pack build --target web --out-dir pkg-web",
+    "build:node": "wasm-pack build --target nodejs --out-dir pkg-node",
+    "test": "wasm-pack test --headless --firefox"
+  },
+  "devDependencies": {
+    "wasm-pack": "^0.12.0"
+  }
+}

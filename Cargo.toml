@@ -1,13 +1,13 @@
 [package]
 name = "opentdf"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "Rust implementation of OpenTDF (Trusted Data Format)"
 license = "Apache-2.0"
 repository = "https://github.com/arkavo-org/opentdf-rs"
 
 [dependencies]
-zip = "2.2.0"
+zip = { version = "2.2.0", default-features = false, features = ["deflate"] }
 serde_json = "1.0.132"
 serde = { version = "1.0.214", features = ["derive"] }
 base64 = "0.22.1"
@@ -33,14 +33,20 @@ sha1 = { version = "0.10", optional = true }
 
 [dev-dependencies]
 mockito = "1.5"
+criterion = "0.5"
 
 [workspace]
-members = ["crates/mcp-server"]
+members = ["crates/mcp-server", "crates/wasm"]
 
 [features]
 default = []
 mcp = []
 kas = ["reqwest", "tokio", "p256", "hkdf", "jwt-simple", "rsa", "pkcs8", "sha1"]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
 
 [[example]]
 name = "kas_decrypt"
@@ -49,3 +55,11 @@ required-features = ["kas"]
 [[example]]
 name = "create_tdf_with_kas"
 required-features = ["kas"]
+
+[[example]]
+name = "create_tdf_platform"
+required-features = ["kas"]
+
+[[bench]]
+name = "memory_builder"
+harness = false
