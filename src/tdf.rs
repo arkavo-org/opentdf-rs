@@ -89,7 +89,7 @@ impl Tdf {
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let kas_client = KasClient::new("https://kas.example.com", "token")?;
     /// let tdf_data = std::fs::read("encrypted.tdf")?;
-    /// let plaintext = Tdf::decrypt(&tdf_data)
+    /// let plaintext = Tdf::decrypt(tdf_data)
     ///     .kas_client(kas_client)
     ///     .to_bytes()
     ///     .await?;

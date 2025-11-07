@@ -43,11 +43,8 @@
 //!     "http://kas.example.com".to_string()
 //! );
 //!
-//! // Create a signed JWT token (see examples/jwt_helper.rs)
-//! let signed_token = "eyJ..."; // Pre-signed JWT token
-//!
-//! // Unwrap a key from a TDF manifest
-//! let payload_key = client.rewrap_standard_tdf(&manifest, signed_token).await?;
+//! // Unwrap a key from a TDF manifest (JWT signing handled internally)
+//! let payload_key = client.rewrap_standard_tdf(&manifest).await?;
 //! # Ok(())
 //! # }
 //! ```
