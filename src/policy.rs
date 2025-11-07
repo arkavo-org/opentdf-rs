@@ -132,9 +132,7 @@ impl FqnError {
             FqnError::NamespaceNotRegistered { .. } => {
                 "Register the namespace using NamespaceRegistry::register() before use"
             }
-            FqnError::MalformedUrl(_) => {
-                "Ensure URL is properly formatted with scheme://host/path"
-            }
+            FqnError::MalformedUrl(_) => "Ensure URL is properly formatted with scheme://host/path",
             FqnError::MissingComponent { component } => match *component {
                 "namespace" => "Provide a namespace: https://namespace.com/...",
                 "name" => "Provide an attribute name: .../attr/name/...",
@@ -719,7 +717,9 @@ impl Policy {
                 field: "uuid".to_string(),
                 error_type: ValidationErrorType::InvalidFormat,
                 message: format!("Invalid UUID format: {}", e),
-                suggestion: Some("Use PolicyBuilder::id_auto() to generate a valid UUID".to_string()),
+                suggestion: Some(
+                    "Use PolicyBuilder::id_auto() to generate a valid UUID".to_string(),
+                ),
             });
         }
 
@@ -729,10 +729,7 @@ impl Policy {
                 errors.push(ValidationError {
                     field: "time_window".to_string(),
                     error_type: ValidationErrorType::OutOfRange,
-                    message: format!(
-                        "valid_from ({}) must be before valid_to ({})",
-                        from, to
-                    ),
+                    message: format!("valid_from ({}) must be before valid_to ({})", from, to),
                     suggestion: Some("Ensure valid_from is earlier than valid_to".to_string()),
                 });
             }
@@ -756,7 +753,9 @@ impl Policy {
                 field: "dissem".to_string(),
                 error_type: ValidationErrorType::EmptyList,
                 message: "Dissemination list is empty but attributes are defined".to_string(),
-                suggestion: Some("Add at least one dissemination entity or remove all attributes".to_string()),
+                suggestion: Some(
+                    "Add at least one dissemination entity or remove all attributes".to_string(),
+                ),
             });
         }
 
@@ -775,7 +774,9 @@ impl Policy {
                     field: format!("dissem[{}]", idx),
                     error_type: ValidationErrorType::InvalidFormat,
                     message: format!("Duplicate dissemination entity: {}", entity),
-                    suggestion: Some("Remove duplicate entries from dissemination list".to_string()),
+                    suggestion: Some(
+                        "Remove duplicate entries from dissemination list".to_string(),
+                    ),
                 });
             }
         }
@@ -885,18 +886,20 @@ impl PolicyBuilder {
 
         if let Some(value) = parsed.get_value() {
             // Has value - create equality condition
-            self.attributes.push(AttributePolicy::Condition(AttributeCondition {
-                attribute: identifier,
-                operator: Operator::Equals,
-                value: Some(AttributeValue::String(value.to_string())),
-            }));
+            self.attributes
+                .push(AttributePolicy::Condition(AttributeCondition {
+                    attribute: identifier,
+                    operator: Operator::Equals,
+                    value: Some(AttributeValue::String(value.to_string())),
+                }));
         } else {
             // No value - just check presence
-            self.attributes.push(AttributePolicy::Condition(AttributeCondition {
-                attribute: identifier,
-                operator: Operator::Present,
-                value: None,
-            }));
+            self.attributes
+                .push(AttributePolicy::Condition(AttributeCondition {
+                    attribute: identifier,
+                    operator: Operator::Present,
+                    value: None,
+                }));
         }
 
         Ok(self)
@@ -964,7 +967,9 @@ impl PolicyBuilder {
     ///
     /// If no UUID was set, one will be auto-generated.
     pub fn build(self) -> Result<Policy, PolicyError> {
-        let uuid = self.uuid.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let uuid = self
+            .uuid
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
         Ok(Policy {
             uuid,
@@ -1000,7 +1005,8 @@ impl Default for ClearanceHierarchy {
 }
 
 /// Global instance of clearance hierarchy
-pub static CLEARANCE_HIERARCHY: std::sync::OnceLock<ClearanceHierarchy> = std::sync::OnceLock::new();
+pub static CLEARANCE_HIERARCHY: std::sync::OnceLock<ClearanceHierarchy> =
+    std::sync::OnceLock::new();
 
 /// Get the clearance hierarchy, initializing it if needed
 fn get_clearance_hierarchy() -> &'static ClearanceHierarchy {

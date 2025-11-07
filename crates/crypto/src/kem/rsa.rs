@@ -15,23 +15,17 @@ use sha1::Sha1;
 use sha2::Sha256;
 
 /// OAEP hash algorithm selection
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OaepHash {
     /// SHA-1 (default for OpenTDF Go SDK compatibility)
     ///
     /// Note: SHA-1 is cryptographically weak but required for interoperability
     /// with existing OpenTDF implementations. Use SHA-256 for new deployments.
+    #[default]
     Sha1,
 
     /// SHA-256 (recommended for new deployments)
     Sha256,
-}
-
-impl Default for OaepHash {
-    fn default() -> Self {
-        // SHA-1 is the default for OpenTDF compatibility
-        OaepHash::Sha1
-    }
 }
 
 /// RSA-OAEP key encapsulation mechanism

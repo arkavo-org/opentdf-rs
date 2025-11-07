@@ -58,9 +58,7 @@ impl AttributeFqn {
     /// Parse an FQN with custom validation rules
     pub fn parse_with_rules(s: &str, rules: &FqnValidationRules) -> Result<Self, FqnError> {
         // Check for HTTPS scheme
-        if rules.require_https
-            && s.starts_with("http://")
-        {
+        if rules.require_https && s.starts_with("http://") {
             return Err(FqnError::NotHttps { url: s.to_string() });
         }
 
@@ -91,7 +89,9 @@ impl AttributeFqn {
 
         // Validate namespace
         if namespace.is_empty() {
-            return Err(FqnError::MissingComponent { component: "namespace" });
+            return Err(FqnError::MissingComponent {
+                component: "namespace",
+            });
         }
 
         let namespace = namespace.to_lowercase(); // Case-insensitive
@@ -99,9 +99,7 @@ impl AttributeFqn {
         // If we require /attr/ structure, validate it
         if rules.require_attr_structure {
             if !path.starts_with("attr/") {
-                return Err(FqnError::MissingAttrStructure {
-                    url: s.to_string(),
-                });
+                return Err(FqnError::MissingAttrStructure { url: s.to_string() });
             }
 
             // Parse: attr/<name>[/value/<value>]
@@ -224,7 +222,9 @@ impl AttributeFqn {
 
     /// Convert value to AttributeValue if present
     pub fn to_attribute_value(&self) -> Option<AttributeValue> {
-        self.value.as_ref().map(|v| AttributeValue::String(v.clone()))
+        self.value
+            .as_ref()
+            .map(|v| AttributeValue::String(v.clone()))
     }
 
     /// Validate against a namespace registry

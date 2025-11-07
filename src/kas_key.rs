@@ -9,6 +9,9 @@ use thiserror::Error;
 #[cfg(feature = "kas")]
 use reqwest::Client;
 
+#[cfg(feature = "kas")]
+use crate::rsa::{pkcs8::DecodePublicKey, RsaPublicKey};
+
 /// Errors that can occur during KAS public key operations
 #[derive(Debug, Error)]
 pub enum KasKeyError {
@@ -93,9 +96,6 @@ pub async fn fetch_kas_public_key(
 /// The validated PEM string if parsing succeeds
 #[cfg(feature = "kas")]
 pub fn validate_rsa_public_key_pem(pem: &str) -> Result<String, KasKeyError> {
-    use rsa::pkcs8::DecodePublicKey;
-    use rsa::RsaPublicKey;
-
     // Try to parse the PEM to validate it
     RsaPublicKey::from_public_key_pem(pem).map_err(|e| {
         KasKeyError::RsaParseError(format!("Failed to parse RSA public key: {}", e))

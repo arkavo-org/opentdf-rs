@@ -8,6 +8,7 @@ mod kas_mock_tests {
     use mockito::Server;
     use opentdf::{
         kas::{KasClient, KeyType},
+        manifest::TdfManifestExt,
         TdfManifest,
     };
 

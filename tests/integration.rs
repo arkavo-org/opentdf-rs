@@ -1,6 +1,6 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use opentdf::{
-    manifest::{IntegrityInformationExt, KeyAccessExt, TdfManifestExt},
+    manifest::{KeyAccessExt, TdfManifestExt},
     AttributeIdentifier, AttributePolicy, AttributeValue, Operator, Policy, PolicyBody, TdfArchive,
     TdfArchiveBuilder, TdfEncryption, TdfManifest,
 };

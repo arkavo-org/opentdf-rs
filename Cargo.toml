@@ -24,6 +24,7 @@ aes-gcm = "0.10"
 # KAS client dependencies (simplified, crypto moved to opentdf-crypto)
 reqwest = { version = "0.12", features = ["json"], optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
+jsonwebtoken = { version = "9", optional = true }
 
 [dev-dependencies]
 tempfile = "3.14"
@@ -42,7 +43,7 @@ version = "0.5.0"
 [features]
 default = []
 mcp = []
-kas = ["reqwest", "tokio", "opentdf-crypto/kas"]
+kas = ["reqwest", "tokio", "jsonwebtoken", "opentdf-crypto/kas"]
 
 [profile.release]
 opt-level = "z"

@@ -9,7 +9,7 @@
 //! cargo run --example kas_decrypt --features kas -- /path/to/file.tdf
 //! ```
 
-use opentdf::{kas::KasClient, TdfArchive};
+use opentdf::{kas::KasClient, manifest::TdfManifestExt, TdfArchive};
 use std::env;
 
 #[tokio::main]

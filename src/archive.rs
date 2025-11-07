@@ -15,6 +15,12 @@ use opentdf_protocol::KasError;
 #[cfg(feature = "kas")]
 use crate::kas::KasClient;
 
+#[cfg(feature = "kas")]
+use crate::TdfEncryption;
+
+#[cfg(feature = "kas")]
+use crate::manifest::IntegrityInformationExt;
+
 #[derive(Debug)]
 pub struct TdfArchive<R: Read + Seek> {
     zip_archive: ZipArchive<R>,
@@ -53,13 +59,18 @@ impl<'a> TdfEntry<'a> {
         use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 
         // Unwrap the payload key using KAS
+        // KasClient handles JWT signing internally
         let payload_key = kas_client.rewrap_standard_tdf(&self.manifest).await?;
 
         // Create TDF encryption instance with the unwrapped payload key from KAS
         // IMPORTANT: Use with_payload_key() not with_policy_key()!
         // The key from KAS IS the payload key, not a policy key
-        let tdf_encryption = TdfEncryption::with_payload_key(&payload_key)
-            .map_err(|e| TdfError::CryptoError("Invalid key from KAS".to_string(), Box::new(e)))?;
+        let tdf_encryption =
+            TdfEncryption::with_payload_key(&payload_key).map_err(|e| TdfError::CryptoError {
+                algorithm: "AES-256-GCM".to_string(),
+                reason: "Invalid key from KAS".to_string(),
+                source: Some(Box::new(e)),
+            })?;
 
         // Check if this is a segmented TDF (modern format) or legacy (single block)
         let segments = &self
@@ -70,10 +81,23 @@ impl<'a> TdfEntry<'a> {
 
         if !segments.is_empty() {
             // Modern segmented format
+            // Convert Segment structs to (plaintext_size, encrypted_size) tuples
+            let segment_sizes: Vec<(u64, u64)> = segments
+                .iter()
+                .map(|s| {
+                    (
+                        s.segment_size.unwrap_or(0),
+                        s.encrypted_segment_size.unwrap_or(0),
+                    )
+                })
+                .collect();
+
             let (plaintext, gmac_tags) = tdf_encryption
-                .decrypt_with_segments(&self.payload, segments)
-                .map_err(|e| {
-                    TdfError::CryptoError("Segment decryption failed".to_string(), Box::new(e))
+                .decrypt_with_segments(&self.payload, &segment_sizes)
+                .map_err(|e| TdfError::CryptoError {
+                    algorithm: "AES-256-GCM-segments".to_string(),
+                    reason: "Segment decryption failed".to_string(),
+                    source: Some(Box::new(e)),
                 })?;
 
             // Verify root signature for integrity
@@ -81,11 +105,10 @@ impl<'a> TdfEntry<'a> {
                 .encryption_information
                 .integrity_information
                 .verify_root_signature(&gmac_tags, &payload_key)
-                .map_err(|e| {
-                    TdfError::CryptoError(
-                        "Root signature verification failed".to_string(),
-                        Box::new(e),
-                    )
+                .map_err(|e| TdfError::CryptoError {
+                    algorithm: "GMAC-SHA256".to_string(),
+                    reason: format!("Root signature verification failed: {}", e),
+                    source: None,
                 })?;
 
             Ok(plaintext)
@@ -94,7 +117,10 @@ impl<'a> TdfEntry<'a> {
             let iv_b64 = &self.manifest.encryption_information.method.iv;
             let iv = BASE64
                 .decode(iv_b64)
-                .map_err(|e| TdfError::DecryptionError(format!("Invalid IV encoding: {}", e)))?;
+                .map_err(|e| TdfError::DecryptionFailed {
+                    reason: format!("Invalid IV encoding: {}", e),
+                    algorithm: Some("Base64".to_string()),
+                })?;
 
             // Create decryption cipher
             use aes_gcm::{
@@ -102,13 +128,20 @@ impl<'a> TdfEntry<'a> {
                 Aes256Gcm, Nonce,
             };
 
-            let cipher = Aes256Gcm::new_from_slice(&payload_key)
-                .map_err(|_| TdfError::DecryptionError("Invalid key length".to_string()))?;
+            let cipher = Aes256Gcm::new_from_slice(&payload_key).map_err(|_| {
+                TdfError::DecryptionFailed {
+                    reason: "Invalid key length".to_string(),
+                    algorithm: Some("AES-256-GCM".to_string()),
+                }
+            })?;
             let nonce = Nonce::from_slice(&iv);
 
             // Decrypt the payload
             let plaintext = cipher.decrypt(nonce, self.payload.as_ref()).map_err(|e| {
-                TdfError::DecryptionError(format!("AES-GCM decryption failed: {}", e))
+                TdfError::DecryptionFailed {
+                    reason: format!("AES-GCM decryption failed: {}", e),
+                    algorithm: Some("AES-256-GCM".to_string()),
+                }
             })?;
 
             Ok(plaintext)
@@ -573,7 +606,7 @@ mod tests {
         use tempfile::NamedTempFile;
 
         // Create test data for multiple entries
-        let entries = vec![
+        let entries = [
             (
                 TdfManifest::new(
                     "0.payload".to_string(),

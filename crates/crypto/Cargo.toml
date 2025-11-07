@@ -27,8 +27,10 @@ serde_json = "1.0"
 thiserror = "2.0"
 
 # KAS feature dependencies (RSA, EC, HKDF)
+# Note: rsa 0.9 has a future incompatibility warning (num-bigint-dig)
+# but 0.10 is still RC and has breaking API changes
 rsa = { version = "0.9", features = ["sha2"], optional = true }
-p256 = { version = "0.13", features = ["ecdsa", "pem"], optional = true }
+p256 = { version = "0.13", features = ["ecdsa", "pem", "ecdh"], optional = true }
 sha1 = { version = "0.10", optional = true }
 hkdf = { version = "0.12", optional = true }
 pkcs8 = { version = "0.10", features = ["pem"], optional = true }

@@ -16,10 +16,9 @@
 mod kas_tests {
     use opentdf::{
         kas::{EphemeralKeyPair, KasClient},
-        TdfArchive, TdfArchiveBuilder, TdfEncryption, TdfManifest,
+        TdfArchive, TdfEncryption, TdfManifest,
     };
     use std::env;
-    use tempfile::NamedTempFile;
 
     fn get_kas_config() -> Option<(String, String)> {
         let kas_url = env::var("KAS_URL").ok()?;
@@ -62,7 +61,7 @@ mod kas_tests {
         println!("Testing KAS rewrap against: {}", kas_url);
 
         // Create KAS client
-        let kas_client =
+        let _kas_client =
             KasClient::new(&kas_url, &oauth_token).expect("Failed to create KAS client");
 
         // Create a simple TDF for testing
@@ -137,7 +136,7 @@ mod kas_tests {
     #[tokio::test]
     #[ignore] // Requires KAS server
     async fn test_roundtrip_with_kas() {
-        let Some((kas_url, oauth_token)) = get_kas_config() else {
+        let Some((_kas_url, _oauth_token)) = get_kas_config() else {
             eprintln!("Skipping test: KAS_URL or KAS_OAUTH_TOKEN not set");
             return;
         };

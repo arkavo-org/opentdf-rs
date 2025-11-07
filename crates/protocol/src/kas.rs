@@ -104,7 +104,6 @@ impl KasError {
 
 /// Unsigned rewrap request structure (before JWT signing)
 #[derive(Debug, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct UnsignedRewrapRequest {
     #[serde(rename = "clientPublicKey")]
     pub client_public_key: String,
@@ -113,7 +112,6 @@ pub struct UnsignedRewrapRequest {
 
 /// Individual policy request entry
 #[derive(Debug, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct PolicyRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub algorithm: Option<String>,
@@ -124,7 +122,6 @@ pub struct PolicyRequest {
 
 /// Policy structure for KAS requests
 #[derive(Debug, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct Policy {
     pub id: String,
     pub body: String, // Base64-encoded policy JSON
@@ -132,7 +129,6 @@ pub struct Policy {
 
 /// Key access object wrapper
 #[derive(Debug, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct KeyAccessObjectWrapper {
     #[serde(rename = "keyAccessObjectId")]
     pub key_access_object_id: String,
@@ -142,7 +138,6 @@ pub struct KeyAccessObjectWrapper {
 
 /// Key access object details
 #[derive(Debug, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct KeyAccessObject {
     #[serde(rename = "type")]
     pub key_type: String,
@@ -160,7 +155,6 @@ pub struct KeyAccessObject {
 
 /// Policy binding for KAS requests
 #[derive(Debug, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct KasPolicyBinding {
     pub hash: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -173,7 +167,6 @@ pub struct KasPolicyBinding {
 /// Applications are responsible for creating this JWT externally.
 /// See the examples directory for JWT creation patterns.
 #[derive(Debug, Serialize, Deserialize)]
-#[non_exhaustive]
 pub struct SignedRewrapRequest {
     pub signed_request_token: String,
 }
