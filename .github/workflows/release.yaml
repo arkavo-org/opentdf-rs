@@ -74,24 +74,13 @@ jobs:
         working-directory: crates/wasm
         run: wasm-pack build --release --target web --out-dir pkg-web --scope arkavo-org
 
-      - name: Build WASM for Node.js (Release)
-        working-directory: crates/wasm
-        run: wasm-pack build --release --target nodejs --out-dir pkg-node --scope arkavo-org
-
       - name: Run tests
         working-directory: crates/wasm
-        run: wasm-pack test --node
+        run: wasm-pack test --headless --firefox
 
       - name: Publish to GitHub Packages (Web)
-        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
+        if: startsWith(github.ref, 'refs/tags/')
         working-directory: crates/wasm/pkg-web
-        run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Publish to GitHub Packages (Node)
-        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
-        working-directory: crates/wasm/pkg-node
         run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -99,24 +88,12 @@ jobs:
       - name: Create package archives
         run: |
           cd crates/wasm
-
           # Create web package
           tar -czf ../../opentdf-wasm-web.tar.gz -C pkg-web .
-
-          # Create Node.js package
-          tar -czf ../../opentdf-wasm-node.tar.gz -C pkg-node .
-
-          # Create combined package with both targets
-          mkdir -p pkg-combined/web pkg-combined/node
-          cp -r pkg-web/* pkg-combined/web/
-          cp -r pkg-node/* pkg-combined/node/
-          tar -czf ../../opentdf-wasm-combined.tar.gz -C pkg-combined .
 
       - name: Generate checksums
         run: |
           sha256sum opentdf-wasm-web.tar.gz > opentdf-wasm-web.tar.gz.sha256
-          sha256sum opentdf-wasm-node.tar.gz > opentdf-wasm-node.tar.gz.sha256
-          sha256sum opentdf-wasm-combined.tar.gz > opentdf-wasm-combined.tar.gz.sha256
 
       - name: Get version info
         id: version
@@ -137,26 +114,17 @@ jobs:
           body: |
             ## OpenTDF WASM ${{ steps.version.outputs.version }}
 
-            WebAssembly bindings for OpenTDF (Trusted Data Format)
+            WebAssembly bindings for OpenTDF (Trusted Data Format) - Browser target
 
-            ### Downloads
+            ### Download
 
             - `opentdf-wasm-web.tar.gz` - Web browser target (ES modules)
-            - `opentdf-wasm-node.tar.gz` - Node.js target (CommonJS)
-            - `opentdf-wasm-combined.tar.gz` - Both targets in one archive
 
             ### Usage
 
-            #### Web Browser
             ```javascript
-            import init, { tdf_create, version } from './web/opentdf_wasm.js';
+            import init, { tdf_create, tdf_decrypt_with_kas, version } from './opentdf_wasm.js';
             await init();
-            console.log('OpenTDF version:', version());
-            ```
-
-            #### Node.js
-            ```javascript
-            const { tdf_create, version } = require('./node/opentdf_wasm.js');
             console.log('OpenTDF version:', version());
             ```
 
@@ -164,19 +132,13 @@ jobs:
 
             ### Verification
 
-            Verify downloads with SHA256 checksums:
+            Verify download with SHA256 checksum:
             ```bash
             sha256sum -c opentdf-wasm-web.tar.gz.sha256
-            sha256sum -c opentdf-wasm-node.tar.gz.sha256
-            sha256sum -c opentdf-wasm-combined.tar.gz.sha256
             ```
           files: |
             opentdf-wasm-web.tar.gz
             opentdf-wasm-web.tar.gz.sha256
-            opentdf-wasm-node.tar.gz
-            opentdf-wasm-node.tar.gz.sha256
-            opentdf-wasm-combined.tar.gz
-            opentdf-wasm-combined.tar.gz.sha256
           draft: false
           prerelease: false
 
@@ -188,10 +150,6 @@ jobs:
           path: |
             opentdf-wasm-web.tar.gz
             opentdf-wasm-web.tar.gz.sha256
-            opentdf-wasm-node.tar.gz
-            opentdf-wasm-node.tar.gz.sha256
-            opentdf-wasm-combined.tar.gz
-            opentdf-wasm-combined.tar.gz.sha256
           retention-days: 90
 
       - name: Generate build summary
@@ -200,20 +158,17 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Version:** ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
           echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Target:** Web (ES Modules)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Bundle Sizes" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "#### Archives" >> $GITHUB_STEP_SUMMARY
-          ls -lh opentdf-wasm-*.tar.gz | awk '{print "- " $9 ": " $5}' >> $GITHUB_STEP_SUMMARY
+          echo "#### Archive" >> $GITHUB_STEP_SUMMARY
+          ls -lh opentdf-wasm-web.tar.gz | awk '{print "- " $9 ": " $5}' >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "#### WASM Files" >> $GITHUB_STEP_SUMMARY
-          echo "**Web:**" >> $GITHUB_STEP_SUMMARY
+          echo "#### WASM File" >> $GITHUB_STEP_SUMMARY
           ls -lh crates/wasm/pkg-web/*.wasm | awk '{print "- " $9 ": " $5}' >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Node.js:**" >> $GITHUB_STEP_SUMMARY
-          ls -lh crates/wasm/pkg-node/*.wasm | awk '{print "- " $9 ": " $5}' >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Checksums" >> $GITHUB_STEP_SUMMARY
+          echo "### Checksum" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          cat *.sha256 >> $GITHUB_STEP_SUMMARY
+          cat opentdf-wasm-web.tar.gz.sha256 >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY

@@ -97,23 +97,27 @@ async fn _tdf_create_impl(data: &str, kas_url: &str, policy_json: &str) -> Resul
     let tdf_encryption =
         TdfEncryption::new().map_err(|e| format!("Failed to create encryption: {}", e))?;
 
-    // Step 5: Encrypt the data
-    let encrypted_payload = tdf_encryption
-        .encrypt(&data_bytes)
+    // Step 5: Encrypt the data with segments (required for proper decryption)
+    let segment_size = 1024 * 1024; // 1MB segments (default)
+    let segmented_payload = tdf_encryption
+        .encrypt_with_segments(&data_bytes, segment_size)
         .map_err(|e| format!("Failed to encrypt: {}", e))?;
 
     // Step 6: Wrap the payload key with KAS public key using RSA-OAEP
     let wrapped_key =
         kas::wrap_key_with_rsa_oaep(tdf_encryption.payload_key(), &kas_key_response.public_key)?;
 
-    // Step 7: Decode the base64-encoded ciphertext
-    let ciphertext_bytes = BASE64
-        .decode(&encrypted_payload.ciphertext)
-        .map_err(|e| format!("Failed to decode ciphertext: {}", e))?;
+    // Step 7: Concatenate all encrypted segments
+    let ciphertext_bytes: Vec<u8> = segmented_payload
+        .segments
+        .iter()
+        .flat_map(|s| s.iter().copied())
+        .collect();
 
     // Step 8: Create manifest
     let mut manifest = TdfManifest::new("0.payload".to_string(), kas_url.to_string());
     manifest.encryption_information.method.algorithm = "AES-256-GCM".to_string();
+    manifest.encryption_information.method.iv = String::new(); // Segments have their own IVs
 
     // Step 9: Set policy on manifest
     manifest
@@ -133,8 +137,38 @@ async fn _tdf_create_impl(data: &str, kas_url: &str, policy_json: &str) -> Resul
     manifest.encryption_information.key_access[0].wrapped_key = wrapped_key;
     manifest.encryption_information.key_access[0].kid = Some(kas_key_response.kid);
 
-    // Step 12: Set IV from encrypted payload
-    manifest.encryption_information.method.iv = encrypted_payload.iv.clone();
+    // Step 12: Set segment information in manifest
+    use opentdf::manifest::Segment;
+    for seg_info in &segmented_payload.segment_info {
+        manifest
+            .encryption_information
+            .integrity_information
+            .segments
+            .push(Segment {
+                hash: seg_info.hash.clone(),
+                segment_size: Some(seg_info.plaintext_size),
+                encrypted_segment_size: Some(seg_info.encrypted_size),
+            });
+    }
+
+    // Set segment defaults
+    if let Some(first_seg) = segmented_payload.segment_info.first() {
+        manifest
+            .encryption_information
+            .integrity_information
+            .segment_size_default = first_seg.plaintext_size;
+        manifest
+            .encryption_information
+            .integrity_information
+            .encrypted_segment_size_default = first_seg.encrypted_size;
+    }
+
+    // Generate root signature
+    manifest
+        .encryption_information
+        .integrity_information
+        .generate_root_signature(&segmented_payload.gmac_tags, tdf_encryption.payload_key())
+        .map_err(|e| format!("Failed to generate root signature: {}", e))?;
 
     // Step 13: Build TDF archive in memory
     let mut builder = TdfArchiveMemoryBuilder::new();
