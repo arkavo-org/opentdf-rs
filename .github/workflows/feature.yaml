@@ -124,10 +124,6 @@ jobs:
   wasm:
     name: wasm
     runs-on: ubuntu-latest
-    if: |
-      contains(github.event.pull_request.changed_files, 'crates/wasm/') ||
-      contains(github.event.pull_request.changed_files, 'src/') ||
-      github.event_name == 'push'
 
     steps:
       - name: checkout
