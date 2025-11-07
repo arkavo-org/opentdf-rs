@@ -702,8 +702,8 @@ impl Policy {
     ///
     /// let policy = PolicyBuilder::new()
     ///     .id_auto()
+    ///     .dissemination(["user@example.com"])
     ///     .attribute_fqn("https://example.com/attr/clearance/value/secret")?
-    ///     .dissemination("user@example.com")
     ///     .build()?;
     ///
     /// // Validate the policy
@@ -827,12 +827,11 @@ impl Policy {
 ///
 /// ```
 /// use opentdf::prelude::*;
-/// use opentdf::fqn::AttributeFqn;
 ///
 /// let policy = PolicyBuilder::new()
 ///     .id_auto()  // Auto-generate UUID
-///     .attribute_fqn("https://example.com/attr/classification/value/secret")
 ///     .dissem("user@example.com")
+///     .attribute_fqn("https://example.com/attr/classification/value/secret")?
 ///     .valid_for_days(30)
 ///     .build()?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())

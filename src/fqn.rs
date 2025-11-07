@@ -13,9 +13,9 @@
 //! use opentdf::fqn::AttributeFqn;
 //!
 //! let fqn = AttributeFqn::parse("https://example.com/attr/classification/value/secret")?;
-//! assert_eq!(fqn.namespace(), "example.com");
-//! assert_eq!(fqn.name(), "classification");
-//! assert_eq!(fqn.value(), Some("secret"));
+//! assert_eq!(fqn.get_namespace(), "example.com");
+//! assert_eq!(fqn.get_name(), "classification");
+//! assert_eq!(fqn.get_value(), Some("secret"));
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
@@ -48,7 +48,7 @@ impl AttributeFqn {
     /// use opentdf::fqn::AttributeFqn;
     ///
     /// let fqn = AttributeFqn::parse("https://example.com/attr/classification/value/secret")?;
-    /// assert_eq!(fqn.namespace(), "example.com");
+    /// assert_eq!(fqn.get_namespace(), "example.com");
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn parse(s: &str) -> Result<Self, FqnError> {

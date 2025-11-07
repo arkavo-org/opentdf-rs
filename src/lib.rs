@@ -22,13 +22,16 @@
 //! use opentdf::prelude::*;
 //!
 //! # fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! // Create a policy
-//! let policy = Policy::new("uuid".to_string(), vec![], vec!["user@example.com".to_string()]);
+//! // Create a policy with the new builder
+//! let policy = PolicyBuilder::new()
+//!     .id_auto()
+//!     .dissemination(["user@example.com"])
+//!     .build()?;
 //!
 //! // Encrypt data to a TDF file
 //! Tdf::encrypt(b"sensitive data")
 //!     .kas_url("https://kas.example.com")
-//!     .policy(policy)
+//!     .policy(policy.clone())
 //!     .to_file("output.tdf")?;
 //!
 //! // Extension trait methods work automatically with prelude!

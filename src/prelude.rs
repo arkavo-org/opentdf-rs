@@ -7,11 +7,16 @@
 //! ```rust
 //! use opentdf::prelude::*;
 //!
+//! # fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Now you can use extension traits without explicit imports
 //! let mut manifest = TdfManifest::new("payload".to_string(), "https://kas.example.com".to_string());
-//! let policy = Policy::new(/* ... */);
+//! let policy = PolicyBuilder::new()
+//!     .id_auto()
+//!     .dissemination(["user@example.com"])
+//!     .build()?;
 //! manifest.set_policy(&policy)?; // Works without importing TdfManifestExt
-//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! # Ok(())
+//! # }
 //! ```
 
 // Re-export core types
