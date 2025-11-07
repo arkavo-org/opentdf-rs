@@ -4,6 +4,7 @@
 //! enabling secure key wrapping and rewrap protocol.
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use opentdf_protocol::kas::*;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
@@ -153,59 +154,7 @@ pub fn generate_rsa_keypair() -> Result<EphemeralRsaKeyPair, String> {
     })
 }
 
-/// Unsigned rewrap request structure for KAS
-#[derive(Debug, Serialize, Deserialize)]
-pub struct UnsignedRewrapRequest {
-    #[serde(rename = "clientPublicKey")]
-    pub client_public_key: String,
-    pub requests: Vec<PolicyRequest>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PolicyRequest {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub algorithm: Option<String>,
-    pub policy: RewrapPolicy,
-    #[serde(rename = "keyAccessObjects")]
-    pub key_access_objects: Vec<KeyAccessObjectWrapper>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct RewrapPolicy {
-    pub id: String,   // UUID extracted from policy
-    pub body: String, // Base64-encoded policy JSON
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct KeyAccessObjectWrapper {
-    #[serde(rename = "keyAccessObjectId")]
-    pub key_access_object_id: String,
-    #[serde(rename = "keyAccessObject")]
-    pub key_access_object: KeyAccessObject,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct KeyAccessObject {
-    #[serde(rename = "type")]
-    pub key_type: String,
-    pub url: String,
-    pub protocol: String,
-    #[serde(rename = "wrappedKey")]
-    pub wrapped_key: String,
-    #[serde(rename = "policyBinding")]
-    pub policy_binding: PolicyBindingHash,
-    #[serde(rename = "encryptedMetadata", skip_serializing_if = "Option::is_none")]
-    pub encrypted_metadata: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub kid: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PolicyBindingHash {
-    pub hash: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub algorithm: Option<String>,
-}
+// Protocol structs are now imported from opentdf_protocol::kas
 
 /// Build unsigned rewrap request from TDF manifest
 ///
@@ -247,7 +196,7 @@ pub fn build_rewrap_request(
                 url: kao.url.clone(),
                 protocol: kao.protocol.clone(),
                 wrapped_key: kao.wrapped_key.clone(),
-                policy_binding: PolicyBindingHash {
+                policy_binding: KasPolicyBinding {
                     hash: kao.policy_binding.hash.clone(),
                     algorithm: Some(kao.policy_binding.alg.clone()),
                 },
@@ -261,7 +210,7 @@ pub fn build_rewrap_request(
         client_public_key: client_public_key_pem.to_string(),
         requests: vec![PolicyRequest {
             algorithm: None, // Standard TDF uses None
-            policy: RewrapPolicy {
+            policy: Policy {
                 id: policy_uuid,
                 body: manifest.encryption_information.policy.clone(),
             },
@@ -324,32 +273,7 @@ pub fn create_signed_jwt(request: &UnsignedRewrapRequest) -> Result<String, Stri
     Ok(format!("{}.{}", signing_input, signature_b64))
 }
 
-/// Rewrap response structure from KAS
-#[derive(Debug, Serialize, Deserialize)]
-pub struct RewrapResponse {
-    pub responses: Vec<PolicyRewrapResult>,
-    #[serde(rename = "sessionPublicKey")]
-    pub session_public_key: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PolicyRewrapResult {
-    #[serde(rename = "policyId")]
-    pub policy_id: String,
-    pub results: Vec<KeyAccessRewrapResult>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct KeyAccessRewrapResult {
-    #[serde(rename = "keyAccessObjectId")]
-    pub key_access_object_id: String,
-    pub status: String,
-    #[serde(rename = "kasWrappedKey")]
-    pub kas_wrapped_key: Option<String>,
-    #[serde(rename = "entityWrappedKey")]
-    pub entity_wrapped_key: Option<String>,
-    pub error: Option<String>,
-}
+// RewrapResponse, PolicyRewrapResult, KeyAccessRewrapResult are now imported from opentdf_protocol::kas
 
 /// Unwrapped response with key ready for decryption
 pub struct UnwrappedResponse {
