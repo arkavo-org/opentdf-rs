@@ -1,7 +1,6 @@
 use opentdf::{
-    manifest::TdfManifestExt,
-    AttributeIdentifier, AttributePolicy, AttributeValue, Policy, PolicyBody, TdfArchive,
-    TdfArchiveMemoryBuilder, TdfEncryption, TdfManifest,
+    manifest::TdfManifestExt, AttributeIdentifier, AttributePolicy, AttributeValue, Policy,
+    PolicyBody, TdfArchive, TdfArchiveMemoryBuilder, TdfEncryption, TdfManifest,
 };
 use std::io::Cursor;
 

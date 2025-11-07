@@ -1,9 +1,8 @@
 use base64::Engine;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use opentdf::{
-    manifest::TdfManifestExt,
-    AttributeIdentifier, AttributePolicy, AttributeValue, Policy, PolicyBody, TdfArchive,
-    TdfArchiveMemoryBuilder, TdfEncryption, TdfManifest,
+    manifest::TdfManifestExt, AttributeIdentifier, AttributePolicy, AttributeValue, Policy,
+    PolicyBody, TdfArchive, TdfArchiveMemoryBuilder, TdfEncryption, TdfManifest,
 };
 use std::io::Cursor;
 
