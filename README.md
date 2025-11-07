@@ -24,7 +24,21 @@ OpenTDF-RS enables cryptographic binding of access policies directly to data obj
 
 OpenTDF-RS implements ABAC to provide fine-grained access control that is cryptographically bound to protected data.
 
-![ABAC Flow Diagram](https://mermaid.ink/img/pako:eNp1kU9PwzAMxb_KyU4g0Y-QOFQwOCA0ISHYbodq85pqS5w5CaJM_e44bWFsApeX_PL7PScHZa0FVajWOcFzUK1N8Jm96NaQ9Q18CZsKQ4_5Y5QO9AKVEYUjL2YZzQ-TJ0iJOjB-Cd9bMkc5Sj-JvB6nQXk2UpWIZ8zoD7tD8lEpGfT5FnDdkCefw6dkWQDTgBYzPBHj-OZW-1QY-MXbAPHKDfWOzKBJXtAXUd48S_B9I4R2QbvBjnvQ0O-5d2S0v0l8sKfEYUx7CbFoSLSudUh7k7OSiB3YWwypz7ub2NrJxD9w9LH7gPEf84G-wW1FPvfk47RsH3rMfWdJbUWMb9OG9A62hOUbz7bZyOK5KLGCVBjDYaKXfv4s8WdxOOCGKzRDrrhA5QZ8DQrGSRZHm2PkJdtE0baI16d1uoqLdZ6U-TaJizJZ5vESVTQuoyz6BvZcsks?type=png)
+```mermaid
+graph LR
+    A[User Request] --> B{Evaluate Policy}
+    B -->|Attributes Match| C[Grant Access]
+    B -->|Attributes Don't Match| D[Deny Access]
+    C --> E[Decrypt Data]
+    D --> F[Log Denial]
+
+    style A fill:#e1f5ff
+    style B fill:#fff4e6
+    style C fill:#d4edda
+    style D fill:#f8d7da
+    style E fill:#d4edda
+    style F fill:#f8d7da
+```
 
 ### Core Components
 
