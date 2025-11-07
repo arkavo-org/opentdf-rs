@@ -79,6 +79,10 @@ pub use opentdf_protocol::{
 // Re-export security types
 pub use opentdf_crypto::{AesKey, KeyError, PayloadKey, PolicyKey};
 
+// Re-export crypto libraries for KAS feature
+#[cfg(feature = "kas")]
+pub use opentdf_crypto::{hkdf, p256, pkcs8, rand, rsa, sha1, sha2};
+
 // High-level API (primary interface)
 pub use tdf::{Tdf, TdfEncryptBuilder, TdfEncryptFileBuilder};
 

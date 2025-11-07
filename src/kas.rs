@@ -68,16 +68,16 @@ use {
         aead::{Aead, KeyInit},
         Aes256Gcm, Nonce,
     },
-    hkdf::Hkdf,
-    p256::{
+    crate::hkdf::Hkdf,
+    crate::p256::{
         pkcs8::{DecodePublicKey, EncodePublicKey},
         PublicKey, SecretKey,
     },
-    pkcs8::LineEnding,
+    crate::pkcs8::LineEnding,
     reqwest::Client,
-    rsa::{Oaep, RsaPrivateKey, RsaPublicKey},
-    sha1::Sha1,
-    sha2::{Digest, Sha256},
+    crate::rsa::{Oaep, RsaPrivateKey, RsaPublicKey},
+    crate::sha1::Sha1,
+    crate::sha2::{Digest, Sha256},
 };
 
 // NOTE: KAS protocol types are now imported from opentdf-protocol crate
@@ -119,7 +119,7 @@ pub enum EphemeralKeyPair {
 impl EphemeralKeyPair {
     /// Generate a new ephemeral key pair of the specified type
     pub fn new(key_type: KeyType) -> Result<Self, KasError> {
-        use rand::rngs::OsRng;
+        use crate::rand::rngs::OsRng;
 
         match key_type {
             KeyType::EC => {
@@ -128,8 +128,8 @@ impl EphemeralKeyPair {
                 let public_key = private_key.public_key();
 
                 let public_key_pem = public_key
-                    .to_public_key_pem(p256::pkcs8::LineEnding::LF)
-                    .map_err(|e| KasError::Pkcs8Error(e.to_string()))?;
+                    .to_public_key_pem(crate::p256::pkcs8::LineEnding::LF)
+                    .map_err(|e| KasError::Pkcs8Error { reason: e.to_string() })?;
 
                 Ok(EphemeralKeyPair::EC {
                     private_key,

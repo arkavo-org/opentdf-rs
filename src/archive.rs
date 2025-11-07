@@ -15,9 +15,6 @@ use opentdf_protocol::KasError;
 #[cfg(feature = "kas")]
 use crate::kas::KasClient;
 
-#[cfg(feature = "kas")]
-use opentdf_protocol::KasError;
-
 #[derive(Debug)]
 pub struct TdfArchive<R: Read + Seek> {
     zip_archive: ZipArchive<R>,

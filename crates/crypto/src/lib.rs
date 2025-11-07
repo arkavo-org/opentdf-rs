@@ -68,5 +68,27 @@ pub use kem::pqc::{HybridKem, MlKemLevel, MlKemWrapper};
 #[cfg(feature = "kas")]
 pub use types::EcPrivateKey;
 
+// Re-export underlying crypto libraries for KAS
+#[cfg(feature = "kas")]
+pub use hkdf;
+
+#[cfg(feature = "kas")]
+pub use p256;
+
+#[cfg(feature = "kas")]
+pub use pkcs8;
+
+#[cfg(feature = "kas")]
+pub use rand;
+
+#[cfg(feature = "kas")]
+pub use rsa;
+
+#[cfg(feature = "kas")]
+pub use sha1;
+
+#[cfg(feature = "kas")]
+pub use sha2;
+
 // Re-export encryption error
 pub use tdf::encryption::EncryptionError;
