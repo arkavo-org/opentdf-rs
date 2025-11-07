@@ -9,23 +9,26 @@ use thiserror::Error;
 /// KAS client errors
 #[derive(Debug, Error)]
 pub enum KasError {
-    #[error("HTTP error: {0}")]
-    HttpError(String),
+    #[error("HTTP error: {status} - {message}")]
+    HttpError { status: u16, message: String },
 
-    #[error("Access denied: {0}")]
-    AccessDenied(String),
+    #[error("Access denied for resource '{resource}': {reason}")]
+    AccessDenied { resource: String, reason: String },
 
-    #[error("Authentication failed")]
-    AuthenticationFailed,
+    #[error("Authentication failed: {reason}")]
+    AuthenticationFailed { reason: String },
 
-    #[error("Invalid response: {0}")]
-    InvalidResponse(String),
+    #[error("Invalid response from KAS: {reason}")]
+    InvalidResponse {
+        reason: String,
+        expected: Option<String>,
+    },
 
-    #[error("Key unwrapping failed: {0}")]
-    UnwrapError(String),
+    #[error("Key unwrapping failed for algorithm '{algorithm}': {reason}")]
+    UnwrapError { algorithm: String, reason: String },
 
-    #[error("Cryptographic error: {0}")]
-    CryptoError(String),
+    #[error("Cryptographic error: {operation} failed - {reason}")]
+    CryptoError { operation: String, reason: String },
 
     #[error("JSON serialization error: {0}")]
     SerializationError(#[from] serde_json::Error),
@@ -33,14 +36,70 @@ pub enum KasError {
     #[error("Base64 decode error: {0}")]
     Base64Error(#[from] base64::DecodeError),
 
-    #[error("JWT error: {0}")]
-    JwtError(String),
+    #[error("JWT error: {operation} - {reason}")]
+    JwtError { operation: String, reason: String },
 
     #[error("PKCS8 error: {0}")]
     Pkcs8Error(String),
 
-    #[error("HTTP request error: {0}")]
-    RequestError(String),
+    #[error("HTTP request failed: {method} {url} - {reason}")]
+    RequestError {
+        method: String,
+        url: String,
+        reason: String,
+    },
+
+    #[error("Network timeout after {timeout_ms}ms")]
+    Timeout { timeout_ms: u64 },
+
+    #[error("Invalid KAS configuration: {reason}")]
+    ConfigError { reason: String },
+}
+
+impl KasError {
+    /// Returns true if this error might be resolved by retrying the operation
+    pub fn is_retryable(&self) -> bool {
+        matches!(
+            self,
+            KasError::HttpError { status, .. } if *status >= 500 && *status < 600,
+        ) || matches!(self, KasError::Timeout { .. })
+    }
+
+    /// Returns a suggestion for how to fix this error, if available
+    pub fn suggestion(&self) -> Option<&str> {
+        match self {
+            KasError::AuthenticationFailed { .. } => {
+                Some("Verify OAuth token is valid and not expired")
+            }
+            KasError::AccessDenied { .. } => {
+                Some("Check that the user has permissions for this resource")
+            }
+            KasError::Timeout { .. } => {
+                Some("Check network connectivity or increase timeout value")
+            }
+            KasError::InvalidResponse { .. } => Some("Verify KAS server version compatibility"),
+            _ => None,
+        }
+    }
+
+    /// Returns an error code for programmatic error handling
+    pub fn error_code(&self) -> &'static str {
+        match self {
+            KasError::HttpError { .. } => "HTTP_ERROR",
+            KasError::AccessDenied { .. } => "ACCESS_DENIED",
+            KasError::AuthenticationFailed { .. } => "AUTHENTICATION_FAILED",
+            KasError::InvalidResponse { .. } => "INVALID_RESPONSE",
+            KasError::UnwrapError { .. } => "UNWRAP_ERROR",
+            KasError::CryptoError { .. } => "CRYPTO_ERROR",
+            KasError::SerializationError(_) => "SERIALIZATION_ERROR",
+            KasError::Base64Error(_) => "BASE64_ERROR",
+            KasError::JwtError { .. } => "JWT_ERROR",
+            KasError::Pkcs8Error(_) => "PKCS8_ERROR",
+            KasError::RequestError { .. } => "REQUEST_ERROR",
+            KasError::Timeout { .. } => "TIMEOUT",
+            KasError::ConfigError { .. } => "CONFIG_ERROR",
+        }
+    }
 }
 
 /// Unsigned rewrap request structure (before JWT signing)

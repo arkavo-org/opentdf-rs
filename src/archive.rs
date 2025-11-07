@@ -10,6 +10,9 @@ use zip::write::FileOptions;
 use zip::{ZipArchive, ZipWriter};
 
 #[cfg(feature = "kas")]
+use opentdf_protocol::KasError;
+
+#[cfg(feature = "kas")]
 use crate::kas::KasClient;
 
 #[cfg(feature = "kas")]
@@ -120,21 +123,117 @@ impl<'a> TdfEntry<'a> {
 pub enum TdfError {
     #[error("ZIP error: {0}")]
     ZipError(#[from] zip::result::ZipError),
+
     #[error("JSON error: {0}")]
     JsonError(#[from] serde_json::Error),
+
     #[error("IO error: {0}")]
     IoError(#[from] io::Error),
-    #[error("Invalid TDF structure: {0}")]
-    Structure(String),
+
+    #[error("Invalid manifest: field '{field}' - {reason}")]
+    InvalidManifest {
+        field: String,
+        reason: String,
+        suggestion: Option<String>,
+    },
+
+    #[error("Invalid TDF structure: {reason}")]
+    InvalidStructure {
+        reason: String,
+        expected: Option<String>,
+    },
+
+    #[error("Missing required field: {field}")]
+    MissingRequiredField { field: &'static str },
+
+    #[error("Invalid KAS URL: {url} - {reason}")]
+    InvalidKasUrl { url: String, reason: KasUrlError },
+
+    #[error("Cryptographic operation failed: {algorithm} - {reason}")]
+    CryptoError {
+        algorithm: String,
+        reason: String,
+        #[source]
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
+
     #[cfg(feature = "kas")]
     #[error("KAS error: {0}")]
     KasError(#[from] KasError),
+
     #[cfg(feature = "kas")]
-    #[error("Decryption failed: {0}")]
-    DecryptionError(String),
-    #[cfg(feature = "kas")]
-    #[error("Cryptographic operation failed: {0}")]
-    CryptoError(String, #[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("Decryption failed: {reason}")]
+    DecryptionFailed {
+        reason: String,
+        algorithm: Option<String>,
+    },
+
+    #[error("Policy validation failed for policy '{policy_id}': {errors:?}")]
+    PolicyValidationFailed {
+        policy_id: String,
+        errors: Vec<String>,
+    },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum KasUrlError {
+    #[error("URL must use HTTPS scheme, not HTTP")]
+    NotHttps,
+
+    #[error("Invalid URL scheme: {0}")]
+    InvalidScheme(String),
+
+    #[error("Malformed URL: {0}")]
+    MalformedUrl(String),
+
+    #[error("Missing host in URL")]
+    MissingHost,
+}
+
+impl TdfError {
+    /// Returns true if this error might be resolved by retrying the operation
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            TdfError::IoError(_) => true,
+            #[cfg(feature = "kas")]
+            TdfError::KasError(kas_err) => kas_err.is_retryable(),
+            _ => false,
+        }
+    }
+
+    /// Returns a suggestion for how to fix this error, if available
+    pub fn suggestion(&self) -> Option<&str> {
+        match self {
+            TdfError::InvalidManifest { suggestion, .. } => suggestion.as_deref(),
+            TdfError::InvalidKasUrl {
+                reason: KasUrlError::NotHttps,
+                ..
+            } => Some("Use HTTPS URLs for KAS endpoints (e.g., https://kas.example.com)"),
+            TdfError::MissingRequiredField { field } if *field == "kas_url" => {
+                Some("Provide a KAS URL using .kas_url() on the builder")
+            }
+            _ => None,
+        }
+    }
+
+    /// Returns an error code for programmatic error handling
+    pub fn error_code(&self) -> &'static str {
+        match self {
+            TdfError::ZipError(_) => "ZIP_ERROR",
+            TdfError::JsonError(_) => "JSON_ERROR",
+            TdfError::IoError(_) => "IO_ERROR",
+            TdfError::InvalidManifest { .. } => "INVALID_MANIFEST",
+            TdfError::InvalidStructure { .. } => "INVALID_STRUCTURE",
+            TdfError::MissingRequiredField { .. } => "MISSING_REQUIRED_FIELD",
+            TdfError::InvalidKasUrl { .. } => "INVALID_KAS_URL",
+            TdfError::CryptoError { .. } => "CRYPTO_ERROR",
+            #[cfg(feature = "kas")]
+            TdfError::KasError(_) => "KAS_ERROR",
+            #[cfg(feature = "kas")]
+            TdfError::DecryptionFailed { .. } => "DECRYPTION_FAILED",
+            TdfError::PolicyValidationFailed { .. } => "POLICY_VALIDATION_FAILED",
+        }
+    }
 }
 
 impl TdfArchive<File> {
@@ -206,7 +305,10 @@ impl<R: Read + Seek> TdfArchive<R> {
         // Read manifest
         let manifest = {
             let mut manifest_file = self.zip_archive.by_name(&manifest_name).map_err(|_| {
-                TdfError::Structure(format!("Missing manifest file: {}", manifest_name))
+                TdfError::InvalidStructure {
+                    reason: format!("Missing manifest file: {}", manifest_name),
+                    expected: Some("TDF archive should contain manifest.json files".to_string()),
+                }
             })?;
             let mut manifest_contents = String::new();
             manifest_file.read_to_string(&mut manifest_contents)?;
@@ -216,7 +318,10 @@ impl<R: Read + Seek> TdfArchive<R> {
         // Read payload
         let payload = {
             let mut payload_file = self.zip_archive.by_name(&payload_name).map_err(|_| {
-                TdfError::Structure(format!("Missing payload file: {}", payload_name))
+                TdfError::InvalidStructure {
+                    reason: format!("Missing payload file: {}", payload_name),
+                    expected: Some("TDF archive should contain .payload files".to_string()),
+                }
             })?;
             let mut payload = Vec::new();
             payload_file.read_to_end(&mut payload)?;

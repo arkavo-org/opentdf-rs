@@ -165,18 +165,21 @@ impl NanoTdfBuilder {
     }
 
     /// Set the KAS URL
+    #[must_use]
     pub fn kas_url(mut self, url: impl Into<String>) -> Self {
         self.kas_url = Some(url.into());
         self
     }
 
     /// Set a remote policy (policy UUID)
+    #[must_use]
     pub fn policy_remote(mut self, uuid: impl Into<String>) -> Self {
         self.policy = Some(PolicyConfig::Remote(uuid.into()));
         self
     }
 
     /// Set an embedded policy
+    #[must_use]
     pub fn policy_embedded(mut self, policy: Vec<u8>) -> Self {
         self.policy = Some(PolicyConfig::Embedded(policy));
         self

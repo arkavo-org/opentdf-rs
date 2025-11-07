@@ -14,10 +14,12 @@
 //! - **`opentdf-crypto`**: Cryptographic operations with security hardening
 //! - **`opentdf`**: High-level TDF API and integration
 //!
-//! # Example
+//! # Getting Started
+//!
+//! For the best experience, import the prelude to get all commonly used types and traits:
 //!
 //! ```no_run
-//! use opentdf::{Tdf, Policy};
+//! use opentdf::prelude::*;
 //!
 //! # fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create a policy
@@ -28,11 +30,16 @@
 //!     .kas_url("https://kas.example.com")
 //!     .policy(policy)
 //!     .to_file("output.tdf")?;
+//!
+//! // Extension trait methods work automatically with prelude!
+//! let mut manifest = TdfManifest::new("payload".to_string(), "https://kas.example.com".to_string());
+//! manifest.set_policy(&policy)?; // No need to import TdfManifestExt
 //! # Ok(())
 //! # }
 //! ```
 
 mod archive;
+pub mod fqn;
 pub mod manifest;
 mod policy;
 mod tdf;
@@ -45,6 +52,9 @@ pub mod kas_key;
 
 // JSON-RPC integration (ZTDF-JSON format)
 pub mod jsonrpc;
+
+// Prelude for convenient imports
+pub mod prelude;
 
 // Re-export protocol types
 pub use opentdf_protocol::{
@@ -69,14 +79,21 @@ pub use opentdf_crypto::{AesKey, KeyError, PayloadKey, PolicyKey};
 // High-level API (primary interface)
 pub use tdf::{Tdf, TdfEncryptBuilder, TdfEncryptFileBuilder};
 
+#[cfg(feature = "kas")]
+pub use tdf::{TdfDecryptBuilder, TdfDecryptFileBuilder};
+
 // Core types
 pub use archive::{TdfArchive, TdfArchiveBuilder, TdfArchiveMemoryBuilder, TdfError};
 
 // Policy types
 pub use policy::{
-    AttributeCondition, AttributeIdentifier, AttributePolicy, AttributeValue, LogicalOperator,
-    Operator, Policy, PolicyBody, PolicyError,
+    AttributeCondition, AttributeIdentifier, AttributePolicy, AttributeValue, FqnError,
+    LogicalOperator, Operator, Policy, PolicyBody, PolicyBuilder, PolicyError, ValidationError,
+    ValidationErrorType,
 };
+
+// FQN types
+pub use fqn::{AttributeFqn, FqnValidationRules, NamespaceRegistry};
 
 // KAS feature types
 #[cfg(feature = "kas")]

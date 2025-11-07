@@ -1,26 +1,27 @@
 //! Simple TDF encryption example using the high-level API
 //!
-//! This example shows how easy it is to encrypt data with the new API:
-//! just 4 lines of code instead of 30+!
+//! This example demonstrates the new v0.5.0 fluent builder API with PolicyBuilder.
 //!
 //! Usage:
 //! ```bash
 //! cargo run --example simple_tdf
 //! ```
 
-use opentdf::{Policy, Tdf};
+use opentdf::prelude::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("=== Simple TDF Encryption ===\n");
+    println!("=== Simple TDF Encryption (v0.5.0) ===\n");
 
-    // Create a simple policy
-    let policy = Policy::new(
-        uuid::Uuid::new_v4().to_string(),
-        vec![],
-        vec!["user@example.com".to_string()],
-    );
+    // Create a policy using the new PolicyBuilder
+    let policy = PolicyBuilder::new()
+        .id_auto() // Auto-generate UUID
+        .attribute_fqn("https://example.com/attr/classification/value/secret")?
+        .dissemination(["user@example.com"])
+        .build()?;
 
-    // Encrypt data - just 4 lines!
+    println!("Created policy: {}", policy.uuid);
+
+    // Encrypt data with fluent API
     let plaintext = b"Hello from the simplified TDF API!";
 
     Tdf::encrypt(plaintext)
@@ -29,7 +30,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .to_file("/tmp/simple.tdf")?;
 
     println!("✓ Encrypted {} bytes to /tmp/simple.tdf", plaintext.len());
-    println!("\nThat's it! Just 4 lines of code.");
+    println!("\n🎉 That's it! Clean builder pattern with compile-time safety.");
 
     Ok(())
 }

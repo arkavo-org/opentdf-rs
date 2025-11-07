@@ -220,18 +220,21 @@ impl TdfJsonRpc {
 
 impl TdfJsonRpcBuilder {
     /// Set the KAS (Key Access Service) URL
+    #[must_use]
     pub fn kas_url(mut self, url: &str) -> Self {
         self.kas_url = Some(url.to_string());
         self
     }
 
     /// Set the access control policy
+    #[must_use]
     pub fn policy(mut self, policy: Policy) -> Self {
         self.policy = Some(policy);
         self
     }
 
     /// Set the MIME type of the original data
+    #[must_use]
     pub fn mime_type(mut self, mime_type: &str) -> Self {
         self.mime_type = mime_type.to_string();
         self

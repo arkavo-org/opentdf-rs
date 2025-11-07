@@ -108,8 +108,9 @@ impl KeyAccessExt for KeyAccess {
     fn generate_policy_binding(&mut self, policy: &Policy, key: &[u8]) -> Result<(), PolicyError> {
         let policy_json = policy.to_json()?;
         self.generate_policy_binding_raw(&policy_json, key)
-            .map_err(|e| {
-                PolicyError::EvaluationError(format!("Failed to generate policy binding: {}", e))
+            .map_err(|e| PolicyError::EvaluationError {
+                reason: format!("Failed to generate policy binding: {}", e),
+                attribute: None,
             })?;
         Ok(())
     }

@@ -593,24 +593,90 @@ Add to your Cargo.toml:
 
 ```toml
 [dependencies]
-opentdf = "0.3.0"
+opentdf = "0.5.0"
 ```
 
-### Basic Usage - Simple API ✨
+## 🚀 What's New in v0.5.0
 
-The new simplified API makes TDF encryption incredibly easy:
+Version 0.5.0 brings significant DX (Developer Experience) improvements:
 
+- ✅ **PolicyBuilder**: Fluent API with auto-defaults
+- ✅ **AttributeFqn**: URL-based attribute identifiers
+- ✅ **Structured Errors**: Programmatic error handling with suggestions
+- ✅ **Prelude Module**: Auto-import extension traits
+- ✅ **TdfDecryptBuilder**: Symmetric API for encryption/decryption
+- ✅ **40% Fewer Dependencies**: Reduced attack surface
+- ✅ **#[must_use]**: Compile-time safety on all builders
+
+### Migration Guide (v0.4.x → v0.5.0)
+
+**Import Changes**:
 ```rust
-use opentdf::{Tdf, Policy};
+// Before (v0.4.x)
+use opentdf::{Tdf, Policy, AttributePolicy, ...};
 
-// Create a policy
+// After (v0.5.0) - Use prelude!
+use opentdf::prelude::*;
+```
+
+**Policy Creation**:
+```rust
+// Before (v0.4.x)
 let policy = Policy::new(
     uuid::Uuid::new_v4().to_string(),
-    vec![],
+    vec![attr_policy],
     vec!["user@example.com".to_string()]
 );
 
-// Encrypt data - just 4 lines!
+// After (v0.5.0) - PolicyBuilder!
+let policy = PolicyBuilder::new()
+    .id_auto()
+    .attribute_fqn("https://example.com/attr/clearance/value/secret")?
+    .dissemination(["user@example.com"])
+    .build()?;
+```
+
+**Error Handling**:
+```rust
+// Before (v0.4.x)
+match err {
+    TdfError::Structure(msg) => { /* handle String */ }
+}
+
+// After (v0.5.0) - Structured errors!
+match err {
+    TdfError::MissingRequiredField { field } => {
+        println!("Missing: {}", field);
+        println!("Suggestion: {}", err.suggestion().unwrap());
+    }
+}
+```
+
+**FQN Support** (New in v0.5.0):
+```rust
+use opentdf::prelude::*;
+
+// Parse URL-based attribute identifiers
+let fqn = AttributeFqn::parse("https://example.com/attr/classification/value/secret")?;
+assert_eq!(fqn.get_namespace(), "example.com");
+assert_eq!(fqn.get_name(), "classification");
+assert_eq!(fqn.get_value(), Some("secret"));
+```
+
+### Basic Usage
+
+The simplified API makes TDF encryption incredibly easy:
+
+```rust
+use opentdf::prelude::*;
+
+// Create a policy with the new builder
+let policy = PolicyBuilder::new()
+    .id_auto()
+    .dissemination(["user@example.com"])
+    .build()?;
+
+// Encrypt data - fluent API with #[must_use]
 Tdf::encrypt(b"Sensitive data")
     .kas_url("https://kas.example.com")
     .policy(policy)
@@ -620,13 +686,12 @@ Tdf::encrypt(b"Sensitive data")
 ### Encrypt a File
 
 ```rust
-use opentdf::{Tdf, Policy};
+use opentdf::prelude::*;
 
-let policy = Policy::new(
-    uuid::Uuid::new_v4().to_string(),
-    vec![],
-    vec!["user@example.com".to_string()]
-);
+let policy = PolicyBuilder::new()
+    .id_auto()
+    .dissemination(["user@example.com"])
+    .build()?;
 
 Tdf::encrypt_file("input.txt", "output.tdf")
     .kas_url("https://kas.example.com")
@@ -638,23 +703,14 @@ Tdf::encrypt_file("input.txt", "output.tdf")
 ### With Attribute-Based Access Control (ABAC)
 
 ```rust
-use opentdf::{
-    Tdf, Policy, AttributePolicy, AttributeIdentifier,
-    AttributeValue, Operator
-};
+use opentdf::prelude::*;
 
-// Create policy with attribute conditions
-let clearance = AttributePolicy::condition(
-    AttributeIdentifier::from_string("gov.example:clearance")?,
-    Operator::MinimumOf,
-    Some("SECRET".into())
-);
-
-let policy = Policy::new(
-    uuid::Uuid::new_v4().to_string(),
-    vec![clearance],
-    vec!["user@example.com".to_string()]
-);
+// Create policy with FQN-based attributes
+let policy = PolicyBuilder::new()
+    .id_auto()
+    .attribute_fqn("https://gov.example.com/attr/clearance/value/SECRET")?
+    .dissemination(["user@example.com"])
+    .build()?;
 
 // Encrypt with ABAC policy
 Tdf::encrypt(b"Classified information")
