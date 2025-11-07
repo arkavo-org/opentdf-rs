@@ -38,6 +38,9 @@ criterion = "0.5"
 [workspace]
 members = ["crates/mcp-server", "crates/wasm"]
 
+[workspace.package]
+version = "0.4.3"
+
 [features]
 default = []
 mcp = []
