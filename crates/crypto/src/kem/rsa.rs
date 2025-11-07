@@ -165,6 +165,7 @@ pub fn wrap_key_with_rsa_oaep(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pkcs8::EncodePrivateKey;
     use rsa::pkcs8::EncodePublicKey;
 
     fn generate_test_keypair() -> (String, String) {

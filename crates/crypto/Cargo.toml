@@ -31,12 +31,15 @@ thiserror = "2.0"
 # but 0.10 is still RC and has breaking API changes
 rsa = { version = "0.9", features = ["sha2"], optional = true }
 p256 = { version = "0.13", features = ["ecdsa", "pem", "ecdh"], optional = true }
+p384 = { version = "0.13", features = ["ecdsa", "pem", "ecdh"], optional = true }
+p521 = { version = "0.13", features = ["ecdsa", "pem", "ecdh"], optional = true }
+k256 = { version = "0.13", features = ["ecdsa", "pem", "ecdh"], optional = true }
 sha1 = { version = "0.10", optional = true }
 hkdf = { version = "0.12", optional = true }
 pkcs8 = { version = "0.10", features = ["pem"], optional = true }
 
 [features]
 default = []
-kas = ["rsa", "p256", "sha1", "hkdf", "pkcs8"]
+kas = ["rsa", "p256", "p384", "p521", "k256", "sha1", "hkdf", "pkcs8"]
 
 [dev-dependencies]
