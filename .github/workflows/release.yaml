@@ -4,8 +4,14 @@ on:
   push:
     branches:
       - main
-    tags:
-      - '[0-9]*'
+    paths:
+      - 'crates/wasm/**'
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  tags:
+    - '[0-9]+.[0-9]+.[0-9]+'
+    - '[0-9]+.[0-9]+.[0-9]+-*'
 
 env:
   CARGO_TERM_COLOR: always
@@ -69,22 +75,9 @@ jobs:
 
       - name: test-wasm
         working-directory: crates/wasm
-        run: wasm-pack test --headless --firefox
-
-      - name: publish-npm
-        if: startsWith(github.ref, 'refs/tags/')
-        working-directory: crates/wasm/pkg-web
-        run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: create-archive
         run: |
-          cd crates/wasm
-          tar -czf ../../opentdf-wasm-web.tar.gz -C pkg-web .
-
-      - name: generate-checksum
-        run: sha256sum opentdf-wasm-web.tar.gz > opentdf-wasm-web.tar.gz.sha256
+          wasm-pack test --headless --firefox
+          wasm-pack test --headless --chrome
 
       - name: get-version
         id: version
@@ -93,9 +86,42 @@ jobs:
             echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
             echo "is_release=true" >> $GITHUB_OUTPUT
           else
-            echo "version=$(grep '^version' crates/wasm/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')" >> $GITHUB_OUTPUT
+            echo "version=$(jq -r '.version' crates/wasm/pkg-web/package.json)" >> $GITHUB_OUTPUT
             echo "is_release=false" >> $GITHUB_OUTPUT
           fi
+
+      - name: validate-version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/}"
+          PKG_VERSION=$(jq -r '.version' crates/wasm/pkg-web/package.json)
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag version ($TAG_VERSION) doesn't match package.json version ($PKG_VERSION)"
+            exit 1
+          fi
+          echo "✅ Version validation passed: $TAG_VERSION"
+
+      - name: publish-npm
+        if: startsWith(github.ref, 'refs/tags/')
+        working-directory: crates/wasm/pkg-web
+        run: |
+          # Check if version already published
+          if npm view @arkavo-org/opentdf-wasm@${{ steps.version.outputs.version }} 2>/dev/null; then
+            echo "⚠️ Version ${{ steps.version.outputs.version }} already published, skipping"
+            exit 0
+          fi
+          npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: false
+
+      - name: create-archive
+        run: |
+          cd crates/wasm
+          tar -czf ../../opentdf-wasm-web.tar.gz -C pkg-web .
+
+      - name: generate-checksum
+        run: sha256sum opentdf-wasm-web.tar.gz > opentdf-wasm-web.tar.gz.sha256
 
       - name: create-release
         if: startsWith(github.ref, 'refs/tags/')
