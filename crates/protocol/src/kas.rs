@@ -168,6 +168,7 @@ pub struct KasPolicyBinding {
 /// See the examples directory for JWT creation patterns.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SignedRewrapRequest {
+    #[serde(rename = "signedRequestToken")]
     pub signed_request_token: String,
 }
 
