@@ -1,6 +1,6 @@
 use opentdf::{
-    manifest::PolicyBinding, AttributeIdentifier, AttributePolicy, AttributeValue, Policy,
-    TdfArchive, TdfArchiveMemoryBuilder, TdfEncryption, TdfManifest,
+    AttributeIdentifier, AttributePolicy, AttributeValue, Policy, TdfArchive,
+    TdfArchiveMemoryBuilder, TdfEncryption, TdfManifest,
 };
 use std::collections::HashMap;
 use std::io::Cursor;
@@ -103,10 +103,8 @@ async fn _tdf_create_impl(data: &str, kas_url: &str, policy_json: &str) -> Resul
         .map_err(|e| format!("Failed to encrypt: {}", e))?;
 
     // Step 6: Wrap the payload key with KAS public key using RSA-OAEP
-    let wrapped_key = kas::wrap_key_with_rsa_oaep(
-        tdf_encryption.payload_key(),
-        &kas_key_response.public_key,
-    )?;
+    let wrapped_key =
+        kas::wrap_key_with_rsa_oaep(tdf_encryption.payload_key(), &kas_key_response.public_key)?;
 
     // Step 7: Decode the base64-encoded ciphertext
     let ciphertext_bytes = BASE64
@@ -187,6 +185,86 @@ fn _tdf_read_impl(tdf_data: &str) -> Result<String, String> {
     // Serialize manifest to JSON
     serde_json::to_string(&entry.manifest)
         .map_err(|e| format!("Failed to serialize manifest: {}", e))
+}
+
+/// Decrypt a TDF archive using KAS rewrap protocol (async)
+///
+/// This performs the complete KAS rewrap flow:
+/// 1. Parse TDF manifest and extract policy/key access info
+/// 2. Generate ephemeral RSA-2048 key pair
+/// 3. Build and sign JWT rewrap request (ES256)
+/// 4. POST to KAS /v2/rewrap endpoint with OAuth token
+/// 5. Unwrap returned key using RSA-OAEP (SHA-1)
+/// 6. Decrypt payload with AES-256-GCM
+///
+/// # Arguments
+/// * `tdf_data` - Base64-encoded TDF archive
+/// * `kas_token` - OAuth bearer token for KAS authentication
+///
+/// # Returns
+/// Promise resolving to WasmResult with base64-encoded plaintext
+#[wasm_bindgen]
+pub async fn tdf_decrypt_with_kas(tdf_data: String, kas_token: String) -> WasmResult {
+    match _tdf_decrypt_with_kas_impl(&tdf_data, &kas_token).await {
+        Ok(plaintext_b64) => WasmResult::ok(plaintext_b64),
+        Err(e) => WasmResult::err(e),
+    }
+}
+
+async fn _tdf_decrypt_with_kas_impl(tdf_data: &str, kas_token: &str) -> Result<String, String> {
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+
+    // Step 1: Parse TDF archive and extract manifest
+    let tdf_bytes = BASE64
+        .decode(tdf_data)
+        .map_err(|e| format!("Failed to decode TDF: {}", e))?;
+
+    let cursor = Cursor::new(tdf_bytes.clone());
+    let mut archive = TdfArchive::new(cursor).map_err(|e| format!("Failed to open TDF: {}", e))?;
+
+    let entry = archive
+        .by_index()
+        .map_err(|e| format!("Failed to read TDF entry: {}", e))?;
+
+    // Step 2: Generate ephemeral RSA-2048 key pair
+    let ephemeral_keypair = kas::generate_rsa_keypair()?;
+
+    // Step 3: Build unsigned rewrap request
+    let unsigned_request =
+        kas::build_rewrap_request(&entry.manifest, &ephemeral_keypair.public_key_pem)?;
+
+    // Step 4: Sign request with JWT (ES256)
+    let signed_token = kas::create_signed_jwt(&unsigned_request)?;
+
+    // Step 5: POST to KAS /v2/rewrap
+    let kas_url = &entry.manifest.encryption_information.key_access[0].url;
+    let rewrap_response = kas::post_rewrap_request(kas_url, kas_token, &signed_token).await?;
+
+    // Step 6: Unwrap payload key using RSA-OAEP
+    let payload_key =
+        kas::unwrap_rsa_oaep(&rewrap_response.wrapped_key, &ephemeral_keypair.private_key)?;
+
+    // Step 7: Decrypt payload
+    let tdf_encryption = TdfEncryption::with_payload_key(&payload_key)
+        .map_err(|e| format!("Failed to create decryption context: {}", e))?;
+
+    // Read encrypted payload from archive
+    let payload_bytes = entry.payload;
+
+    // Decrypt using segment information
+    let (plaintext, _gmac_tags) = tdf_encryption
+        .decrypt_with_segments(
+            &payload_bytes,
+            &entry
+                .manifest
+                .encryption_information
+                .integrity_information
+                .segments,
+        )
+        .map_err(|e| format!("Decryption failed: {}", e))?;
+
+    // Step 8: Return base64-encoded plaintext
+    Ok(BASE64.encode(&plaintext))
 }
 
 /// Create a policy from JSON

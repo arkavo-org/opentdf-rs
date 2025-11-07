@@ -50,12 +50,15 @@ tar -xzf opentdf-wasm-combined.tar.gz
 ### Browser
 
 ```javascript
-import init, { tdf_create, tdf_read, access_evaluate, version } from '@arkavo-org/opentdf-wasm';
+import init, { tdf_create, tdf_read, tdf_decrypt_with_kas, access_evaluate, version } from '@arkavo-org/opentdf-wasm';
 
 // Initialize the WASM module
 await init();
 
 console.log('OpenTDF WASM version:', version());
+
+// Obtain OAuth token (example - your implementation will vary)
+const oauthToken = await getOAuthToken();
 
 // Create a TDF
 const data = btoa('Sensitive information'); // Base64 encode
@@ -67,9 +70,9 @@ const policy = {
   }
 };
 
-const result = tdf_create(
+const result = await tdf_create(
   data,
-  'https://kas.example.com',
+  'https://kas.example.com/kas',
   JSON.stringify(policy)
 );
 
@@ -83,6 +86,15 @@ if (result.success) {
     const manifest = JSON.parse(manifestResult.data);
     console.log('Manifest:', manifest);
   }
+
+  // Decrypt the TDF using KAS
+  const decryptResult = await tdf_decrypt_with_kas(tdfArchive, oauthToken);
+  if (decryptResult.success) {
+    const plaintext = atob(decryptResult.data); // Base64 decode
+    console.log('Decrypted:', plaintext);
+  } else {
+    console.error('Decryption error:', decryptResult.error);
+  }
 } else {
   console.error('Error:', result.error);
 }
@@ -91,9 +103,12 @@ if (result.success) {
 ### Node.js
 
 ```javascript
-const { tdf_create, tdf_read, access_evaluate, version } = require('@arkavo-org/opentdf-wasm');
+const { tdf_create, tdf_read, tdf_decrypt_with_kas, access_evaluate, version } = require('@arkavo-org/opentdf-wasm');
 
 console.log('OpenTDF WASM version:', version());
+
+// Obtain OAuth token (example - your implementation will vary)
+const oauthToken = await getOAuthToken();
 
 // Create a TDF
 const data = Buffer.from('Sensitive information').toString('base64');
@@ -105,9 +120,9 @@ const policy = {
   }
 };
 
-const result = tdf_create(
+const result = await tdf_create(
   data,
-  'https://kas.example.com',
+  'https://kas.example.com/kas',
   JSON.stringify(policy)
 );
 
@@ -120,6 +135,15 @@ if (result.success) {
   if (manifestResult.success) {
     const manifest = JSON.parse(manifestResult.data);
     console.log('Manifest:', manifest);
+  }
+
+  // Decrypt the TDF using KAS
+  const decryptResult = await tdf_decrypt_with_kas(tdfArchive, oauthToken);
+  if (decryptResult.success) {
+    const plaintext = Buffer.from(decryptResult.data, 'base64').toString('utf8');
+    console.log('Decrypted:', plaintext);
+  } else {
+    console.error('Decryption error:', decryptResult.error);
   }
 } else {
   console.error('Error:', result.error);
@@ -227,6 +251,29 @@ Reads a TDF archive and returns its manifest.
 
 **Returns:** `WasmResult` with JSON manifest in `data` field
 
+### `tdf_decrypt_with_kas(tdf_data: string, kas_token: string): Promise<WasmResult>`
+
+Decrypts a TDF archive using the KAS rewrap protocol (async).
+
+**Parameters:**
+- `tdf_data`: Base64-encoded TDF archive
+- `kas_token`: OAuth bearer token for KAS authentication
+
+**Returns:** Promise resolving to `WasmResult` with base64-encoded plaintext in `data` field
+
+**Flow:**
+1. Parses TDF manifest and extracts policy/key access info
+2. Generates ephemeral RSA-2048 key pair
+3. Builds and signs JWT rewrap request (ES256)
+4. POSTs to KAS `/v2/rewrap` endpoint with OAuth token
+5. Unwraps returned key using RSA-OAEP (SHA-1)
+6. Decrypts payload with AES-256-GCM
+
+**Error Handling:**
+- 401: Invalid OAuth token
+- 403: Access denied (policy evaluation failed)
+- Network errors: CORS or connectivity issues
+
 ### `policy_create(policy_json: string): WasmResult`
 
 Creates and validates a policy from JSON.
@@ -302,10 +349,17 @@ The WASM binary is optimized for size using:
 - `opt-level = "z"` - Optimize for size
 - `lto = true` - Link-time optimization
 - `codegen-units = 1` - Single codegen unit for better optimization
+- `wasm-opt` with `-O3` - Additional WebAssembly-specific optimization
 
 Typical bundle sizes:
-- Web: ~200KB (gzipped)
-- Node.js: ~250KB (gzipped)
+- Web: ~730 KB uncompressed, ~230 KB gzipped
+- Node.js: ~780 KB uncompressed, ~250 KB gzipped
+
+The bundle includes full KAS rewrap protocol with:
+- RSA-2048 key generation and OAEP encryption/decryption
+- P-256 ECDSA JWT signing (ES256)
+- AES-256-GCM encryption/decryption
+- Browser Fetch API integration
 
 ## Browser Compatibility
 
@@ -318,45 +372,44 @@ Typical bundle sizes:
 
 - Node.js 14+ with WebAssembly support
 
-## KAS Integration Limitations
+## KAS Integration
 
-**The WASM module does not include KAS (Key Access Service) client functionality.**
+The WASM module includes **full KAS (Key Access Service) integration** for both encryption and decryption:
 
-This is an **architectural decision**, not a missing feature:
+### Encryption (tdf_create)
+- Automatically fetches KAS public key via browser Fetch API
+- Wraps DEK with RSA-2048-OAEP (SHA-1 for Go SDK compatibility)
+- Creates TDF with proper policy binding
+- DEK never leaves WASM environment
 
-### Why KAS is not included:
-1. **Async/HTTP complexity** - KAS requires async HTTP calls which need platform-specific implementations:
-   - Browsers: `fetch()` API via `web-sys` (adds ~50KB)
-   - Node.js: Different HTTP implementation (adds more dependencies)
-   - Both require `wasm-bindgen-futures` for async support
+### Decryption (tdf_decrypt_with_kas)
+- Generates ephemeral RSA-2048 key pair
+- Signs JWT rewrap request with P-256 ECDSA (ES256)
+- POSTs to KAS `/v2/rewrap` endpoint with OAuth token
+- Unwraps returned key with RSA-OAEP
+- Decrypts payload with AES-256-GCM
+- All cryptographic operations happen in WASM
 
-2. **Bundle size** - Adding full KAS support would increase bundle size by 50-100KB and add significant complexity.
+### OAuth Token Management
+The WASM module requires an OAuth bearer token for KAS operations. Your application must:
+1. Obtain OAuth token from your identity provider
+2. Pass token to `tdf_create()` and `tdf_decrypt_with_kas()`
+3. Handle token refresh when needed
 
-3. **Alternative approaches** - Most WASM use cases work better with:
-   - **Server-side KAS** - Use native Rust SDK on server with full KAS support
-   - **JavaScript KAS client** - Call KAS directly from JavaScript, use WASM only for crypto
-   - **Local key encryption** - Use WASM's `tdf_create()` for local encryption without KAS
-
-### Example: Using WASM with external KAS
-```javascript
-// JavaScript calls KAS for key wrapping
-const response = await fetch('https://kas.example.com/api/wrap', {
-  method: 'POST',
-  body: JSON.stringify({ key: myKey })
-});
-const wrappedKey = await response.json();
-
-// WASM handles encryption with the wrapped key
-const tdf = tdf_create(data, kasUrl, JSON.stringify(policy));
+### CORS Configuration
+KAS must be configured to allow CORS requests from your domain:
+```
+Access-Control-Allow-Origin: https://your-domain.com
+Access-Control-Allow-Methods: GET, POST, OPTIONS
+Access-Control-Allow-Headers: Authorization, Content-Type, Accept
 ```
 
-If you need full KAS integration, use the native Rust SDK which includes:
-- KAS rewrap protocol
-- OAuth authentication
-- Public key fetching
-- RSA key wrapping
-
-See `examples/create_tdf_platform.rs` and `examples/kas_decrypt.rs` for native KAS usage.
+### Security Guarantees
+✅ DEK never exposed in JavaScript
+✅ Ephemeral keys generated fresh for each operation
+✅ Full KAS authorization enforcement
+✅ Compatible with OpenTDF Go/Python SDKs
+✅ Proper zero-trust architecture
 
 ## Security Considerations
 
