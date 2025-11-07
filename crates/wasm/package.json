@@ -1,6 +1,6 @@
 {
   "name": "@arkavo-org/opentdf-wasm",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "WebAssembly bindings for OpenTDF (Trusted Data Format)",
   "main": "pkg/opentdf_wasm.js",
   "types": "pkg/opentdf_wasm.d.ts",

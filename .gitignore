@@ -27,3 +27,10 @@ Cargo.lock
 /.idea/modules.xml
 /.idea/opentdf-rs.iml
 /.idea/vcs.xml
+
+# macOS
+.DS_Store
+
+# Arkavo local files
+.arkavo/memory_server/
+.arkavo/prompts/
