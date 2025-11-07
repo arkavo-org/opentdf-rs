@@ -1,13 +1,15 @@
 # OpenTDF WASM
 
-WebAssembly bindings for OpenTDF (Trusted Data Format), enabling data-centric security in both browser and Node.js environments.
+WebAssembly bindings for OpenTDF (Trusted Data Format), enabling data-centric security in browser environments.
 
 ## Features
 
 - Create TDF archives with encrypted data
+- Full KAS (Key Access Service) rewrap protocol support
+- Decrypt TDF archives with KAS authorization
 - Read TDF archives and access manifests
 - Attribute-Based Access Control (ABAC) policy evaluation
-- Works in both browser and Node.js environments
+- Browser-native implementation (ES Modules)
 - Zero-copy operations where possible
 
 ## Installation
@@ -39,10 +41,10 @@ Download pre-built WASM binaries without npm:
 
 ```bash
 # Download and extract
-wget https://github.com/arkavo-org/opentdf-rs/releases/latest/download/opentdf-wasm-combined.tar.gz
-tar -xzf opentdf-wasm-combined.tar.gz
+wget https://github.com/arkavo-org/opentdf-rs/releases/latest/download/opentdf-wasm-web.tar.gz
+tar -xzf opentdf-wasm-web.tar.gz
 
-# Contains web/ and node/ directories ready to use
+# Contains web build ready to use
 ```
 
 ## Usage
@@ -91,56 +93,6 @@ if (result.success) {
   const decryptResult = await tdf_decrypt_with_kas(tdfArchive, oauthToken);
   if (decryptResult.success) {
     const plaintext = atob(decryptResult.data); // Base64 decode
-    console.log('Decrypted:', plaintext);
-  } else {
-    console.error('Decryption error:', decryptResult.error);
-  }
-} else {
-  console.error('Error:', result.error);
-}
-```
-
-### Node.js
-
-```javascript
-const { tdf_create, tdf_read, tdf_decrypt_with_kas, access_evaluate, version } = require('@arkavo-org/opentdf-wasm');
-
-console.log('OpenTDF WASM version:', version());
-
-// Obtain OAuth token (example - your implementation will vary)
-const oauthToken = await getOAuthToken();
-
-// Create a TDF
-const data = Buffer.from('Sensitive information').toString('base64');
-const policy = {
-  uuid: require('crypto').randomUUID(),
-  body: {
-    attributes: [],
-    dissem: ['user@example.com']
-  }
-};
-
-const result = await tdf_create(
-  data,
-  'https://kas.example.com/kas',
-  JSON.stringify(policy)
-);
-
-if (result.success) {
-  const tdfArchive = result.data;
-  console.log('TDF created successfully');
-
-  // Read the TDF manifest
-  const manifestResult = tdf_read(tdfArchive);
-  if (manifestResult.success) {
-    const manifest = JSON.parse(manifestResult.data);
-    console.log('Manifest:', manifest);
-  }
-
-  // Decrypt the TDF using KAS
-  const decryptResult = await tdf_decrypt_with_kas(tdfArchive, oauthToken);
-  if (decryptResult.success) {
-    const plaintext = Buffer.from(decryptResult.data, 'base64').toString('utf8');
     console.log('Decrypted:', plaintext);
   } else {
     console.error('Decryption error:', decryptResult.error);
@@ -317,23 +269,12 @@ All functions return a `WasmResult` object with the following properties:
 - Rust 1.70 or later
 - wasm-pack (`cargo install wasm-pack`)
 
-### Build for Web
+### Build
 
 ```bash
 cd crates/wasm
 wasm-pack build --target web --out-dir pkg-web
-```
-
-### Build for Node.js
-
-```bash
-cd crates/wasm
-wasm-pack build --target nodejs --out-dir pkg-node
-```
-
-### Build both targets
-
-```bash
+# or
 npm run build
 ```
 
@@ -351,9 +292,8 @@ The WASM binary is optimized for size using:
 - `codegen-units = 1` - Single codegen unit for better optimization
 - `wasm-opt` with `-O3` - Additional WebAssembly-specific optimization
 
-Typical bundle sizes:
-- Web: ~730 KB uncompressed, ~230 KB gzipped
-- Node.js: ~780 KB uncompressed, ~250 KB gzipped
+Typical bundle size:
+- ~730 KB uncompressed, ~230 KB gzipped
 
 The bundle includes full KAS rewrap protocol with:
 - RSA-2048 key generation and OAEP encryption/decryption
@@ -367,10 +307,6 @@ The bundle includes full KAS rewrap protocol with:
 - Firefox: 79+
 - Safari: 15+
 - All browsers with WebAssembly support
-
-## Node.js Compatibility
-
-- Node.js 14+ with WebAssembly support
 
 ## KAS Integration
 
@@ -414,7 +350,7 @@ Access-Control-Allow-Headers: Authorization, Content-Type, Accept
 ## Security Considerations
 
 - All cryptographic operations use the same secure primitives as the native Rust library
-- Random number generation uses the browser's `crypto.getRandomValues()` or Node.js `crypto.randomBytes()`
+- Random number generation uses the browser's `crypto.getRandomValues()`
 - Memory is automatically managed by WebAssembly
 - Sensitive data should be cleared from JavaScript variables after use
 
