@@ -24,7 +24,6 @@ use thiserror::Error;
 use aes_gcm::{
     aead::{Aead, KeyInit, Payload},
     Aes256Gcm as Aes256Gcm128, // Standard 128-bit tag
-    Key,
 };
 #[cfg(not(feature = "nanotdf-mbedtls"))]
 use typenum::{U12, U13, U14, U15};
@@ -178,31 +177,31 @@ pub fn encrypt(
 
     match tag_size {
         TagSize::Bits96 => {
-            let cipher = Aes256Gcm96::new(Key::<Aes256Gcm96>::from_slice(key.as_slice()));
+            let cipher = Aes256Gcm96::new(key.as_slice().into());
             cipher
                 .encrypt((&nonce_bytes).into(), plaintext)
                 .map_err(|_| NanoTdfCryptoError::EncryptionFailed)
         }
         TagSize::Bits104 => {
-            let cipher = Aes256Gcm104::new(Key::<Aes256Gcm104>::from_slice(key.as_slice()));
+            let cipher = Aes256Gcm104::new(key.as_slice().into());
             cipher
                 .encrypt((&nonce_bytes).into(), plaintext)
                 .map_err(|_| NanoTdfCryptoError::EncryptionFailed)
         }
         TagSize::Bits112 => {
-            let cipher = Aes256Gcm112::new(Key::<Aes256Gcm112>::from_slice(key.as_slice()));
+            let cipher = Aes256Gcm112::new(key.as_slice().into());
             cipher
                 .encrypt((&nonce_bytes).into(), plaintext)
                 .map_err(|_| NanoTdfCryptoError::EncryptionFailed)
         }
         TagSize::Bits120 => {
-            let cipher = Aes256Gcm120::new(Key::<Aes256Gcm120>::from_slice(key.as_slice()));
+            let cipher = Aes256Gcm120::new(key.as_slice().into());
             cipher
                 .encrypt((&nonce_bytes).into(), plaintext)
                 .map_err(|_| NanoTdfCryptoError::EncryptionFailed)
         }
         TagSize::Bits128 => {
-            let cipher = Aes256Gcm128::new(Key::<Aes256Gcm128>::from_slice(key.as_slice()));
+            let cipher = Aes256Gcm128::new(key.as_slice().into());
             cipher
                 .encrypt((&nonce_bytes).into(), plaintext)
                 .map_err(|_| NanoTdfCryptoError::EncryptionFailed)
@@ -238,31 +237,31 @@ pub fn decrypt(
 
     match tag_size {
         TagSize::Bits96 => {
-            let cipher = Aes256Gcm96::new(Key::<Aes256Gcm96>::from_slice(key.as_slice()));
+            let cipher = Aes256Gcm96::new(key.as_slice().into());
             cipher
                 .decrypt((&nonce_bytes).into(), ciphertext_and_tag)
                 .map_err(|_| NanoTdfCryptoError::DecryptionFailed)
         }
         TagSize::Bits104 => {
-            let cipher = Aes256Gcm104::new(Key::<Aes256Gcm104>::from_slice(key.as_slice()));
+            let cipher = Aes256Gcm104::new(key.as_slice().into());
             cipher
                 .decrypt((&nonce_bytes).into(), ciphertext_and_tag)
                 .map_err(|_| NanoTdfCryptoError::DecryptionFailed)
         }
         TagSize::Bits112 => {
-            let cipher = Aes256Gcm112::new(Key::<Aes256Gcm112>::from_slice(key.as_slice()));
+            let cipher = Aes256Gcm112::new(key.as_slice().into());
             cipher
                 .decrypt((&nonce_bytes).into(), ciphertext_and_tag)
                 .map_err(|_| NanoTdfCryptoError::DecryptionFailed)
         }
         TagSize::Bits120 => {
-            let cipher = Aes256Gcm120::new(Key::<Aes256Gcm120>::from_slice(key.as_slice()));
+            let cipher = Aes256Gcm120::new(key.as_slice().into());
             cipher
                 .decrypt((&nonce_bytes).into(), ciphertext_and_tag)
                 .map_err(|_| NanoTdfCryptoError::DecryptionFailed)
         }
         TagSize::Bits128 => {
-            let cipher = Aes256Gcm128::new(Key::<Aes256Gcm128>::from_slice(key.as_slice()));
+            let cipher = Aes256Gcm128::new(key.as_slice().into());
             cipher
                 .decrypt((&nonce_bytes).into(), ciphertext_and_tag)
                 .map_err(|_| NanoTdfCryptoError::DecryptionFailed)
@@ -280,7 +279,7 @@ pub fn generate_gmac(
     data: &[u8],
 ) -> Result<[u8; 12], NanoTdfCryptoError> {
     // GMAC uses 96-bit tag (minimum supported)
-    let cipher = Aes256Gcm96::new(Key::<Aes256Gcm96>::from_slice(key.as_slice()));
+    let cipher = Aes256Gcm96::new(key.as_slice().into());
     let nonce_bytes = iv.to_gcm_nonce();
 
     // GMAC: encrypt empty plaintext with AAD
