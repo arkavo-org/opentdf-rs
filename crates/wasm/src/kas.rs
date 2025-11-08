@@ -202,6 +202,7 @@ pub fn build_rewrap_request(
                 },
                 encrypted_metadata: kao.encrypted_metadata.clone(),
                 kid: kao.kid.clone(),
+                header: None, // Only used for NanoTDF rewrap requests
             },
         })
         .collect();
