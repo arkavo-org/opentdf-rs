@@ -223,6 +223,83 @@ impl KasClient {
     ///
     /// * `manifest` - TDF manifest containing the wrapped key
     ///
+    /// Perform KAS rewrap for NanoTDF
+    ///
+    /// Sends the NanoTDF header bytes to KAS which extracts the ephemeral public key
+    /// and performs ECDH to derive the symmetric encryption key.
+    ///
+    /// # Arguments
+    /// * `header_bytes` - The serialized NanoTDF header
+    /// * `kas_url` - The KAS URL from the NanoTDF header
+    ///
+    /// # Returns
+    /// The symmetric key for decrypting the NanoTDF payload
+    pub async fn rewrap_nanotdf(
+        &self,
+        header_bytes: &[u8],
+        kas_url: &str,
+    ) -> Result<Vec<u8>, KasError> {
+        // Build unsigned rewrap request for NanoTDF
+        let unsigned_request = self.build_nanotdf_rewrap_request(header_bytes, kas_url)?;
+
+        // Create and sign JWT
+        let signed_request_token = self.sign_rewrap_request(&unsigned_request)?;
+
+        // Wrap in SignedRewrapRequest
+        let signed_request = SignedRewrapRequest {
+            signed_request_token,
+        };
+
+        // Make HTTP request to KAS
+        let rewrap_endpoint = format!("{}/kas/v2/rewrap", self.base_url);
+
+        let response = self
+            .http_client
+            .post(&rewrap_endpoint)
+            .header("Authorization", format!("Bearer {}", self.oauth_token))
+            .header("Content-Type", "application/json")
+            .json(&signed_request)
+            .send()
+            .await
+            .map_err(|e| KasError::HttpError {
+                status: 0,
+                message: format!("HTTP request failed: {}", e),
+            })?;
+
+        // Handle HTTP errors
+        let status = response.status();
+        if !status.is_success() {
+            let error_body = response.text().await.unwrap_or_default();
+            return Err(match status.as_u16() {
+                401 => KasError::AuthenticationFailed {
+                    reason: "Invalid or missing OAuth token".to_string(),
+                },
+                403 => KasError::AccessDenied {
+                    resource: "KAS endpoint".to_string(),
+                    reason: error_body.clone(),
+                },
+                _ => KasError::HttpError {
+                    status: status.as_u16(),
+                    message: format!("HTTP {}: {}", status, error_body),
+                },
+            });
+        }
+
+        // Parse response - NanoTDF returns the symmetric key directly
+        let rewrap_response: RewrapResponse =
+            response
+                .json()
+                .await
+                .map_err(|e| KasError::InvalidResponse {
+                    reason: format!("Failed to parse JSON response: {}", e),
+                    expected: Some("RewrapResponse".to_string()),
+                })?;
+
+        // For NanoTDF, extract the DEK (symmetric key) directly from response
+        // The KAS has already performed ECDH and derived the key
+        self.extract_nanotdf_key(&rewrap_response)
+    }
+
     /// Returns the unwrapped payload key ready for TDF decryption
     pub async fn rewrap_standard_tdf(&self, manifest: &TdfManifest) -> Result<Vec<u8>, KasError> {
         // Generate RSA ephemeral key pair for Standard TDF
@@ -422,6 +499,7 @@ impl KasClient {
                         },
                         encrypted_metadata: kao.encrypted_metadata.clone(),
                         kid: kao.kid.clone(),
+                        header: None, // Not used for standard TDF
                     },
                 })
             })
@@ -446,6 +524,84 @@ impl KasClient {
             client_public_key: ephemeral_key_pair.public_key_pem().to_string(),
             requests: vec![policy_request],
         })
+    }
+
+    /// Build unsigned rewrap request for NanoTDF
+    fn build_nanotdf_rewrap_request(
+        &self,
+        header_bytes: &[u8],
+        kas_url: &str,
+    ) -> Result<UnsignedRewrapRequest, KasError> {
+        use base64::Engine;
+
+        // For NanoTDF, we send the header bytes as base64 in the KeyAccessObject
+        let header_b64 = BASE64.encode(header_bytes);
+
+        let key_access_object = KeyAccessObjectWrapper {
+            key_access_object_id: "kao-0".to_string(),
+            key_access_object: KeyAccessObject {
+                key_type: "wrapped".to_string(),
+                url: kas_url.to_string(),
+                protocol: "kas".to_string(),
+                wrapped_key: String::new(), // Not used for NanoTDF
+                policy_binding: KasPolicyBinding {
+                    hash: String::new(), // Extracted from header by KAS
+                    algorithm: Some("HS256".to_string()),
+                },
+                encrypted_metadata: None,
+                kid: None,
+                header: Some(header_b64), // NanoTDF header bytes (base64)
+            },
+        };
+
+        // Create policy request
+        let policy_request = PolicyRequest {
+            algorithm: Some("ec:secp256r1".to_string()), // NanoTDF uses EC algorithm
+            policy: Policy {
+                id: "policy".to_string(),
+                body: String::new(), // Policy is in the header
+            },
+            key_access_objects: vec![key_access_object],
+        };
+
+        Ok(UnsignedRewrapRequest {
+            client_public_key: String::new(), // Not used for NanoTDF
+            requests: vec![policy_request],
+        })
+    }
+
+    /// Extract the symmetric key from NanoTDF rewrap response
+    fn extract_nanotdf_key(&self, response: &RewrapResponse) -> Result<Vec<u8>, KasError> {
+        let policy_result =
+            response
+                .responses
+                .first()
+                .ok_or_else(|| KasError::InvalidResponse {
+                    reason: "Empty response from KAS".to_string(),
+                    expected: Some("at least one policy response".to_string()),
+                })?;
+
+        let key_result =
+            policy_result
+                .results
+                .first()
+                .ok_or_else(|| KasError::InvalidResponse {
+                    reason: "No key access object in response".to_string(),
+                    expected: Some("at least one KAO result".to_string()),
+                })?;
+
+        // For NanoTDF, the DEK is returned directly (base64 encoded)
+        let dek_b64 =
+            key_result
+                .entity_wrapped_key
+                .as_ref()
+                .ok_or_else(|| KasError::InvalidResponse {
+                    reason: "No DEK in NanoTDF rewrap response".to_string(),
+                    expected: Some("entity_wrapped_key field".to_string()),
+                })?;
+
+        // Decode the symmetric key
+        BASE64.decode(dek_b64).map_err(KasError::Base64Error)
     }
 
     /// Extract wrapped key from rewrap response

@@ -4,12 +4,15 @@
 //! - KAS (Key Access Service) request/response types
 //! - TDF manifest structures
 //! - Policy and attribute definitions
+//! - Binary serialization for NanoTDF
 //!
 //! This crate contains NO cryptographic operations and NO I/O.
 //! It is purely focused on data structures and serialization.
 
+pub mod binary;
 pub mod kas;
 pub mod manifest;
+pub mod nanotdf;
 
 // Re-export commonly used types
 pub use kas::{

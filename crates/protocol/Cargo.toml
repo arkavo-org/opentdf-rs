@@ -1,6 +1,6 @@
 [package]
 name = "opentdf-protocol"
-version = "0.5.0"
+version.workspace = true
 edition = "2021"
 description = "OpenTDF protocol types and structures (no crypto, no I/O)"
 license = "Apache-2.0"

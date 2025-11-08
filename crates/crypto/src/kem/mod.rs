@@ -25,6 +25,15 @@ pub enum KemError {
     #[error("Invalid key format: {0}")]
     InvalidKey(String),
 
+    #[error("Invalid public key")]
+    InvalidPublicKey,
+
+    #[error("Invalid private key")]
+    InvalidPrivateKey,
+
+    #[error("Key derivation failed")]
+    KeyDerivationFailed,
+
     #[error("Unsupported algorithm: {0}")]
     UnsupportedAlgorithm(String),
 
