@@ -168,9 +168,9 @@ impl BinaryRead for Policy {
         };
 
         // Read binding
-        // Note: Binding size depends on binding mode from header
-        // For now, we'll read 8 bytes (GMAC) as minimum
-        // This will need to be refactored to pass binding mode from header
+        // L1L v12 format: Always 8 bytes (SHA-256 last 8 bytes)
+        // Note: This should eventually be refactored to pass binding mode from header
+        // for ECDSA support (which has variable size)
         let mut binding = vec![0u8; 8];
         reader.read_exact(&mut binding)?;
 

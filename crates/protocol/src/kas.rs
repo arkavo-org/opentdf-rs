@@ -151,6 +151,9 @@ pub struct KeyAccessObject {
     pub encrypted_metadata: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kid: Option<String>,
+    /// NanoTDF header bytes (base64 encoded) - used for NanoTDF rewrap requests
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
 }
 
 /// Policy binding for KAS requests

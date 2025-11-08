@@ -159,7 +159,7 @@ pub fn encrypt(
 
     // Encrypt with GCM
     let (len, tag) = cipher.encrypt_auth(
-        &[],  // No AAD
+        &[], // No AAD
         plaintext,
         &mut ciphertext[..plaintext.len()],
         tag_size.bytes(),
@@ -214,7 +214,7 @@ pub fn decrypt(
 
     // Decrypt with GCM
     let len = cipher.decrypt_auth(
-        &[],  // No AAD
+        &[], // No AAD
         ciphertext,
         &mut plaintext,
         tag,
@@ -242,10 +242,10 @@ pub fn generate_gmac(
     // GMAC: encrypt empty plaintext with AAD
     let mut output = vec![];
     let (_, tag) = cipher.encrypt_auth(
-        data,  // AAD is the data to authenticate
-        &[],   // Empty plaintext
+        data, // AAD is the data to authenticate
+        &[],  // Empty plaintext
         &mut output,
-        8,     // 64-bit tag
+        8, // 64-bit tag
     )?;
 
     let mut gmac = [0u8; 8];

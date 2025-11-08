@@ -27,11 +27,7 @@ async fn get_access_token() -> Result<String, Box<dyn Error>> {
         ("client_secret", CLIENT_SECRET),
     ];
 
-    let response = client
-        .post(TOKEN_ENDPOINT)
-        .form(&params)
-        .send()
-        .await?;
+    let response = client.post(TOKEN_ENDPOINT).form(&params).send().await?;
 
     #[derive(serde::Deserialize)]
     struct TokenResponse {

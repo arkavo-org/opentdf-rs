@@ -31,17 +31,19 @@
 //! ```
 
 use crate::kem::ec::{EcCurve, EcdhKem};
-use crate::tdf::nanotdf_crypto::{decrypt, encrypt, generate_gmac, verify_gmac, NanoTdfIv, TagSize};
+use crate::tdf::nanotdf_crypto::{decrypt, encrypt, NanoTdfIv, TagSize};
 use opentdf_protocol::binary::{read_u24_be, write_u24_be, BinaryRead, BinaryWrite};
 use opentdf_protocol::nanotdf::{
-    header::{EccMode, Header, PayloadSignatureMode, SymmetricAndPayloadConfig, SymmetricCipher},
+    header::{
+        EccAndBindingMode, EccMode, Header, PayloadSignatureMode, SymmetricAndPayloadConfig,
+        SymmetricCipher,
+    },
     policy::{Policy, PolicyBody},
-    resource_locator::ResourceLocator,
+    resource_locator::{Protocol, ResourceLocator},
     MagicNumberAndVersion,
 };
 use std::io::{self, Cursor, Read, Write};
 use thiserror::Error;
-use zeroize::Zeroizing;
 
 /// NanoTDF errors
 #[derive(Debug, Error)]
@@ -131,8 +133,10 @@ pub struct NanoTdfSignature {
 ///
 /// let bytes = nanotdf.to_bytes()?;
 /// ```
+#[derive(Clone)]
 pub struct NanoTdfBuilder {
     kas_url: Option<String>,
+    kas_kid: Option<Vec<u8>>,
     policy_body: Option<PolicyBody>,
     ecc_mode: EccMode,
     use_ecdh_binding: bool,
@@ -143,6 +147,7 @@ impl NanoTdfBuilder {
     pub fn new() -> Self {
         NanoTdfBuilder {
             kas_url: None,
+            kas_kid: None,
             policy_body: None,
             ecc_mode: EccMode::Secp256r1,
             use_ecdh_binding: false,
@@ -156,13 +161,21 @@ impl NanoTdfBuilder {
         self
     }
 
+    /// Set the KAS URL with a key ID (kid)
+    #[must_use]
+    pub fn kas_url_with_kid(mut self, url: impl Into<String>, kid: &[u8]) -> Self {
+        self.kas_url = Some(url.into());
+        self.kas_kid = Some(kid.to_vec());
+        self
+    }
+
     /// Set a remote policy body (just the body bytes, not full Policy)
     #[must_use]
-    pub fn policy_remote_body(mut self, body: Vec<u8>) -> Self {
+    pub fn policy_remote_body(mut self, _body: Vec<u8>) -> Self {
         // For remote policy, create a simple resource locator
         // This is simplified - in practice would parse the body as a locator
         let locator = ResourceLocator::from_url("http://policy")
-            .unwrap_or_else(|_| ResourceLocator::http("policy", 0));
+            .unwrap_or_else(|_| ResourceLocator::new(Protocol::Http, "policy".as_bytes().to_vec()));
         self.policy_body = Some(PolicyBody::Remote(locator));
         self
     }
@@ -198,11 +211,7 @@ impl NanoTdfBuilder {
     /// 4. Encrypt payload with AES-256-GCM (3-byte IV, variable tag size)
     /// 5. Calculate policy binding (GMAC or ECDH-based)
     /// 6. Assemble header + payload
-    pub fn encrypt(
-        self,
-        plaintext: &[u8],
-        kas_public_key: &[u8],
-    ) -> Result<NanoTdf, NanoTdfError> {
+    pub fn encrypt(self, plaintext: &[u8], kas_public_key: &[u8]) -> Result<NanoTdf, NanoTdfError> {
         // Validate payload size (max 16MB - 3-byte length field)
         const MAX_PAYLOAD_SIZE: usize = 0xFFFFFF; // 16,777,215 bytes
         if plaintext.len() > MAX_PAYLOAD_SIZE {
@@ -233,7 +242,7 @@ impl NanoTdfBuilder {
         let kem = EcdhKem::new(curve);
 
         // Perform ECDH + HKDF to derive encryption key and get ephemeral public key
-        let (aes_key, ephemeral_public_key) = kem.encapsulate(kas_public_key)?;
+        let (aes_key, ephemeral_public_key) = kem.derive_key_with_ephemeral(kas_public_key)?;
 
         // Generate random 3-byte IV
         let iv = NanoTdfIv::random();
@@ -243,30 +252,48 @@ impl NanoTdfBuilder {
         let tag_size = TagSize::Bits96;
         let ciphertext_and_tag = encrypt(&aes_key, &iv, plaintext, tag_size)?;
 
-        // Calculate policy binding
+        // Calculate policy binding (L1L v12 format)
+        // According to Go/otdfctl gold standard: SHA-256 hash of policy body, last 8 bytes
         let policy_binding = if self.use_ecdh_binding {
-            // ECDH-based binding (future)
+            // ECDSA binding (future)
             return Err(NanoTdfError::Unsupported(
-                "ECDH policy binding not yet implemented".to_string(),
+                "ECDSA policy binding not yet implemented".to_string(),
             ));
         } else {
-            // GMAC binding: authenticate header + payload
-            let mut binding_data = Vec::new();
+            // GMAC binding for L1L v12: SHA-256 of policy body, take last 8 bytes
+            use sha2::{Digest, Sha256};
+            let policy_bytes = match &policy_body {
+                PolicyBody::Remote(locator) => {
+                    // For remote policy, hash the resource locator bytes
+                    let mut buf = Vec::new();
+                    locator.write_to(&mut buf).map_err(|e| {
+                        NanoTdfError::InvalidHeader(format!("Failed to serialize policy: {}", e))
+                    })?;
+                    buf
+                }
+                PolicyBody::EmbeddedPlaintext(content) => content.clone(),
+                PolicyBody::EmbeddedEncrypted(content) => content.clone(),
+                _ => {
+                    return Err(NanoTdfError::Unsupported(
+                        "Encrypted policy with key access not supported".to_string(),
+                    ))
+                }
+            };
 
-            // Header data for binding (simplified - would include full header)
-            binding_data.extend_from_slice(&ephemeral_public_key);
-
-            // Payload data for binding
-            binding_data.extend_from_slice(iv.as_bytes());
-            binding_data.extend_from_slice(&ciphertext_and_tag);
-
-            let gmac = generate_gmac(&aes_key, &NanoTdfIv::POLICY_IV, &binding_data)?;
-            gmac.to_vec()
+            let hash = Sha256::digest(&policy_bytes);
+            hash[24..].to_vec() // Last 8 bytes
         };
 
         // Create KAS resource locator
-        let kas_locator = ResourceLocator::from_url(&kas_url)
+        let mut kas_locator = ResourceLocator::from_url(&kas_url)
             .map_err(|e| NanoTdfError::InvalidHeader(format!("Invalid KAS URL: {}", e)))?;
+
+        // Add key ID if provided
+        if let Some(kid) = self.kas_kid {
+            kas_locator = kas_locator
+                .with_identifier(kid)
+                .map_err(|e| NanoTdfError::InvalidHeader(format!("Invalid key ID: {}", e)))?;
+        }
 
         // Create policy with binding
         let policy = Policy {
@@ -279,18 +306,22 @@ impl NanoTdfBuilder {
         let symmetric_cipher = SymmetricCipher::Aes256Gcm96;
         let config = SymmetricAndPayloadConfig::new(signature_mode, symmetric_cipher);
 
-        let header = Header {
-            kas: kas_locator,
-            ecc_mode: self.ecc_mode,
+        // Create ECC and binding mode
+        let ecc_and_binding_mode = EccAndBindingMode::new(false, self.ecc_mode);
+
+        // Create header using the constructor (not struct literal)
+        let header = Header::new(
+            kas_locator,
+            ecc_and_binding_mode,
             config,
             policy,
-            ephemeral_public_key,
-            policy_binding: Zeroizing::new(vec![]), // Binding is in Policy now
-        };
+            ephemeral_public_key.to_vec(),
+        )?;
 
         // Create payload
+        // Note: length includes IV (3 bytes) + ciphertext + tag
         let payload = NanoTdfPayload {
-            length: ciphertext_and_tag.len() as u32,
+            length: (3 + ciphertext_and_tag.len()) as u32,
             iv,
             ciphertext_and_tag,
         };
@@ -315,10 +346,7 @@ impl NanoTdf {
     pub fn to_bytes(&self) -> Result<Vec<u8>, NanoTdfError> {
         let mut buffer = Vec::new();
 
-        // Write magic + version
-        self.magic.write_to(&mut buffer)?;
-
-        // Write header
+        // Write header (includes magic + version)
         self.header.write_to(&mut buffer)?;
 
         // Write payload
@@ -336,19 +364,20 @@ impl NanoTdf {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, NanoTdfError> {
         let mut cursor = Cursor::new(bytes);
 
-        // Read magic + version
-        let magic = MagicNumberAndVersion::read_from(&mut cursor)?;
-
-        // Read header
+        // Read header (includes magic + version)
         let header = Header::read_from(&mut cursor)?;
 
         // Read payload
         let payload = NanoTdfPayload::read_from(&mut cursor)?;
 
         // Read optional signature
-        let signature = if header.config.signature_mode.has_signature {
+        let signature = if header
+            .symmetric_and_payload_config
+            .signature_mode
+            .has_signature
+        {
             let sig_ecc_mode = header
-                .config
+                .symmetric_and_payload_config
                 .signature_mode
                 .signature_ecc_mode
                 .ok_or_else(|| {
@@ -360,7 +389,7 @@ impl NanoTdf {
         };
 
         Ok(NanoTdf {
-            magic,
+            magic: header.magic_number_and_version,
             header,
             payload,
             signature,
@@ -379,7 +408,7 @@ impl NanoTdf {
     /// 6. Verify optional ECDSA signature
     pub fn decrypt(&self, kas_private_key: &[u8]) -> Result<Vec<u8>, NanoTdfError> {
         // Convert EccMode to EcCurve
-        let curve = match self.header.ecc_mode {
+        let curve = match self.header.ecc_and_binding_mode.ecc_mode {
             EccMode::Secp256r1 => EcCurve::P256,
             EccMode::Secp384r1 => EcCurve::P384,
             EccMode::Secp521r1 => EcCurve::P521,
@@ -390,40 +419,59 @@ impl NanoTdf {
         let kem = EcdhKem::new(curve);
 
         // Perform ECDH + HKDF to derive decryption key using ephemeral public key
-        let aes_key = kem.decapsulate(kas_private_key, &self.header.ephemeral_public_key)?;
+        let aes_key =
+            kem.derive_key_with_private(kas_private_key, &self.header.ephemeral_public_key)?;
 
-        // Verify policy binding (from Policy struct)
-        let binding_valid = {
-            // GMAC binding verification
-            let mut binding_data = Vec::new();
-            binding_data.extend_from_slice(&self.header.ephemeral_public_key);
-            binding_data.extend_from_slice(self.payload.iv.as_bytes());
-            binding_data.extend_from_slice(&self.payload.ciphertext_and_tag);
+        // Verify policy binding (L1L v12: SHA-256 last 8 bytes)
+        {
+            use sha2::{Digest, Sha256};
 
-            // Policy binding should be 12 bytes for 96-bit GMAC
-            if self.header.policy.binding.len() != 12 {
+            // Get policy bytes for binding verification
+            let policy_bytes = match &self.header.policy.body {
+                PolicyBody::Remote(locator) => {
+                    let mut buf = Vec::new();
+                    locator.write_to(&mut buf).map_err(|e| {
+                        NanoTdfError::InvalidHeader(format!("Failed to serialize policy: {}", e))
+                    })?;
+                    buf
+                }
+                PolicyBody::EmbeddedPlaintext(content) => content.clone(),
+                PolicyBody::EmbeddedEncrypted(content) => content.clone(),
+                _ => {
+                    return Err(NanoTdfError::Unsupported(
+                        "Encrypted policy with key access not supported".to_string(),
+                    ))
+                }
+            };
+
+            // L1L v12 binding: SHA-256 of policy body, last 8 bytes
+            let hash = Sha256::digest(&policy_bytes);
+            let expected_binding = &hash[24..]; // Last 8 bytes
+
+            // Policy binding should be 8 bytes for L1L v12
+            if self.header.policy.binding.len() != 8 {
                 return Err(NanoTdfError::PolicyBindingFailed);
             }
 
-            let expected_gmac: [u8; 12] = self.header.policy.binding[..12]
-                .try_into()
-                .map_err(|_| NanoTdfError::PolicyBindingFailed)?;
-
-            verify_gmac(
-                &aes_key,
-                &NanoTdfIv::POLICY_IV,
-                &binding_data,
-                &expected_gmac,
-            )?
-        };
-
-        if !binding_valid {
-            return Err(NanoTdfError::PolicyBindingFailed);
+            if self.header.policy.binding != expected_binding {
+                return Err(NanoTdfError::PolicyBindingFailed);
+            }
         }
 
         // Determine tag size from config
-        let tag_size = match self.header.config.symmetric_cipher {
-            SymmetricCipher::Aes256Gcm64 => TagSize::Bits64,
+        let tag_size = match self.header.symmetric_and_payload_config.symmetric_cipher {
+            SymmetricCipher::Aes256Gcm64 => {
+                #[cfg(feature = "nanotdf-mbedtls")]
+                {
+                    TagSize::Bits64
+                }
+                #[cfg(not(feature = "nanotdf-mbedtls"))]
+                {
+                    return Err(NanoTdfError::Unsupported(
+                        "64-bit GCM tags require nanotdf-mbedtls feature".to_string(),
+                    ));
+                }
+            }
             SymmetricCipher::Aes256Gcm96 => TagSize::Bits96,
             SymmetricCipher::Aes256Gcm104 => TagSize::Bits104,
             SymmetricCipher::Aes256Gcm112 => TagSize::Bits112,
@@ -466,16 +514,28 @@ impl BinaryWrite for NanoTdfPayload {
 impl BinaryRead for NanoTdfPayload {
     fn read_from<R: Read>(reader: &mut R) -> io::Result<Self> {
         // Read length (3 bytes, big-endian)
+        // Note: This length includes IV + ciphertext + tag
         let length = read_u24_be(reader)?;
 
-        // Read IV (3 bytes)
-        let mut iv_bytes = [0u8; 3];
-        reader.read_exact(&mut iv_bytes)?;
-        let iv = NanoTdfIv::from_bytes(iv_bytes);
+        if length < 3 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "Payload length too small: {} (must be at least 3 for IV)",
+                    length
+                ),
+            ));
+        }
 
-        // Read ciphertext + tag (length bytes)
-        let mut ciphertext_and_tag = vec![0u8; length as usize];
-        reader.read_exact(&mut ciphertext_and_tag)?;
+        // Read all payload data (IV + ciphertext + tag)
+        let mut payload_data = vec![0u8; length as usize];
+        reader.read_exact(&mut payload_data)?;
+
+        // Extract IV from first 3 bytes
+        let iv = NanoTdfIv::from_bytes([payload_data[0], payload_data[1], payload_data[2]]);
+
+        // Remaining bytes are ciphertext + tag
+        let ciphertext_and_tag = payload_data[3..].to_vec();
 
         Ok(NanoTdfPayload {
             length,

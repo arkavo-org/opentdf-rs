@@ -137,10 +137,11 @@ impl NanoTdfIv {
         &self.0
     }
 
-    /// Convert to 12-byte nonce for AES-GCM (pad with zeros)
+    /// Convert to 12-byte nonce for AES-GCM (pad with 9 zeros prefix)
+    /// Per NanoTDF spec and otdfctl implementation: [9 zero bytes][3-byte IV]
     pub fn to_gcm_nonce(&self) -> [u8; 12] {
         let mut nonce = [0u8; 12];
-        nonce[0..3].copy_from_slice(&self.0);
+        nonce[9..12].copy_from_slice(&self.0); // Place IV at end, zeros at start
         nonce
     }
 
