@@ -22,7 +22,7 @@ uuid = { version = "1.11", features = ["v4", "serde"] }
 aes-gcm = "0.10"
 
 # KAS client dependencies (simplified, crypto moved to opentdf-crypto)
-reqwest = { version = "0.12", features = ["json"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["json"], optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
 jsonwebtoken = { version = "9", optional = true }
 
@@ -38,12 +38,14 @@ rand = "0.8"
 members = ["crates/protocol", "crates/crypto", "crates/wasm"]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.6.1"
 
 [features]
 default = ["kas"]
 mcp = []
-kas = ["reqwest", "tokio", "jsonwebtoken", "opentdf-crypto/kas"]
+kas = ["dep:reqwest", "dep:tokio", "dep:jsonwebtoken", "opentdf-crypto/kas", "rustls-tls"]
+rustls-tls = ["reqwest?/rustls-tls"]
+native-tls = ["reqwest?/native-tls"]
 
 [profile.release]
 opt-level = "z"
