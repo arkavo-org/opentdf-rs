@@ -349,10 +349,116 @@ Access-Control-Allow-Headers: Authorization, Content-Type, Accept
 
 ## Security Considerations
 
-- All cryptographic operations use the same secure primitives as the native Rust library
-- Random number generation uses the browser's `crypto.getRandomValues()`
-- Memory is automatically managed by WebAssembly
-- Sensitive data should be cleared from JavaScript variables after use
+### WebCrypto Security Architecture
+
+The WASM module delegates sensitive RSA operations to the browser's native WebCrypto API (SubtleCrypto), providing several security advantages:
+
+#### Constant-Time Operations
+- RSA-OAEP encryption/decryption is implemented by the browser's native code
+- Browser implementations are designed to resist timing side-channel attacks
+- No exposure to RUSTSEC-2023-0071 (timing vulnerability in RustCrypto RSA)
+
+#### Hardware Acceleration
+- Modern browsers utilize hardware acceleration (AES-NI, SHA extensions) where available
+- Provides both performance benefits and additional protection against software timing attacks
+
+#### Key Isolation
+- WebCrypto `CryptoKey` objects are opaque - private key material cannot be extracted by JavaScript
+- Ephemeral keys are generated fresh for each decrypt operation
+- Key material is managed by the browser's secure key storage
+
+### Browser Security Context vs Native Rust
+
+| Aspect | Browser (WASM) | Native (Rust) |
+|--------|---------------|---------------|
+| RSA Backend | WebCrypto (SubtleCrypto) | aws-lc-rs |
+| Timing Attack Resistance | Browser-native constant-time | aws-lc-rs constant-time |
+| FIPS Validation | Browser-dependent | aws-lc-rs FIPS 140-3 |
+| Memory Management | Browser GC | Explicit `zeroize` crate |
+| Random Source | `crypto.getRandomValues()` | OS CSPRNG |
+| Key Storage | CryptoKey objects | Memory (zeroized on drop) |
+
+#### Memory Management Considerations
+
+In WASM environments:
+- JavaScript's garbage collector manages memory
+- Sensitive data in JS strings/arrays may persist until GC runs
+- WASM linear memory is not automatically cleared
+- Best practice: minimize sensitive data exposure in JavaScript layer
+
+In Native environments:
+- All key types implement `Zeroize` and `ZeroizeOnDrop`
+- Memory is explicitly cleared when keys go out of scope
+- Compiler optimizations are prevented from eliding zeroization
+
+### Security Properties
+
+#### What This Implementation Provides
+
+1. **Transport Security**
+   - All KAS communication over HTTPS (enforced by browser)
+   - CORS policies prevent unauthorized cross-origin access
+   - OAuth bearer tokens for authentication
+
+2. **Cryptographic Security**
+   - AES-256-GCM for payload encryption (128-bit authentication tag)
+   - RSA-2048-OAEP for key wrapping (SHA-1 for Go SDK compatibility)
+   - HMAC-SHA256 for policy binding integrity
+   - Ephemeral key pairs for each KAS interaction
+
+3. **Key Management Security**
+   - DEK (Data Encryption Key) never exposed to JavaScript
+   - Ephemeral RSA keys generated fresh for each decrypt operation
+   - WebCrypto keys are non-extractable where possible
+
+4. **Integrity Protection**
+   - Per-segment GMAC authentication tags
+   - Root signature over all segment tags
+   - Policy binding verification
+
+#### What This Implementation Does NOT Provide
+
+- Protection against malicious browser extensions
+- Protection against compromised browser environments
+- Hardware-backed key storage (HSM/TPM)
+- Post-quantum cryptographic algorithms (future enhancement)
+
+### Recommended Usage Patterns
+
+```javascript
+// DO: Let WASM handle sensitive operations
+const result = await tdf_decrypt_with_kas(tdfData, oauthToken);
+
+// DO: Clear sensitive data after use
+let plaintext = atob(result.data);
+processData(plaintext);
+plaintext = null; // Allow GC to reclaim
+
+// DON'T: Extract and store decryption keys in JavaScript
+// DON'T: Log TDF contents or decrypted data
+// DON'T: Store OAuth tokens in localStorage (use sessionStorage or memory)
+```
+
+### Compliance Considerations
+
+#### Algorithm Support
+
+| Standard | Support Level |
+|----------|---------------|
+| NIST SP 800-38D (AES-GCM) | Full |
+| NIST SP 800-56B (RSA Key Transport) | Full (OAEP) |
+| FIPS 186-5 (ECDSA) | Full (P-256) |
+| OpenTDF Specification | Full |
+
+#### WebCrypto Browser Compatibility
+
+WebCrypto (SubtleCrypto) support required for all operations:
+- Chrome 37+ (August 2014)
+- Firefox 34+ (December 2014)
+- Safari 11+ (September 2017)
+- Edge 12+ (July 2015)
+
+All supported browsers provide equivalent cryptographic security properties.
 
 ## License
 

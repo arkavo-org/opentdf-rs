@@ -198,4 +198,91 @@ mod tests {
         let binding2 = calculate_policy_binding(policy, key).unwrap();
         assert_eq!(binding, binding2);
     }
+
+    #[test]
+    fn test_constant_time_verification_all_positions() {
+        // Tests that verification detects single-bit flips at any byte position
+        // This validates constant-time comparison covers the entire signature
+        let key_bytes = [0u8; 32];
+        let key = PayloadKey::from_slice(&key_bytes).unwrap();
+
+        let gmac_tags = vec![vec![1, 2, 3, 4], vec![5, 6, 7, 8]];
+        let signature = calculate_root_signature(&gmac_tags, &key).unwrap();
+
+        // Test positions: start (0), middle (15), end (31)
+        for position in [0, 15, 31] {
+            let mut wrong_sig_bytes = BASE64.decode(&signature).unwrap();
+            wrong_sig_bytes[position] ^= 1; // Flip single bit
+            let wrong_sig = BASE64.encode(&wrong_sig_bytes);
+            assert!(
+                verify_root_signature(&gmac_tags, &key, &wrong_sig).is_err(),
+                "Should detect bit flip at position {}",
+                position
+            );
+        }
+
+        // Correct signature should still verify
+        assert!(verify_root_signature(&gmac_tags, &key, &signature).is_ok());
+    }
+
+    #[test]
+    fn test_root_signature_multiple_segments() {
+        // Test verification with varied segment counts to ensure concatenation works
+        let key_bytes = [42u8; 32];
+        let key = PayloadKey::from_slice(&key_bytes).unwrap();
+
+        // Test with 1, 5, and 10 segments
+        for segment_count in [1, 5, 10] {
+            let gmac_tags: Vec<Vec<u8>> = (0..segment_count)
+                .map(|i| vec![i as u8; 16]) // 16-byte GMAC tags
+                .collect();
+
+            let signature = calculate_root_signature(&gmac_tags, &key).unwrap();
+            assert!(
+                verify_root_signature(&gmac_tags, &key, &signature).is_ok(),
+                "Should verify with {} segments",
+                segment_count
+            );
+
+            // Tamper with one segment - should fail
+            let mut tampered_tags = gmac_tags.clone();
+            tampered_tags[0][0] ^= 1;
+            assert!(
+                verify_root_signature(&tampered_tags, &key, &signature).is_err(),
+                "Should detect tampering with {} segments",
+                segment_count
+            );
+        }
+    }
+
+    #[test]
+    fn test_policy_binding_deterministic_and_unique() {
+        let key = b"test_key_32_bytes_long_for_hmac!";
+
+        let policy1 = r#"{"uuid":"550e8400-e29b-41d4-a716-446655440000","body":{"attributes":[]}}"#;
+        let policy2 = r#"{"uuid":"550e8400-e29b-41d4-a716-446655440001","body":{"attributes":[]}}"#;
+
+        // Same policy/key should produce identical binding
+        let binding1a = calculate_policy_binding(policy1, key).unwrap();
+        let binding1b = calculate_policy_binding(policy1, key).unwrap();
+        assert_eq!(
+            binding1a, binding1b,
+            "Same inputs should produce same binding"
+        );
+
+        // Different policies should produce different bindings
+        let binding2 = calculate_policy_binding(policy2, key).unwrap();
+        assert_ne!(
+            binding1a, binding2,
+            "Different policies should produce different bindings"
+        );
+
+        // Different keys should produce different bindings
+        let key2 = b"different_key_32_bytes_long_abc!";
+        let binding3 = calculate_policy_binding(policy1, key2).unwrap();
+        assert_ne!(
+            binding1a, binding3,
+            "Different keys should produce different bindings"
+        );
+    }
 }

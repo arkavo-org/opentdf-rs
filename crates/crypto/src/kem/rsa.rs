@@ -292,10 +292,11 @@ mod tests {
     fn generate_test_keypair() -> (String, String) {
         // Generate RSA-2048 key pair using aws-lc-rs
         let private_key = PrivateDecryptingKey::generate(KeySize::Rsa2048).unwrap();
+        let public_key = private_key.public_key();
 
         // Export to DER
         let private_der = AsDer::<Pkcs8V1Der>::as_der(&private_key).unwrap();
-        let public_der = AsDer::<PublicKeyX509Der>::as_der(&private_key).unwrap();
+        let public_der = AsDer::<PublicKeyX509Der>::as_der(&public_key).unwrap();
 
         // Convert to PEM
         let private_pem = pem::Pem::new("PRIVATE KEY", private_der.as_ref());
@@ -337,6 +338,70 @@ mod tests {
         assert!(!wrapped.is_empty());
         // Should be base64 encoded
         assert!(BASE64.decode(&wrapped).is_ok());
+    }
+
+    #[test]
+    fn test_rsa_oaep_varied_payload_sizes() {
+        // Test RSA-OAEP with different key sizes (AES-128, AES-192, AES-256)
+        let (public_pem, private_pem) = generate_test_keypair();
+        let kem = RsaOaepKem::with_sha256();
+
+        // 16-byte key (AES-128)
+        let key_16 = [0x42u8; 16];
+        let wrapped = kem.wrap(&key_16, &public_pem).unwrap();
+        let unwrapped = kem.unwrap(&wrapped, &private_pem).unwrap();
+        assert_eq!(key_16.as_slice(), unwrapped.as_slice());
+
+        // 24-byte key (AES-192)
+        let key_24 = [0x43u8; 24];
+        let wrapped = kem.wrap(&key_24, &public_pem).unwrap();
+        let unwrapped = kem.unwrap(&wrapped, &private_pem).unwrap();
+        assert_eq!(key_24.as_slice(), unwrapped.as_slice());
+
+        // 32-byte key (AES-256)
+        let key_32 = [0x44u8; 32];
+        let wrapped = kem.wrap(&key_32, &public_pem).unwrap();
+        let unwrapped = kem.unwrap(&wrapped, &private_pem).unwrap();
+        assert_eq!(key_32.as_slice(), unwrapped.as_slice());
+    }
+
+    #[test]
+    fn test_rsa_invalid_pem_format() {
+        // Test handling of malformed PEM input
+        let kem = RsaOaepKem::default();
+        let key = b"test_payload_key_32_bytes_long!";
+
+        // Completely invalid PEM
+        let result = kem.wrap(key, &"not a valid pem".to_string());
+        assert!(result.is_err());
+
+        // Truncated PEM
+        let result = kem.wrap(key, &"-----BEGIN PUBLIC KEY-----\nAAAA".to_string());
+        assert!(result.is_err());
+
+        // Empty PEM
+        let result = kem.wrap(key, &String::new());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_rsa_unwrap_invalid_ciphertext() {
+        // Test handling of corrupted ciphertext
+        let (public_pem, private_pem) = generate_test_keypair();
+        let kem = RsaOaepKem::default();
+        let key = b"test_payload_key_32_bytes_long!";
+
+        // Wrap a key
+        let wrapped = kem.wrap(key, &public_pem).unwrap();
+
+        // Corrupt the ciphertext
+        let mut corrupted_bytes = BASE64.decode(&wrapped).unwrap();
+        corrupted_bytes[10] ^= 0xFF; // Flip bits in ciphertext
+        let corrupted = BASE64.encode(&corrupted_bytes);
+
+        // Should fail to unwrap
+        let result = kem.unwrap(&corrupted, &private_pem);
+        assert!(result.is_err());
     }
 }
 
