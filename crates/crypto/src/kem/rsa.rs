@@ -3,16 +3,18 @@
 //! This module implements RSA-OAEP key wrapping for OpenTDF.
 //! SHA-1 is used by default for compatibility with the OpenTDF Go SDK,
 //! but SHA-256 is also supported and recommended for new deployments.
+//!
+//! # Backend Selection
+//!
+//! - **aws-lc-rs** (default): Constant-time RSA operations, FIPS validated.
+//!   This is the recommended backend for production use.
+//!
+//! - **rustcrypto-provider** (optional): Legacy RustCrypto RSA implementation.
+//!   Has RUSTSEC-2023-0071 timing vulnerability. Only use if aws-lc-rs
+//!   build requirements cannot be met.
 
 use super::{KemError, KeyEncapsulation};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use rand::rngs::OsRng;
-use rsa::{
-    pkcs8::{DecodePrivateKey, DecodePublicKey},
-    Oaep, RsaPrivateKey, RsaPublicKey,
-};
-use sha1::Sha1;
-use sha2::Sha256;
 
 /// OAEP hash algorithm selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -63,67 +65,184 @@ impl RsaOaepKem {
     }
 }
 
-impl KeyEncapsulation for RsaOaepKem {
-    type PublicKey = String; // PEM-encoded public key
-    type PrivateKey = String; // PEM-encoded private key
-    type WrappedKey = String; // Base64-encoded ciphertext
+// ============================================================================
+// aws-lc-rs backend (default, constant-time)
+// ============================================================================
+#[cfg(feature = "aws-lc-provider")]
+mod aws_lc_impl {
+    use super::*;
+    use aws_lc_rs::rsa::{
+        OaepPrivateDecryptingKey, OaepPublicEncryptingKey, PrivateDecryptingKey,
+        PublicEncryptingKey, OAEP_SHA1_MGF1SHA1, OAEP_SHA256_MGF1SHA256,
+    };
 
-    fn wrap(&self, key: &[u8], public_key_pem: &Self::PublicKey) -> Result<String, KemError> {
-        // Parse PEM-encoded public key
-        let public_key = RsaPublicKey::from_public_key_pem(public_key_pem)
-            .map_err(|e| KemError::InvalidKey(format!("Failed to parse RSA public key: {}", e)))?;
-
-        // Encrypt with OAEP padding using the selected hash
-        let wrapped = match self.hash {
-            OaepHash::Sha1 => {
-                let padding = Oaep::new::<Sha1>();
-                public_key.encrypt(&mut OsRng, padding, key).map_err(|e| {
-                    KemError::WrapError(format!("RSA-OAEP encryption failed: {}", e))
-                })?
-            }
-            OaepHash::Sha256 => {
-                let padding = Oaep::new::<Sha256>();
-                public_key.encrypt(&mut OsRng, padding, key).map_err(|e| {
-                    KemError::WrapError(format!("RSA-OAEP encryption failed: {}", e))
-                })?
-            }
-        };
-
-        // Base64 encode for storage in manifest
-        Ok(BASE64.encode(&wrapped))
+    /// Parse PEM to DER bytes
+    fn pem_to_der(pem_str: &str) -> Result<Vec<u8>, KemError> {
+        let pem = pem::parse(pem_str)
+            .map_err(|e| KemError::InvalidKey(format!("Failed to parse PEM: {}", e)))?;
+        Ok(pem.contents().to_vec())
     }
 
-    fn unwrap(
-        &self,
-        wrapped_b64: &Self::WrappedKey,
-        private_key_pem: &Self::PrivateKey,
-    ) -> Result<Vec<u8>, KemError> {
-        // Decode base64 wrapped key
-        let wrapped = BASE64
-            .decode(wrapped_b64)
-            .map_err(|e| KemError::EncodingError(format!("Base64 decode failed: {}", e)))?;
+    impl KeyEncapsulation for RsaOaepKem {
+        type PublicKey = String; // PEM-encoded public key
+        type PrivateKey = String; // PEM-encoded private key
+        type WrappedKey = String; // Base64-encoded ciphertext
 
-        // Parse PEM-encoded private key
-        let private_key = RsaPrivateKey::from_pkcs8_pem(private_key_pem)
-            .map_err(|e| KemError::InvalidKey(format!("Failed to parse RSA private key: {}", e)))?;
+        fn wrap(&self, key: &[u8], public_key_pem: &Self::PublicKey) -> Result<String, KemError> {
+            // Parse PEM to DER
+            let der = pem_to_der(public_key_pem)?;
 
-        // Decrypt with OAEP padding using the selected hash
-        let key = match self.hash {
-            OaepHash::Sha1 => {
-                let padding = Oaep::new::<Sha1>();
-                private_key.decrypt(padding, &wrapped).map_err(|e| {
-                    KemError::UnwrapError(format!("RSA-OAEP decryption failed: {}", e))
-                })?
-            }
-            OaepHash::Sha256 => {
-                let padding = Oaep::new::<Sha256>();
-                private_key.decrypt(padding, &wrapped).map_err(|e| {
-                    KemError::UnwrapError(format!("RSA-OAEP decryption failed: {}", e))
-                })?
-            }
-        };
+            // Load public key
+            let public_key = PublicEncryptingKey::from_der(&der).map_err(|e| {
+                KemError::InvalidKey(format!("Failed to parse RSA public key: {:?}", e))
+            })?;
 
-        Ok(key)
+            // Create OAEP encrypting key
+            let oaep_key = OaepPublicEncryptingKey::new(public_key)
+                .map_err(|e| KemError::InvalidKey(format!("Failed to create OAEP key: {:?}", e)))?;
+
+            // Allocate ciphertext buffer
+            let mut ciphertext = vec![0u8; oaep_key.ciphertext_size()];
+
+            // Select algorithm based on hash
+            let algorithm = match self.hash {
+                OaepHash::Sha1 => &OAEP_SHA1_MGF1SHA1,
+                OaepHash::Sha256 => &OAEP_SHA256_MGF1SHA256,
+            };
+
+            // Encrypt
+            let ciphertext_len = oaep_key
+                .encrypt(algorithm, key, &mut ciphertext, None)
+                .map_err(|e| KemError::WrapError(format!("RSA-OAEP encryption failed: {:?}", e)))?
+                .len();
+
+            ciphertext.truncate(ciphertext_len);
+
+            // Base64 encode for storage in manifest
+            Ok(BASE64.encode(&ciphertext))
+        }
+
+        fn unwrap(
+            &self,
+            wrapped_b64: &Self::WrappedKey,
+            private_key_pem: &Self::PrivateKey,
+        ) -> Result<Vec<u8>, KemError> {
+            // Decode base64 wrapped key
+            let ciphertext = BASE64
+                .decode(wrapped_b64)
+                .map_err(|e| KemError::EncodingError(format!("Base64 decode failed: {}", e)))?;
+
+            // Parse PEM to DER
+            let der = pem_to_der(private_key_pem)?;
+
+            // Load private key
+            let private_key = PrivateDecryptingKey::from_pkcs8(&der).map_err(|e| {
+                KemError::InvalidKey(format!("Failed to parse RSA private key: {:?}", e))
+            })?;
+
+            // Create OAEP decrypting key
+            let oaep_key = OaepPrivateDecryptingKey::new(private_key)
+                .map_err(|e| KemError::InvalidKey(format!("Failed to create OAEP key: {:?}", e)))?;
+
+            // Allocate plaintext buffer
+            let mut plaintext = vec![0u8; oaep_key.min_output_size()];
+
+            // Select algorithm based on hash
+            let algorithm = match self.hash {
+                OaepHash::Sha1 => &OAEP_SHA1_MGF1SHA1,
+                OaepHash::Sha256 => &OAEP_SHA256_MGF1SHA256,
+            };
+
+            // Decrypt
+            let plaintext_slice = oaep_key
+                .decrypt(algorithm, &ciphertext, &mut plaintext, None)
+                .map_err(|e| {
+                    KemError::UnwrapError(format!("RSA-OAEP decryption failed: {:?}", e))
+                })?;
+
+            Ok(plaintext_slice.to_vec())
+        }
+    }
+}
+
+// ============================================================================
+// RustCrypto rsa backend (legacy, has timing vulnerability)
+// ============================================================================
+#[cfg(all(feature = "rustcrypto-provider", not(feature = "aws-lc-provider")))]
+mod rustcrypto_impl {
+    use super::*;
+    use rand::rngs::OsRng;
+    use rsa::{
+        pkcs8::{DecodePrivateKey, DecodePublicKey},
+        Oaep, RsaPrivateKey, RsaPublicKey,
+    };
+    use sha1::Sha1;
+    use sha2::Sha256;
+
+    impl KeyEncapsulation for RsaOaepKem {
+        type PublicKey = String; // PEM-encoded public key
+        type PrivateKey = String; // PEM-encoded private key
+        type WrappedKey = String; // Base64-encoded ciphertext
+
+        fn wrap(&self, key: &[u8], public_key_pem: &Self::PublicKey) -> Result<String, KemError> {
+            // Parse PEM-encoded public key
+            let public_key = RsaPublicKey::from_public_key_pem(public_key_pem).map_err(|e| {
+                KemError::InvalidKey(format!("Failed to parse RSA public key: {}", e))
+            })?;
+
+            // Encrypt with OAEP padding using the selected hash
+            let wrapped = match self.hash {
+                OaepHash::Sha1 => {
+                    let padding = Oaep::new::<Sha1>();
+                    public_key.encrypt(&mut OsRng, padding, key).map_err(|e| {
+                        KemError::WrapError(format!("RSA-OAEP encryption failed: {}", e))
+                    })?
+                }
+                OaepHash::Sha256 => {
+                    let padding = Oaep::new::<Sha256>();
+                    public_key.encrypt(&mut OsRng, padding, key).map_err(|e| {
+                        KemError::WrapError(format!("RSA-OAEP encryption failed: {}", e))
+                    })?
+                }
+            };
+
+            // Base64 encode for storage in manifest
+            Ok(BASE64.encode(&wrapped))
+        }
+
+        fn unwrap(
+            &self,
+            wrapped_b64: &Self::WrappedKey,
+            private_key_pem: &Self::PrivateKey,
+        ) -> Result<Vec<u8>, KemError> {
+            // Decode base64 wrapped key
+            let wrapped = BASE64
+                .decode(wrapped_b64)
+                .map_err(|e| KemError::EncodingError(format!("Base64 decode failed: {}", e)))?;
+
+            // Parse PEM-encoded private key
+            let private_key = RsaPrivateKey::from_pkcs8_pem(private_key_pem).map_err(|e| {
+                KemError::InvalidKey(format!("Failed to parse RSA private key: {}", e))
+            })?;
+
+            // Decrypt with OAEP padding using the selected hash
+            let key = match self.hash {
+                OaepHash::Sha1 => {
+                    let padding = Oaep::new::<Sha1>();
+                    private_key.decrypt(padding, &wrapped).map_err(|e| {
+                        KemError::UnwrapError(format!("RSA-OAEP decryption failed: {}", e))
+                    })?
+                }
+                OaepHash::Sha256 => {
+                    let padding = Oaep::new::<Sha256>();
+                    private_key.decrypt(padding, &wrapped).map_err(|e| {
+                        KemError::UnwrapError(format!("RSA-OAEP decryption failed: {}", e))
+                    })?
+                }
+            };
+
+            Ok(key)
+        }
     }
 }
 
@@ -154,6 +273,7 @@ impl KeyEncapsulation for RsaOaepKem {
 /// # Ok(())
 /// # }
 /// ```
+#[cfg(any(feature = "aws-lc-provider", feature = "rustcrypto-provider"))]
 pub fn wrap_key_with_rsa_oaep(
     payload_key: &[u8],
     kas_public_key_pem: &str,
@@ -163,10 +283,71 @@ pub fn wrap_key_with_rsa_oaep(
 }
 
 #[cfg(test)]
+#[cfg(feature = "aws-lc-provider")]
 mod tests {
     use super::*;
+    use aws_lc_rs::encoding::{AsDer, Pkcs8V1Der, PublicKeyX509Der};
+    use aws_lc_rs::rsa::{KeySize, PrivateDecryptingKey};
+
+    fn generate_test_keypair() -> (String, String) {
+        // Generate RSA-2048 key pair using aws-lc-rs
+        let private_key = PrivateDecryptingKey::generate(KeySize::Rsa2048).unwrap();
+
+        // Export to DER
+        let private_der = AsDer::<Pkcs8V1Der>::as_der(&private_key).unwrap();
+        let public_der = AsDer::<PublicKeyX509Der>::as_der(&private_key).unwrap();
+
+        // Convert to PEM
+        let private_pem = pem::Pem::new("PRIVATE KEY", private_der.as_ref());
+        let public_pem = pem::Pem::new("PUBLIC KEY", public_der.as_ref());
+
+        (pem::encode(&public_pem), pem::encode(&private_pem))
+    }
+
+    #[test]
+    fn test_rsa_oaep_roundtrip_sha1() {
+        let (public_pem, private_pem) = generate_test_keypair();
+        let kem = RsaOaepKem::with_sha1();
+
+        let key = b"test_payload_key_32_bytes_long!";
+        let wrapped = kem.wrap(key, &public_pem).unwrap();
+        let unwrapped = kem.unwrap(&wrapped, &private_pem).unwrap();
+
+        assert_eq!(key, unwrapped.as_slice());
+    }
+
+    #[test]
+    fn test_rsa_oaep_roundtrip_sha256() {
+        let (public_pem, private_pem) = generate_test_keypair();
+        let kem = RsaOaepKem::with_sha256();
+
+        let key = b"test_payload_key_32_bytes_long!";
+        let wrapped = kem.wrap(key, &public_pem).unwrap();
+        let unwrapped = kem.unwrap(&wrapped, &private_pem).unwrap();
+
+        assert_eq!(key, unwrapped.as_slice());
+    }
+
+    #[test]
+    fn test_convenience_function() {
+        let (public_pem, _private_pem) = generate_test_keypair();
+        let key = b"test_payload_key_32_bytes_long!";
+
+        let wrapped = wrap_key_with_rsa_oaep(key, &public_pem).unwrap();
+        assert!(!wrapped.is_empty());
+        // Should be base64 encoded
+        assert!(BASE64.decode(&wrapped).is_ok());
+    }
+}
+
+#[cfg(test)]
+#[cfg(all(feature = "rustcrypto-provider", not(feature = "aws-lc-provider")))]
+mod tests_rustcrypto {
+    use super::*;
     use pkcs8::EncodePrivateKey;
+    use rand::rngs::OsRng;
     use rsa::pkcs8::EncodePublicKey;
+    use rsa::{RsaPrivateKey, RsaPublicKey};
 
     fn generate_test_keypair() -> (String, String) {
         let mut rng = OsRng;

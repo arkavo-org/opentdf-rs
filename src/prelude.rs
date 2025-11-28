@@ -29,7 +29,7 @@ pub use crate::policy::{
 };
 pub use crate::tdf::{Tdf, TdfEncryptBuilder, TdfEncryptFileBuilder};
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kas-client")]
 pub use crate::tdf::{TdfDecryptBuilder, TdfDecryptFileBuilder};
 
 // Re-export protocol types
@@ -48,8 +48,8 @@ pub use opentdf_crypto::{
 pub use crate::manifest::{IntegrityInformationExt, KeyAccessExt, TdfManifestExt};
 
 // KAS types (when feature enabled)
-#[cfg(feature = "kas")]
+#[cfg(feature = "kas-client")]
 pub use crate::kas::KasClient;
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kas-client")]
 pub use opentdf_protocol::KasError;

@@ -5,10 +5,10 @@
 
 use thiserror::Error;
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kem-rsa")]
 pub mod rsa;
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kem-ec")]
 pub mod ec;
 
 pub mod pqc;

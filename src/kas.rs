@@ -57,20 +57,21 @@ use crate::manifest::TdfManifest;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use opentdf_protocol::{kas::Policy, KasError, *};
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kas-client")]
 use {
     crate::hkdf::Hkdf,
     crate::p256::{
         pkcs8::{DecodePublicKey, EncodePublicKey},
         PublicKey, SecretKey,
     },
-    crate::pkcs8::LineEnding,
-    crate::rsa::{Oaep, RsaPrivateKey, RsaPublicKey},
-    crate::sha1::Sha1,
     crate::sha2::{Digest, Sha256},
     aes_gcm::{
         aead::{Aead, KeyInit},
         Aes256Gcm, Nonce,
+    },
+    aws_lc_rs::{
+        encoding::{AsDer, Pkcs8V1Der, PublicKeyX509Der},
+        rsa::{KeySize, OaepPrivateDecryptingKey, PrivateDecryptingKey, OAEP_SHA1_MGF1SHA1},
     },
     reqwest::Client,
 };
@@ -79,7 +80,7 @@ use {
 // The types below (KasError, UnsignedRewrapRequest, etc.) are re-exported from there
 
 /// Key type for TDF encryption
-#[cfg(feature = "kas")]
+#[cfg(feature = "kas-client")]
 #[derive(Debug, Clone, Copy)]
 pub enum KeyType {
     /// Elliptic Curve (P-256) - used for NanoTDF
@@ -89,25 +90,27 @@ pub enum KeyType {
 }
 
 /// Ephemeral key pair for KAS communication
-#[derive(Debug)]
 pub enum EphemeralKeyPair {
-    #[cfg(feature = "kas")]
+    #[cfg(feature = "kas-client")]
     EC {
         private_key: SecretKey,
         public_key_pem: String,
     },
-    #[cfg(feature = "kas")]
+    #[cfg(feature = "kas-client")]
     RSA {
-        private_key: Box<RsaPrivateKey>,
+        /// aws-lc-rs RSA private key for decryption
+        private_key: PrivateDecryptingKey,
         public_key_pem: String,
     },
 }
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kas-client")]
 impl EphemeralKeyPair {
     /// Generate a new ephemeral key pair of the specified type
+    ///
+    /// Uses aws-lc-rs for RSA key generation (constant-time, FIPS validated).
     pub fn new(key_type: KeyType) -> Result<Self, KasError> {
-        use crate::rand::rngs::OsRng;
+        use rand::rngs::OsRng;
 
         match key_type {
             KeyType::EC => {
@@ -125,22 +128,31 @@ impl EphemeralKeyPair {
                 })
             }
             KeyType::RSA => {
-                // Generate RSA-2048 key pair for Standard TDF
-                let bits = 2048;
+                // Generate RSA-2048 key pair for Standard TDF using aws-lc-rs
                 let private_key =
-                    RsaPrivateKey::new(&mut OsRng, bits).map_err(|e| KasError::CryptoError {
-                        operation: "RSA_key_generation".to_string(),
-                        reason: format!("RSA key generation failed: {}", e),
+                    PrivateDecryptingKey::generate(KeySize::Rsa2048).map_err(|e| {
+                        KasError::CryptoError {
+                            operation: "RSA_key_generation".to_string(),
+                            reason: format!("RSA key generation failed: {:?}", e),
+                        }
                     })?;
 
-                let public_key = RsaPublicKey::from(&private_key);
+                // Get public key from private key and export to DER
+                let public_key = private_key.public_key();
+                let public_key_der =
+                    AsDer::<PublicKeyX509Der>::as_der(&public_key).map_err(|e| {
+                        KasError::Pkcs8Error(format!("Failed to export public key: {:?}", e))
+                    })?;
 
-                let public_key_pem = public_key
-                    .to_public_key_pem(LineEnding::LF)
-                    .map_err(|e| KasError::Pkcs8Error(e.to_string()))?;
+                // Convert DER to PEM (ensure trailing newline for consistency)
+                let mut public_key_pem =
+                    pem::encode(&pem::Pem::new("PUBLIC KEY", public_key_der.as_ref()));
+                if !public_key_pem.ends_with('\n') {
+                    public_key_pem.push('\n');
+                }
 
                 Ok(EphemeralKeyPair::RSA {
-                    private_key: Box::new(private_key),
+                    private_key,
                     public_key_pem,
                 })
             }
@@ -160,15 +172,17 @@ impl EphemeralKeyPair {
 ///
 /// This client handles JWT signing internally using an ephemeral RSA key pair.
 /// The JWT contains the rewrap request and is signed with RS256.
-#[cfg(feature = "kas")]
+/// Uses aws-lc-rs for constant-time RSA operations (FIPS validated).
+#[cfg(feature = "kas-client")]
 pub struct KasClient {
     http_client: Client,
     base_url: String,
     oauth_token: String,
-    signing_key: RsaPrivateKey,
+    /// aws-lc-rs RSA private key for JWT signing
+    signing_key: PrivateDecryptingKey,
 }
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kas-client")]
 impl KasClient {
     /// Create a new KAS client
     ///
@@ -181,12 +195,11 @@ impl KasClient {
     ///
     /// This client generates an ephemeral RSA-2048 key pair for signing JWT rewrap requests.
     /// The JWT signature is verified by KAS when DPoP is enabled, otherwise it's parsed without verification.
+    /// Uses aws-lc-rs for constant-time RSA operations (FIPS validated).
     pub fn new(
         base_url: impl Into<String>,
         oauth_token: impl Into<String>,
     ) -> Result<Self, KasError> {
-        use crate::rand::rngs::OsRng;
-
         let http_client = Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
@@ -195,12 +208,13 @@ impl KasClient {
                 message: format!("Failed to build HTTP client: {}", e),
             })?;
 
-        // Generate RSA-2048 key pair for JWT signing (DPoP key)
-        let signing_key =
-            RsaPrivateKey::new(&mut OsRng, 2048).map_err(|e| KasError::CryptoError {
+        // Generate RSA-2048 key pair for JWT signing (DPoP key) using aws-lc-rs
+        let signing_key = PrivateDecryptingKey::generate(KeySize::Rsa2048).map_err(|e| {
+            KasError::CryptoError {
                 operation: "generate_signing_key".to_string(),
-                reason: format!("Failed to generate RSA signing key: {}", e),
-            })?;
+                reason: format!("Failed to generate RSA signing key: {:?}", e),
+            }
+        })?;
 
         Ok(Self {
             http_client,
@@ -384,6 +398,7 @@ impl KasClient {
     /// ```
     ///
     /// The JWT is signed with RS256 using the client's internal signing key.
+    /// Uses aws-lc-rs for constant-time RSA operations (FIPS validated).
     fn sign_rewrap_request(&self, request: &UnsignedRewrapRequest) -> Result<String, KasError> {
         use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
         use serde::{Deserialize, Serialize};
@@ -407,14 +422,16 @@ impl KasClient {
             exp: now + 60, // 60 second expiration
         };
 
-        // Convert RSA private key to PKCS#1 DER format for jsonwebtoken
-        use crate::rsa::pkcs1::EncodeRsaPrivateKey;
-        let key_der = self
-            .signing_key
-            .to_pkcs1_der()
-            .map_err(|e| KasError::Pkcs8Error(format!("Failed to encode signing key: {}", e)))?;
+        // Convert aws-lc-rs RSA private key to PKCS#8 PEM format for jsonwebtoken
+        // jsonwebtoken's from_rsa_der expects PKCS#1, but aws-lc-rs exports PKCS#8
+        // Use from_rsa_pem instead which accepts PKCS#8 PEM
+        let key_der = AsDer::<Pkcs8V1Der>::as_der(&self.signing_key)
+            .map_err(|e| KasError::Pkcs8Error(format!("Failed to encode signing key: {:?}", e)))?;
 
-        let encoding_key = EncodingKey::from_rsa_der(key_der.as_bytes());
+        let key_pem = pem::encode(&pem::Pem::new("PRIVATE KEY", key_der.as_ref()));
+
+        let encoding_key = EncodingKey::from_rsa_pem(key_pem.as_bytes())
+            .map_err(|e| KasError::Pkcs8Error(format!("Failed to parse RSA PEM: {}", e)))?;
 
         // Sign the JWT with RS256
         let token =
@@ -670,13 +687,15 @@ impl KasClient {
     ///
     /// ## For RSA rewrap (Standard TDF - TDF3, ZTDF):
     /// 1. KAS returns wrapped_key directly encrypted with client's RSA public key
-    /// 2. Decrypt using client's RSA private key with OAEP padding (SHA-256)
+    /// 2. Decrypt using client's RSA private key with OAEP padding (SHA-1)
     /// 3. Return the unwrapped payload key
     ///
     /// ## For EC rewrap (NanoTDF):
     /// 1. ECDH: client_private × session_public → shared_secret
     /// 2. HKDF: salt=SHA256("TDF"), shared_secret → symmetric_key
     /// 3. AES-GCM decrypt: wrapped_key → payload_key
+    ///
+    /// Uses aws-lc-rs for constant-time RSA operations (FIPS validated).
     fn unwrap_key(
         &self,
         wrapped_key: &[u8],
@@ -685,7 +704,7 @@ impl KasClient {
     ) -> Result<Vec<u8>, KasError> {
         match ephemeral_key_pair {
             EphemeralKeyPair::RSA { private_key, .. } => {
-                // RSA-OAEP decryption for Standard TDF
+                // RSA-OAEP decryption for Standard TDF using aws-lc-rs
                 //
                 // SECURITY NOTE: Using SHA-1 with RSA-OAEP for Go SDK compatibility
                 //
@@ -697,16 +716,29 @@ impl KasClient {
                 // TODO: File issue to migrate entire OpenTDF ecosystem to SHA-256
                 //
                 // See: https://shattered.io/ for SHA-1 collision attack details
-                let padding = Oaep::new::<Sha1>();
+                //
+                // aws-lc-rs provides constant-time RSA operations, eliminating timing attacks
 
-                let payload_key = private_key.decrypt(padding, wrapped_key).map_err(|e| {
-                    KasError::UnwrapError {
-                        algorithm: "RSA-OAEP".to_string(),
-                        reason: format!("RSA-OAEP decryption failed: {}", e),
+                // Create OAEP decrypting key
+                let oaep_key = OaepPrivateDecryptingKey::new(private_key.clone()).map_err(|e| {
+                    KasError::CryptoError {
+                        operation: "create_oaep_key".to_string(),
+                        reason: format!("Failed to create OAEP key: {:?}", e),
                     }
                 })?;
 
-                Ok(payload_key)
+                // Allocate plaintext buffer
+                let mut plaintext = vec![0u8; oaep_key.min_output_size()];
+
+                // Decrypt using SHA-1 OAEP
+                let plaintext_slice = oaep_key
+                    .decrypt(&OAEP_SHA1_MGF1SHA1, wrapped_key, &mut plaintext, None)
+                    .map_err(|e| KasError::UnwrapError {
+                        algorithm: "RSA-OAEP".to_string(),
+                        reason: format!("RSA-OAEP decryption failed: {:?}", e),
+                    })?;
+
+                Ok(plaintext_slice.to_vec())
             }
             EphemeralKeyPair::EC { private_key, .. } => {
                 // EC/ECDH unwrap for NanoTDF
@@ -777,7 +809,7 @@ mod tests {
 
     #[test]
     fn test_ephemeral_key_pair_generation() {
-        #[cfg(feature = "kas")]
+        #[cfg(feature = "kas-client")]
         {
             // Test RSA key generation
             let key_pair_rsa =

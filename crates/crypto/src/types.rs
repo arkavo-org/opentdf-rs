@@ -5,7 +5,7 @@
 
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kem-ec")]
 use zeroize::Zeroizing;
 
 /// AES-256 key (32 bytes) that zeroizes on drop
@@ -125,11 +125,11 @@ impl Nonce96 {
 }
 
 /// EC private key that zeroizes on drop (for NanoTDF)
-#[cfg(feature = "kas")]
+#[cfg(feature = "kem-ec")]
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct EcPrivateKey(pub(crate) Zeroizing<Vec<u8>>);
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kem-ec")]
 impl EcPrivateKey {
     /// Create from P-256 secret key
     pub fn from_p256(key: &p256::SecretKey) -> Self {

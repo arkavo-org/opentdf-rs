@@ -8,10 +8,10 @@ use crate::policy::Policy;
 use opentdf_crypto::TdfEncryption;
 use std::path::Path;
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kas-client")]
 use crate::archive::TdfArchive;
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kas-client")]
 use crate::kas::KasClient;
 
 /// High-level TDF operations
@@ -96,7 +96,7 @@ impl Tdf {
     /// # Ok(())
     /// # }
     /// ```
-    #[cfg(feature = "kas")]
+    #[cfg(feature = "kas-client")]
     pub fn decrypt(data: impl Into<Vec<u8>>) -> TdfDecryptBuilder {
         TdfDecryptBuilder::new(data.into())
     }
@@ -118,7 +118,7 @@ impl Tdf {
     /// # Ok(())
     /// # }
     /// ```
-    #[cfg(feature = "kas")]
+    #[cfg(feature = "kas-client")]
     pub fn decrypt_file(path: impl AsRef<Path>) -> TdfDecryptFileBuilder {
         TdfDecryptFileBuilder::new(path.as_ref().to_path_buf())
     }
@@ -372,13 +372,13 @@ impl TdfEncryptFileBuilder {
 /// Builder for decrypting TDF data
 ///
 /// Provides a fluent API for TDF decryption with optional KAS integration.
-#[cfg(feature = "kas")]
+#[cfg(feature = "kas-client")]
 pub struct TdfDecryptBuilder {
     data: Vec<u8>,
     kas_client: Option<KasClient>,
 }
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kas-client")]
 impl TdfDecryptBuilder {
     pub(crate) fn new(data: Vec<u8>) -> Self {
         Self {
@@ -419,13 +419,13 @@ impl TdfDecryptBuilder {
 /// Builder for decrypting TDF files
 ///
 /// Provides a fluent API for file-based TDF decryption with optional KAS integration.
-#[cfg(feature = "kas")]
+#[cfg(feature = "kas-client")]
 pub struct TdfDecryptFileBuilder {
     input_path: std::path::PathBuf,
     kas_client: Option<KasClient>,
 }
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kas-client")]
 impl TdfDecryptFileBuilder {
     pub(crate) fn new(input_path: std::path::PathBuf) -> Self {
         Self {

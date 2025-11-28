@@ -9,10 +9,10 @@ use super::{KemError, KeyEncapsulation};
 use crate::types::AesKey;
 use zeroize::Zeroizing;
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kem-ec")]
 use hkdf::Hkdf;
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kem-ec")]
 use sha2::Sha256;
 
 /// NanoTDF HKDF salt: SHA256(MAGIC_NUMBER + VERSION) = SHA256(0x4C314C)
@@ -94,7 +94,7 @@ impl Default for EcdhKem {
 }
 
 // Derive AES key from ECDH shared secret using HKDF-SHA256
-#[cfg(feature = "kas")]
+#[cfg(feature = "kem-ec")]
 fn derive_key_from_shared_secret(shared_secret: &[u8]) -> Result<AesKey, KemError> {
     // Use HKDF with NanoTDF-specific salt and empty info
     let hkdf = Hkdf::<Sha256>::new(Some(&NANOTDF_HKDF_SALT), shared_secret);
@@ -108,7 +108,7 @@ fn derive_key_from_shared_secret(shared_secret: &[u8]) -> Result<AesKey, KemErro
 }
 
 // P-256 implementation
-#[cfg(feature = "kas")]
+#[cfg(feature = "kem-ec")]
 mod p256_impl {
     use super::*;
     use p256::ecdh::EphemeralSecret;
@@ -163,7 +163,7 @@ mod p256_impl {
 }
 
 // P-384 implementation
-#[cfg(feature = "kas")]
+#[cfg(feature = "kem-ec")]
 mod p384_impl {
     use super::*;
     use p384::ecdh::EphemeralSecret;
@@ -207,7 +207,7 @@ mod p384_impl {
 }
 
 // P-521 implementation
-#[cfg(feature = "kas")]
+#[cfg(feature = "kem-ec")]
 mod p521_impl {
     use super::*;
     use p521::ecdh::EphemeralSecret;
@@ -251,7 +251,7 @@ mod p521_impl {
 }
 
 // secp256k1 implementation
-#[cfg(feature = "kas")]
+#[cfg(feature = "kem-ec")]
 mod k256_impl {
     use super::*;
     use k256::ecdh::EphemeralSecret;
@@ -302,7 +302,7 @@ impl EcdhKem {
     /// This is used for encryption - generates a new ephemeral key pair
     /// and returns the derived key plus the ephemeral public key to include
     /// in the NanoTDF header.
-    #[cfg(feature = "kas")]
+    #[cfg(feature = "kem-ec")]
     pub fn derive_key_with_ephemeral(
         &self,
         recipient_public_key: &[u8],
@@ -320,7 +320,7 @@ impl EcdhKem {
     /// This is used for decryption - uses the recipient's private key
     /// and the ephemeral public key from the NanoTDF header to derive
     /// the same key used for encryption.
-    #[cfg(feature = "kas")]
+    #[cfg(feature = "kem-ec")]
     pub fn derive_key_with_private(
         &self,
         private_key: &[u8],
@@ -336,24 +336,24 @@ impl EcdhKem {
         }
     }
 
-    #[cfg(not(feature = "kas"))]
+    #[cfg(not(feature = "kem-ec"))]
     pub fn derive_key_with_ephemeral(
         &self,
         _recipient_public_key: &[u8],
     ) -> Result<(AesKey, Vec<u8>), KemError> {
         Err(KemError::UnsupportedAlgorithm(
-            "ECDH KEM requires 'kas' feature".to_string(),
+            "ECDH KEM requires 'kem-ec' feature".to_string(),
         ))
     }
 
-    #[cfg(not(feature = "kas"))]
+    #[cfg(not(feature = "kem-ec"))]
     pub fn derive_key_with_private(
         &self,
         _private_key: &[u8],
         _ephemeral_public_key: &[u8],
     ) -> Result<AesKey, KemError> {
         Err(KemError::UnsupportedAlgorithm(
-            "ECDH KEM requires 'kas' feature".to_string(),
+            "ECDH KEM requires 'kem-ec' feature".to_string(),
         ))
     }
 }

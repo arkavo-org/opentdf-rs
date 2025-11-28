@@ -9,6 +9,24 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Dependency audit with cargo-deny
+  # Uses EmbarkStudios action with matrix strategy for optimal CI behavior
+  cargo-deny:
+    name: Dependency Audit (${{ matrix.checks }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        checks:
+          - advisories
+          - bans licenses sources
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check ${{ matrix.checks }}
+
   lint:
     name: lint
     runs-on: ubuntu-latest

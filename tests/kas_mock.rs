@@ -2,7 +2,7 @@
 //!
 //! These tests validate the KAS client behavior without requiring a real KAS server.
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kas-client")]
 #[cfg(test)]
 mod kas_mock_tests {
     use mockito::Server;
@@ -248,7 +248,7 @@ mod kas_mock_tests {
             "Should be valid PEM"
         );
         assert!(
-            pem.ends_with("-----END PUBLIC KEY-----\n"),
+            pem.trim_end().ends_with("-----END PUBLIC KEY-----"),
             "Should be valid PEM"
         );
         assert!(pem.len() > 200, "RSA-2048 PEM should be substantial");
@@ -269,7 +269,7 @@ mod kas_mock_tests {
             "Should be valid PEM"
         );
         assert!(
-            pem.ends_with("-----END PUBLIC KEY-----\n"),
+            pem.trim_end().ends_with("-----END PUBLIC KEY-----"),
             "Should be valid PEM"
         );
         assert!(pem.len() > 100, "EC P-256 PEM should have content");

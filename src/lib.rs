@@ -47,10 +47,10 @@ pub mod manifest;
 mod policy;
 mod tdf;
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kas-client")]
 pub mod kas;
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kas-client")]
 pub mod kas_key;
 
 // JSON-RPC integration (ZTDF-JSON format)
@@ -80,13 +80,17 @@ pub use opentdf_protocol::{
 pub use opentdf_crypto::{AesKey, KeyError, PayloadKey, PolicyKey};
 
 // Re-export crypto libraries for KAS feature
-#[cfg(feature = "kas")]
-pub use opentdf_crypto::{hkdf, p256, pkcs8, rand, rsa, sha1, sha2};
+#[cfg(feature = "kas-client")]
+pub use opentdf_crypto::{hkdf, p256, pkcs8, sha1, sha2};
+
+// Re-export rsa crate only for rustcrypto-rsa feature (legacy, has RUSTSEC-2023-0071)
+#[cfg(feature = "rustcrypto-rsa")]
+pub use opentdf_crypto::rsa;
 
 // High-level API (primary interface)
 pub use tdf::{Tdf, TdfEncryptBuilder, TdfEncryptFileBuilder};
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kas-client")]
 pub use tdf::{TdfDecryptBuilder, TdfDecryptFileBuilder};
 
 // Core types
@@ -103,15 +107,15 @@ pub use policy::{
 pub use fqn::{AttributeFqn, FqnValidationRules, NamespaceRegistry};
 
 // KAS feature types
-#[cfg(feature = "kas")]
+#[cfg(feature = "kas-client")]
 pub use kas::{KasClient, KeyType};
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kas-client")]
 pub use kas_key::{
     fetch_kas_public_key, validate_rsa_public_key_pem, KasKeyError, KasPublicKeyResponse,
 };
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kas-client")]
 pub use opentdf_crypto::{wrap_key_with_rsa_oaep, EcdhKem, OaepHash, RsaOaepKem};
 
 // JSON-RPC types
