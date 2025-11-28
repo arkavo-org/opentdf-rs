@@ -4,7 +4,8 @@ use std::io::Cursor;
 use wasm_bindgen::prelude::*;
 
 mod kas;
-mod webcrypto;
+/// WebCrypto RSA-OAEP operations via browser's SubtleCrypto API
+pub mod webcrypto;
 
 // Set up panic hook for better error messages in the browser
 #[wasm_bindgen(start)]

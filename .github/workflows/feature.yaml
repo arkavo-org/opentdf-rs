@@ -26,6 +26,9 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check ${{ matrix.checks }}
+          # Don't use --all-features since rustcrypto-provider has RUSTSEC-2023-0071
+          # The deny.toml already sets all-features = false
+          arguments: ""
 
   lint:
     name: lint
