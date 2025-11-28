@@ -9,16 +9,16 @@ use std::path::Path;
 use zip::write::FileOptions;
 use zip::{ZipArchive, ZipWriter};
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kas-client")]
 use opentdf_protocol::KasError;
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kas-client")]
 use crate::kas::KasClient;
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kas-client")]
 use crate::TdfEncryption;
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kas-client")]
 use crate::manifest::IntegrityInformationExt;
 
 #[derive(Debug)]
@@ -30,8 +30,8 @@ pub struct TdfArchive<R: Read + Seek> {
 pub struct TdfEntry<'a> {
     pub manifest: TdfManifest,
     pub payload: Vec<u8>,
-    #[allow(dead_code)]
-    index: usize,
+    /// The index of this entry within the TDF archive
+    pub index: usize,
     _lifetime: std::marker::PhantomData<&'a ()>,
 }
 
@@ -54,7 +54,7 @@ impl<'a> TdfEntry<'a> {
     /// # Ok(())
     /// # }
     /// ```
-    #[cfg(feature = "kas")]
+    #[cfg(feature = "kas-client")]
     pub async fn decrypt_with_kas(&self, kas_client: &KasClient) -> Result<Vec<u8>, TdfError> {
         use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 
@@ -187,11 +187,11 @@ pub enum TdfError {
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
 
-    #[cfg(feature = "kas")]
+    #[cfg(feature = "kas-client")]
     #[error("KAS error: {0}")]
     KasError(#[from] KasError),
 
-    #[cfg(feature = "kas")]
+    #[cfg(feature = "kas-client")]
     #[error("Decryption failed: {reason}")]
     DecryptionFailed {
         reason: String,
@@ -225,7 +225,7 @@ impl TdfError {
     pub fn is_retryable(&self) -> bool {
         match self {
             TdfError::IoError(_) => true,
-            #[cfg(feature = "kas")]
+            #[cfg(feature = "kas-client")]
             TdfError::KasError(kas_err) => kas_err.is_retryable(),
             _ => false,
         }
@@ -275,9 +275,9 @@ impl TdfError {
             TdfError::MissingRequiredField { .. } => "OPENTDF_E_FIELD_REQUIRED",
             TdfError::InvalidKasUrl { .. } => "OPENTDF_E_KAS_URL_INVALID",
             TdfError::CryptoError { .. } => "OPENTDF_E_CRYPTO",
-            #[cfg(feature = "kas")]
+            #[cfg(feature = "kas-client")]
             TdfError::KasError(_) => "OPENTDF_E_KAS",
-            #[cfg(feature = "kas")]
+            #[cfg(feature = "kas-client")]
             TdfError::DecryptionFailed { .. } => "OPENTDF_E_DECRYPTION_FAILED",
             TdfError::PolicyValidationFailed { .. } => "OPENTDF_E_POLICY_VALIDATION",
         }
@@ -311,7 +311,7 @@ impl TdfArchive<File> {
     /// # Ok(())
     /// # }
     /// ```
-    #[cfg(feature = "kas")]
+    #[cfg(feature = "kas-client")]
     pub async fn open_and_decrypt<P: AsRef<Path>>(
         path: P,
         kas_client: &KasClient,

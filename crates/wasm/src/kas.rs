@@ -2,13 +2,19 @@
 //!
 //! This module provides KAS integration for browser environments,
 //! enabling secure key wrapping and rewrap protocol.
+//!
+//! RSA operations use WebCrypto (SubtleCrypto) for:
+//! - Constant-time operations (browser-native)
+//! - No RUSTSEC-2023-0071 vulnerability exposure
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use opentdf_protocol::kas::*;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{Request, RequestInit, RequestMode, Response};
+use web_sys::{CryptoKey, Request, RequestInit, RequestMode, Response};
+
+use crate::webcrypto;
 
 /// KAS public key response structure
 #[derive(Debug, Serialize, Deserialize)]
@@ -83,10 +89,11 @@ pub async fn fetch_kas_public_key(kas_url: &str) -> Result<KasPublicKeyResponse,
     Ok(key_response)
 }
 
-/// Wrap a payload key with RSA-OAEP using KAS public key
+/// Wrap a payload key with RSA-OAEP using KAS public key (async)
 ///
 /// This function wraps a symmetric payload key with an RSA public key using OAEP padding.
 /// Uses SHA-1 for compatibility with the OpenTDF Go SDK.
+/// Uses WebCrypto for constant-time operations.
 ///
 /// # Arguments
 ///
@@ -96,61 +103,35 @@ pub async fn fetch_kas_public_key(kas_url: &str) -> Result<KasPublicKeyResponse,
 /// # Returns
 ///
 /// Base64-encoded wrapped key ready for inclusion in TDF manifest
-pub fn wrap_key_with_rsa_oaep(
+pub async fn wrap_key_with_rsa_oaep(
     payload_key: &[u8],
     kas_public_key_pem: &str,
 ) -> Result<String, String> {
-    use rsa::pkcs8::DecodePublicKey;
-    use rsa::{Oaep, RsaPublicKey};
-    use sha1::Sha1;
-
-    // Parse the PEM-encoded public key
-    let public_key = RsaPublicKey::from_public_key_pem(kas_public_key_pem)
-        .map_err(|e| format!("Failed to parse RSA public key: {}", e))?;
-
-    // Create OAEP padding with SHA1 (for Go SDK compatibility)
-    let padding = Oaep::new::<Sha1>();
-
-    // Encrypt the payload key with RSA-OAEP
-    let mut rng = rand::rngs::OsRng;
-    let wrapped_key = public_key
-        .encrypt(&mut rng, padding, payload_key)
-        .map_err(|e| format!("Failed to wrap key: {}", e))?;
-
-    // Encode as base64 for storage in manifest
-    Ok(BASE64.encode(&wrapped_key))
+    webcrypto::wrap_key_with_rsa_oaep(payload_key, kas_public_key_pem).await
 }
 
 /// RSA-2048 ephemeral key pair for KAS rewrap protocol
+///
+/// Uses WebCrypto-generated keys for constant-time operations.
 pub struct EphemeralRsaKeyPair {
-    pub private_key: rsa::RsaPrivateKey,
+    /// WebCrypto private key for decryption
+    pub private_key: CryptoKey,
+    /// PEM-encoded public key
     pub public_key_pem: String,
 }
 
-/// Generate ephemeral RSA-2048 key pair for KAS communication
+/// Generate ephemeral RSA-2048 key pair for KAS communication (async)
 ///
 /// Creates a new RSA-2048 key pair for secure key exchange with KAS.
 /// The private key is used to decrypt the wrapped payload key, and the
 /// public key is sent to KAS in the rewrap request.
-pub fn generate_rsa_keypair() -> Result<EphemeralRsaKeyPair, String> {
-    use rand::rngs::OsRng;
-    use rsa::pkcs8::{EncodePublicKey, LineEnding};
-    use rsa::{RsaPrivateKey, RsaPublicKey};
-
-    // Generate RSA-2048 key pair
-    let private_key = RsaPrivateKey::new(&mut OsRng, 2048)
-        .map_err(|e| format!("RSA key generation failed: {}", e))?;
-
-    let public_key = RsaPublicKey::from(&private_key);
-
-    // Export public key as PEM
-    let public_key_pem = public_key
-        .to_public_key_pem(LineEnding::LF)
-        .map_err(|e| format!("Failed to encode public key: {}", e))?;
+/// Uses WebCrypto for secure key generation.
+pub async fn generate_rsa_keypair() -> Result<EphemeralRsaKeyPair, String> {
+    let keypair = webcrypto::generate_rsa_keypair().await?;
 
     Ok(EphemeralRsaKeyPair {
-        private_key,
-        public_key_pem,
+        private_key: keypair.private_key,
+        public_key_pem: keypair.public_key_pem,
     })
 }
 
@@ -398,26 +379,16 @@ pub async fn post_rewrap_request(
     Ok(UnwrappedResponse { wrapped_key })
 }
 
-/// Unwrap payload key using RSA-OAEP (SHA-1) decryption
+/// Unwrap payload key using RSA-OAEP (SHA-1) decryption via WebCrypto (async)
 ///
 /// Decrypts the wrapped payload key returned from KAS using the ephemeral
 /// RSA private key. Uses OAEP padding with SHA-1 for Go SDK compatibility.
-pub fn unwrap_rsa_oaep(
+/// Uses WebCrypto for constant-time decryption.
+pub async fn unwrap_rsa_oaep(
     wrapped_key: &[u8],
-    private_key: &rsa::RsaPrivateKey,
+    private_key: &CryptoKey,
 ) -> Result<Vec<u8>, String> {
-    use rsa::Oaep;
-    use sha1::Sha1;
-
-    // Create OAEP padding with SHA-1 (for Go SDK compatibility)
-    let padding = Oaep::new::<Sha1>();
-
-    // Decrypt the wrapped key
-    let payload_key = private_key
-        .decrypt(padding, wrapped_key)
-        .map_err(|e| format!("RSA-OAEP decryption failed: {}", e))?;
-
-    Ok(payload_key)
+    webcrypto::unwrap_key_with_rsa_oaep(wrapped_key, private_key).await
 }
 
 #[cfg(test)]

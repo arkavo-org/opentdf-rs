@@ -4,6 +4,8 @@ use std::io::Cursor;
 use wasm_bindgen::prelude::*;
 
 mod kas;
+/// WebCrypto RSA-OAEP operations via browser's SubtleCrypto API
+pub mod webcrypto;
 
 // Set up panic hook for better error messages in the browser
 #[wasm_bindgen(start)]
@@ -100,9 +102,10 @@ async fn _tdf_create_impl(data: &str, kas_url: &str, policy_json: &str) -> Resul
         .encrypt_with_segments(&data_bytes, segment_size)
         .map_err(|e| format!("Failed to encrypt: {}", e))?;
 
-    // Step 6: Wrap the payload key with KAS public key using RSA-OAEP
+    // Step 6: Wrap the payload key with KAS public key using RSA-OAEP (via WebCrypto)
     let wrapped_key =
-        kas::wrap_key_with_rsa_oaep(tdf_encryption.payload_key(), &kas_key_response.public_key)?;
+        kas::wrap_key_with_rsa_oaep(tdf_encryption.payload_key(), &kas_key_response.public_key)
+            .await?;
 
     // Step 7: Concatenate all encrypted segments
     let ciphertext_bytes: Vec<u8> = segmented_payload
@@ -257,8 +260,8 @@ async fn _tdf_decrypt_with_kas_impl(tdf_data: &str, kas_token: &str) -> Result<S
         .by_index()
         .map_err(|e| format!("Failed to read TDF entry: {}", e))?;
 
-    // Step 2: Generate ephemeral RSA-2048 key pair
-    let ephemeral_keypair = kas::generate_rsa_keypair()?;
+    // Step 2: Generate ephemeral RSA-2048 key pair (via WebCrypto)
+    let ephemeral_keypair = kas::generate_rsa_keypair().await?;
 
     // Step 3: Build unsigned rewrap request
     let unsigned_request =
@@ -271,9 +274,9 @@ async fn _tdf_decrypt_with_kas_impl(tdf_data: &str, kas_token: &str) -> Result<S
     let kas_url = &entry.manifest.encryption_information.key_access[0].url;
     let rewrap_response = kas::post_rewrap_request(kas_url, kas_token, &signed_token).await?;
 
-    // Step 6: Unwrap payload key using RSA-OAEP
+    // Step 6: Unwrap payload key using RSA-OAEP (via WebCrypto)
     let payload_key =
-        kas::unwrap_rsa_oaep(&rewrap_response.wrapped_key, &ephemeral_keypair.private_key)?;
+        kas::unwrap_rsa_oaep(&rewrap_response.wrapped_key, &ephemeral_keypair.private_key).await?;
 
     // Step 7: Decrypt payload
     let tdf_encryption = TdfEncryption::with_payload_key(&payload_key)

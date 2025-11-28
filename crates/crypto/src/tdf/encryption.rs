@@ -220,7 +220,6 @@ impl TdfEncryption {
         data: &[u8],
         segment_size: usize,
     ) -> Result<SegmentedPayload, EncryptionError> {
-        const GCM_IV_SIZE: usize = 12; // 96-bit IV
         const GCM_TAG_SIZE: usize = 16; // 128-bit authentication tag
 
         let cipher = Aes256Gcm::new_from_slice(self.payload_key.as_slice())

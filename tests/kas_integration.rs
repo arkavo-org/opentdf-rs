@@ -11,7 +11,7 @@
 //! cargo test --features kas --test kas_integration -- --ignored
 //! ```
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kas-client")]
 #[cfg(test)]
 mod kas_tests {
     use opentdf::{
@@ -32,22 +32,23 @@ mod kas_tests {
         // Test RSA (for Standard TDF)
         let key_pair_rsa =
             EphemeralKeyPair::new(KeyType::RSA).expect("Failed to generate RSA key pair");
-        assert!(key_pair_rsa
-            .public_key_pem()
-            .starts_with("-----BEGIN PUBLIC KEY-----"));
-        assert!(key_pair_rsa
-            .public_key_pem()
-            .ends_with("-----END PUBLIC KEY-----\n"));
+        let pem = key_pair_rsa.public_key_pem();
+        println!("RSA PEM:\n{}", pem);
+        println!(
+            "Last 50 chars: {:?}",
+            pem.chars().rev().take(50).collect::<Vec<_>>()
+        );
+        assert!(pem.starts_with("-----BEGIN PUBLIC KEY-----"));
+        // The pem crate includes a trailing newline
+        assert!(pem.trim_end().ends_with("-----END PUBLIC KEY-----"));
 
         // Test EC (for NanoTDF)
         let key_pair_ec =
             EphemeralKeyPair::new(KeyType::EC).expect("Failed to generate EC key pair");
-        assert!(key_pair_ec
-            .public_key_pem()
-            .starts_with("-----BEGIN PUBLIC KEY-----"));
-        assert!(key_pair_ec
-            .public_key_pem()
-            .ends_with("-----END PUBLIC KEY-----\n"));
+        let ec_pem = key_pair_ec.public_key_pem();
+        assert!(ec_pem.starts_with("-----BEGIN PUBLIC KEY-----"));
+        // The pem crate includes a trailing newline
+        assert!(ec_pem.trim_end().ends_with("-----END PUBLIC KEY-----"));
     }
 
     #[tokio::test]

@@ -6,11 +6,12 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kas-client")]
 use reqwest::Client;
 
-#[cfg(feature = "kas")]
-use crate::rsa::{pkcs8::DecodePublicKey, RsaPublicKey};
+// Use aws-lc-rs for RSA public key validation (constant-time, FIPS validated)
+#[cfg(feature = "kas-client")]
+use aws_lc_rs::rsa::PublicEncryptingKey;
 
 /// Errors that can occur during KAS public key operations
 #[derive(Debug, Error)]
@@ -27,7 +28,7 @@ pub enum KasKeyError {
     #[error("RSA parse error: {0}")]
     RsaParseError(String),
 
-    #[cfg(feature = "kas")]
+    #[cfg(feature = "kas-client")]
     #[error("Reqwest error: {0}")]
     ReqwestError(#[from] reqwest::Error),
 }
@@ -50,7 +51,7 @@ pub struct KasPublicKeyResponse {
 /// # Returns
 ///
 /// The PEM-encoded RSA public key as a String
-#[cfg(feature = "kas")]
+#[cfg(feature = "kas-client")]
 pub async fn fetch_kas_public_key(
     kas_url: &str,
     http_client: &Client,
@@ -86,6 +87,7 @@ pub async fn fetch_kas_public_key(
 /// Parse and validate a PEM-encoded RSA public key
 ///
 /// This function validates that the key is in proper PEM format and can be parsed as an RSA public key.
+/// Uses aws-lc-rs for constant-time RSA operations (FIPS validated).
 ///
 /// # Arguments
 ///
@@ -94,11 +96,15 @@ pub async fn fetch_kas_public_key(
 /// # Returns
 ///
 /// The validated PEM string if parsing succeeds
-#[cfg(feature = "kas")]
+#[cfg(feature = "kas-client")]
 pub fn validate_rsa_public_key_pem(pem: &str) -> Result<String, KasKeyError> {
-    // Try to parse the PEM to validate it
-    RsaPublicKey::from_public_key_pem(pem).map_err(|e| {
-        KasKeyError::RsaParseError(format!("Failed to parse RSA public key: {}", e))
+    // Parse PEM to DER
+    let parsed_pem = pem::parse(pem)
+        .map_err(|e| KasKeyError::RsaParseError(format!("Failed to parse PEM: {}", e)))?;
+
+    // Try to parse the DER as an RSA public key
+    PublicEncryptingKey::from_der(parsed_pem.contents()).map_err(|e| {
+        KasKeyError::RsaParseError(format!("Failed to parse RSA public key: {:?}", e))
     })?;
 
     Ok(pem.to_string())
@@ -122,7 +128,7 @@ mod tests {
         assert_eq!(response.kid, "r1");
     }
 
-    #[cfg(feature = "kas")]
+    #[cfg(feature = "kas-client")]
     #[test]
     fn test_validate_rsa_public_key_pem() {
         // This is a valid test RSA public key

@@ -12,9 +12,6 @@
 //! - **Zeroization**: All key material uses `zeroize` to clear memory on drop
 //! - **Constant-time comparison**: MAC verification uses `subtle::ConstantTimeEq`
 //! - **Future-ready**: Abstractions for post-quantum cryptography (ML-KEM)
-
-// Allow dead code for NanoTDF stub implementation
-#![allow(dead_code)]
 //!
 //! # Example
 //!
@@ -49,46 +46,49 @@ pub use hmac::{
     HmacError,
 };
 pub use kem::{KemError, KeyEncapsulation};
-pub use tdf::{
-    EncryptedPayload, NanoTdf, NanoTdfBuilder, NanoTdfError, NanoTdfPayload, NanoTdfSignature,
-    SegmentInfo, SegmentedPayload, TdfEncryption,
-};
+pub use tdf::{EncryptedPayload, SegmentInfo, SegmentedPayload, TdfEncryption};
 pub use types::{AesKey, KeyError, Nonce96, PayloadKey, PolicyKey};
 
-// Re-export KAS feature types
-#[cfg(feature = "kas")]
+// NanoTDF exports (requires EC KEM)
+#[cfg(feature = "kem-ec")]
+pub use tdf::{
+    decrypt, encrypt, generate_gmac, verify_gmac, NanoTdf, NanoTdfBuilder, NanoTdfCryptoError,
+    NanoTdfError, NanoTdfIv, NanoTdfPayload, NanoTdfSignature, TagSize,
+};
+
+// RSA KEM exports
+#[cfg(feature = "kem-rsa")]
 pub use kem::rsa::{wrap_key_with_rsa_oaep, OaepHash, RsaOaepKem};
 
-#[cfg(feature = "kas")]
+// EC KEM exports
+#[cfg(feature = "kem-ec")]
 pub use kem::ec::{EcCurve, EcdhKem};
 
-#[cfg(feature = "kas")]
+// PQC (Post-Quantum Cryptography) exports - always available
 pub use kem::pqc::{HybridKem, MlKemLevel, MlKemWrapper};
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kem-ec")]
 pub use types::EcPrivateKey;
 
-// Re-export underlying crypto libraries for KAS
-#[cfg(feature = "kas")]
+// Re-export underlying crypto libraries when KEM features are enabled
+#[cfg(feature = "kem-ec")]
 pub use hkdf;
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kem-ec")]
 pub use p256;
 
-#[cfg(feature = "kas")]
+#[cfg(any(feature = "kem-rsa", feature = "kem-ec"))]
 pub use pkcs8;
 
-#[cfg(feature = "kas")]
-pub use rand;
-
-#[cfg(feature = "kas")]
-pub use rsa;
-
-#[cfg(feature = "kas")]
+#[cfg(any(feature = "kem-rsa", feature = "kem-ec"))]
 pub use sha1;
 
-#[cfg(feature = "kas")]
+#[cfg(feature = "kem-ec")]
 pub use sha2;
+
+// Re-export rsa crate only for rustcrypto-provider feature (has RUSTSEC-2023-0071)
+#[cfg(feature = "rustcrypto-provider")]
+pub use rsa;
 
 // Re-export encryption error
 pub use tdf::encryption::EncryptionError;

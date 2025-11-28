@@ -314,11 +314,11 @@ The KAS protocol allows:
 
 ### Basic Usage
 
-Enable the KAS feature in your `Cargo.toml`:
+The KAS client is enabled by default:
 
 ```toml
 [dependencies]
-opentdf = { version = "0.3.0", features = ["kas"] }
+opentdf = "0.7"
 ```
 
 #### Decrypt TDF with KAS
@@ -385,7 +385,7 @@ export KAS_URL="http://10.0.0.138:8080/kas"
 export KAS_OAUTH_TOKEN="your-token-here"
 
 # Run KAS integration tests
-cargo test --features kas --test kas_integration -- --ignored --nocapture
+cargo test --test kas_integration -- --ignored --nocapture
 ```
 
 ### KAS Error Handling
@@ -593,10 +593,80 @@ Add to your Cargo.toml:
 
 ```toml
 [dependencies]
-opentdf = "0.5.0"
+opentdf = "0.7"
 ```
 
-## 🚀 What's New in v0.5.0
+### Feature Flags
+
+```text
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Feature                    Default   Description                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ kas-client                 ✅        KAS client + aws-lc-rs (FIPS, secure)  │
+│ kas-client-rustcrypto      -         KAS client + pure Rust (portable)      │
+│ rustls-tls                 ✅        TLS via rustls                         │
+│ native-tls                 -         TLS via OpenSSL/SecureTransport        │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Crypto Providers
+
+| Provider | Timing-Safe | FIPS | Portable | WASM |
+|----------|-------------|------|----------|------|
+| **aws-lc-rs** (default) | ✅ | ✅ | Needs C compiler | ❌ |
+| **rustcrypto** | ❌ [RUSTSEC-2023-0071](https://rustsec.org/advisories/RUSTSEC-2023-0071) | ❌ | ✅ Pure Rust | ❌ |
+| **WebCrypto** (WASM only) | ✅ | Browser-dependent | N/A | ✅ |
+
+#### Common Configurations
+
+```toml
+# Recommended: Secure defaults (aws-lc-rs + rustls)
+opentdf = "0.7"
+
+# Pure Rust: No C compiler needed (accepts timing vulnerability)
+opentdf = { version = "0.7", default-features = false, features = ["kas-client-rustcrypto"] }
+
+# Native TLS: Use system TLS (OpenSSL on Linux, SecureTransport on macOS)
+opentdf = { version = "0.7", default-features = false, features = ["kas-client", "native-tls"] }
+
+# Minimal: Core TDF operations only (no KAS client, no async)
+opentdf = { version = "0.7", default-features = false }
+```
+
+#### WASM Note
+
+The `opentdf-wasm` crate uses browser-native **WebCrypto** for RSA operations—no Rust crypto crate needed, no timing vulnerability.
+
+## 🚀 What's New in v0.7.0
+
+Version 0.7.0 brings critical security improvements and better feature organization:
+
+- ✅ **Constant-time RSA**: Default crypto provider changed to aws-lc-rs (FIPS validated)
+- ✅ **RUSTSEC-2023-0071 Fixed**: Timing vulnerability eliminated in default builds
+- ✅ **cargo-deny Integration**: Automated security advisory and license auditing in CI
+- ✅ **Feature Reorganization**: Clearer naming (`kas-client`, `kas-client-rustcrypto`)
+- ✅ **WebCrypto for WASM**: Browser builds use native SubtleCrypto API
+- ✅ **Pure Rust Option**: `kas-client-rustcrypto` for environments without C compiler
+
+### Migration Guide (v0.6.x → v0.7.0)
+
+**Feature Renaming**:
+```toml
+# Before (v0.6.x)
+opentdf = { version = "0.6", features = ["kas"] }
+
+# After (v0.7.0) - "kas" still works but is deprecated
+opentdf = "0.7"  # kas-client is now the default
+```
+
+**Pure Rust Builds**:
+```toml
+# Before (v0.6.x) - not available
+# After (v0.7.0) - explicit pure Rust option
+opentdf = { version = "0.7", default-features = false, features = ["kas-client-rustcrypto"] }
+```
+
+## What's New in v0.5.0
 
 Version 0.5.0 brings significant DX (Developer Experience) improvements:
 

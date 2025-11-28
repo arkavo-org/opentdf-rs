@@ -247,7 +247,8 @@ fn generate_test_keypair(curve: EcCurve) -> (Vec<u8>, Vec<u8>) {
     }
 }
 
-/// Save NanoTDF to file for cross-platform testing
+/// Save NanoTDF to file for cross-platform testing.
+/// Useful for debugging and generating test vectors for other SDK implementations.
 #[allow(dead_code)]
 fn save_nanotdf_for_testing(nanotdf: &NanoTdf, filename: &str) -> std::io::Result<()> {
     let bytes = nanotdf
@@ -258,7 +259,8 @@ fn save_nanotdf_for_testing(nanotdf: &NanoTdf, filename: &str) -> std::io::Resul
     Ok(())
 }
 
-/// Load NanoTDF from file for cross-platform testing
+/// Load NanoTDF from file for cross-platform testing.
+/// Useful for verifying compatibility with test vectors from other SDKs.
 #[allow(dead_code)]
 fn load_nanotdf_from_file(filename: &str) -> std::io::Result<NanoTdf> {
     let bytes = std::fs::read(filename)?;

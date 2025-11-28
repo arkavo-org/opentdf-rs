@@ -81,7 +81,6 @@ struct DecryptParams {
     encrypted_data: String, // Base64 encoded encrypted data
     iv: String,             // Base64 encoded initialization vector
     encrypted_key: String,  // Base64 encoded wrapped key
-    #[allow(dead_code)] // Used in some implementations but not in our placeholder
     policy_key_hash: String, // Hash of the policy key for validation
     policy_key: String,     // Base64 encoded policy key for decryption
 }
@@ -139,7 +138,9 @@ struct PolicyBindingVerifyParams {
 // --- Struct Definitions End ---
 
 // --- Helper Functions ---
-// Standard error codes and types for consistent error handling
+// Standard error codes and types for consistent error handling.
+// Not all codes are currently used, but the complete set is defined
+// for API consistency and future expansion.
 #[allow(dead_code)]
 mod error_codes {
     // Error category prefixes (100-900 ranges)
@@ -2441,7 +2442,8 @@ fn convert_to_attribute_policy(value: Value) -> Result<AttributePolicy, String> 
 
 // --- Server Configuration ---
 
-/// Represents the configuration settings for the server
+/// Represents the configuration settings for the server.
+/// Some fields are reserved for future features (rate limiting, security logging).
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 struct ServerConfig {
@@ -2538,13 +2540,15 @@ fn get_server_uptime() -> std::time::Duration {
     SERVER_START_TIME.elapsed()
 }
 
-/// Records a new request for metrics purposes
+/// Records a new request for metrics purposes.
+/// TODO: Call this in request handling loop for accurate metrics.
 #[allow(dead_code)]
 fn record_request() {
     REQUEST_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// Records an error for metrics purposes
+/// Records an error for metrics purposes.
+/// TODO: Call this in error handling for accurate metrics.
 #[allow(dead_code)]
 fn record_error() {
     ERROR_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
