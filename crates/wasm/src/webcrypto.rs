@@ -191,7 +191,6 @@ pub async fn import_rsa_public_key(pem: &str) -> Result<CryptoKey, String> {
 ///
 /// # Returns
 /// WebCrypto CryptoKey usable for RSA-OAEP decryption
-#[allow(dead_code)] // Available for future use or external consumers
 pub async fn import_rsa_private_key(pem: &str) -> Result<CryptoKey, String> {
     let subtle = get_subtle_crypto()?;
 

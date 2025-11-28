@@ -12,9 +12,6 @@
 //! - **Zeroization**: All key material uses `zeroize` to clear memory on drop
 //! - **Constant-time comparison**: MAC verification uses `subtle::ConstantTimeEq`
 //! - **Future-ready**: Abstractions for post-quantum cryptography (ML-KEM)
-
-// Allow dead code for NanoTDF stub implementation
-#![allow(dead_code)]
 //!
 //! # Example
 //!

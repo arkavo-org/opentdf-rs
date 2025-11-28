@@ -30,8 +30,8 @@ pub struct TdfArchive<R: Read + Seek> {
 pub struct TdfEntry<'a> {
     pub manifest: TdfManifest,
     pub payload: Vec<u8>,
-    #[allow(dead_code)]
-    index: usize,
+    /// The index of this entry within the TDF archive
+    pub index: usize,
     _lifetime: std::marker::PhantomData<&'a ()>,
 }
 

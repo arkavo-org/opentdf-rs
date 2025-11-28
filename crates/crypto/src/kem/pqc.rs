@@ -34,7 +34,6 @@ use super::{KemError, KeyEncapsulation};
 ///
 /// Based on NIST FIPS 203 (ML-KEM standard)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum MlKemLevel {
     /// ML-KEM-512: 128-bit security (Category 1)
     ///
