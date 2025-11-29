@@ -42,7 +42,7 @@ rand = "0.8"
 members = ["crates/protocol", "crates/crypto", "crates/wasm"]
 
 [workspace.package]
-version = "0.7.0"
+version = "0.8.0"
 
 [features]
 default = ["kas-client"]
