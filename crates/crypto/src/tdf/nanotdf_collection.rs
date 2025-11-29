@@ -850,4 +850,48 @@ mod tests {
         let result = NanoTdfCollectionDecryptor::from_header_with_dek(&header_bytes, &bad_dek);
         assert!(matches!(result, Err(NanoTdfError::InvalidDekLength(16))));
     }
+
+    #[test]
+    #[cfg(feature = "kas")]
+    fn test_iv_exhaustion_error() {
+        // Create collection with IV counter near MAX_IV
+        // Verify IvExhausted error is returned
+        let (public_key, _) = generate_test_keypair();
+
+        let collection = NanoTdfCollectionBuilder::new()
+            .kas_url("http://localhost:8080/kas")
+            .policy_plaintext(b"test-policy".to_vec())
+            .build(&public_key)
+            .unwrap();
+
+        // Set IV counter to MAX_IV (one encryption left)
+        collection
+            .iv_counter
+            .store(MAX_IV, std::sync::atomic::Ordering::Relaxed);
+
+        // Verify state before exhaustion
+        assert!(!collection.is_exhausted());
+        assert_eq!(collection.remaining_capacity(), 1);
+
+        // This encryption should succeed (uses MAX_IV)
+        let result = collection.encrypt_item(b"last valid item");
+        assert!(result.is_ok(), "Should succeed at MAX_IV");
+
+        // Now the collection is exhausted
+        assert!(collection.is_exhausted());
+        assert_eq!(collection.remaining_capacity(), 0);
+        assert_eq!(collection.current_iv(), MAX_IV + 1);
+
+        // Next encryption should fail with IvExhausted
+        let result = collection.encrypt_item(b"should fail");
+        assert!(
+            matches!(result, Err(NanoTdfError::IvExhausted)),
+            "Expected IvExhausted error, got: {:?}",
+            result
+        );
+
+        // Verify multiple attempts also fail
+        let result2 = collection.encrypt_item(b"still should fail");
+        assert!(matches!(result2, Err(NanoTdfError::IvExhausted)));
+    }
 }
