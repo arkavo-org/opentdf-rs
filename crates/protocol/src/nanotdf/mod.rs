@@ -27,10 +27,12 @@
 //!
 //! - [OpenTDF NanoTDF Specification](https://github.com/opentdf/spec/tree/main/schema/nanotdf)
 
+pub mod collection;
 pub mod header;
 pub mod policy;
 pub mod resource_locator;
 
+pub use collection::{CollectionItem, DEFAULT_ROTATION_THRESHOLD, MAX_IV, RESERVED_POLICY_IV};
 pub use header::{
     EccAndBindingMode, EccMode, Header, MagicNumberAndVersion, PayloadSignatureMode,
     SymmetricAndPayloadConfig, SymmetricCipher,

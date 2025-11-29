@@ -77,6 +77,26 @@ pub enum NanoTdfError {
 
     #[error("Unsupported feature: {0}")]
     Unsupported(String),
+
+    // Collection/Dataset errors
+    #[error(
+        "Collection IV exhausted (max 16,777,215 items). Create new collection with fresh DEK."
+    )]
+    IvExhausted,
+
+    #[error(
+        "Collection rotation threshold reached ({0} items). Consider creating new collection."
+    )]
+    RotationThresholdReached(u32),
+
+    #[error("Invalid DEK length: expected 32 bytes, got {0}")]
+    InvalidDekLength(usize),
+
+    #[error("KAS URL not configured")]
+    MissingKasUrl,
+
+    #[error("Policy not configured")]
+    MissingPolicy,
 }
 
 /// Complete NanoTDF structure
