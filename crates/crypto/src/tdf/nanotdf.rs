@@ -91,6 +91,12 @@ pub enum NanoTdfError {
 
     #[error("Invalid DEK length: expected 32 bytes, got {0}")]
     InvalidDekLength(usize),
+
+    #[error("KAS URL not configured")]
+    MissingKasUrl,
+
+    #[error("Policy not configured")]
+    MissingPolicy,
 }
 
 /// Complete NanoTDF structure

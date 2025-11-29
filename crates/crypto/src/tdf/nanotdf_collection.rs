@@ -206,6 +206,23 @@ impl NanoTdfCollection {
     pub fn tag_size(&self) -> TagSize {
         self.tag_size
     }
+
+    /// Get the authentication tag size in bytes
+    pub fn tag_size_bytes(&self) -> usize {
+        self.tag_size.bytes()
+    }
+}
+
+impl std::fmt::Debug for NanoTdfCollection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NanoTdfCollection")
+            .field("current_iv", &self.current_iv())
+            .field("remaining_capacity", &self.remaining_capacity())
+            .field("rotation_threshold", &self.rotation_threshold)
+            .field("tag_size", &self.tag_size)
+            .field("is_exhausted", &self.is_exhausted())
+            .finish_non_exhaustive()
+    }
 }
 
 /// Builder for creating NanoTDF collections
@@ -251,14 +268,16 @@ impl NanoTdfCollectionBuilder {
         self
     }
 
-    /// Set a remote policy body (reference via resource locator)
+    /// Set a remote policy reference
+    ///
+    /// The `url` parameter specifies the policy resource locator URL
+    /// (e.g., `"https://policy.example.com/policies/abc123"`).
     #[must_use]
-    pub fn policy_remote_body(mut self, _body: Vec<u8>) -> Self {
-        // For remote policy, create a simple resource locator
-        let locator = ResourceLocator::from_url("http://policy").unwrap_or_else(|_| {
+    pub fn policy_remote(mut self, url: &str) -> Self {
+        let locator = ResourceLocator::from_url(url).unwrap_or_else(|_| {
             ResourceLocator::new(
-                opentdf_protocol::nanotdf::Protocol::Http,
-                "policy".as_bytes().to_vec(),
+                opentdf_protocol::nanotdf::Protocol::Https,
+                url.as_bytes().to_vec(),
             )
         });
         self.policy_body = Some(PolicyBody::Remote(locator));
@@ -305,6 +324,9 @@ impl NanoTdfCollectionBuilder {
     }
 
     /// Use ECDH-based policy binding instead of GMAC (default: false)
+    ///
+    /// **WARNING:** ECDSA policy binding is not yet implemented. Setting this to `true`
+    /// will cause `build()` to return `NanoTdfError::Unsupported`.
     #[must_use]
     pub fn use_ecdh_binding(mut self, enabled: bool) -> Self {
         self.use_ecdh_binding = enabled;
@@ -332,13 +354,9 @@ impl NanoTdfCollectionBuilder {
     /// This performs the expensive ECDH + HKDF operation once.
     /// All subsequent `encrypt_item()` calls reuse the derived DEK.
     pub fn build(self, kas_public_key: &[u8]) -> Result<NanoTdfCollection, NanoTdfError> {
-        let kas_url = self
-            .kas_url
-            .ok_or_else(|| NanoTdfError::InvalidHeader("KAS URL not set".to_string()))?;
+        let kas_url = self.kas_url.ok_or(NanoTdfError::MissingKasUrl)?;
 
-        let policy_body = self
-            .policy_body
-            .ok_or_else(|| NanoTdfError::InvalidHeader("Policy not set".to_string()))?;
+        let policy_body = self.policy_body.ok_or(NanoTdfError::MissingPolicy)?;
 
         // Convert EccMode to EcCurve
         let curve = match self.ecc_mode {
@@ -474,6 +492,28 @@ impl NanoTdfCollectionDecryptor {
     /// This performs ECDH key derivation using the KAS private key and
     /// the ephemeral public key from the header. Use this for KAS-side
     /// decryption or testing scenarios.
+    ///
+    /// # Key Format
+    ///
+    /// The `kas_private_key` must be in one of these DER formats:
+    /// - **SEC1 DER** - Raw elliptic curve private key (tried first)
+    /// - **PKCS#8 DER** - Standard private key container (fallback)
+    ///
+    /// **Note:** Raw 32-byte scalar values are NOT supported. Convert using:
+    /// ```ignore
+    /// use p256::{SecretKey, pkcs8::EncodePrivateKey};
+    /// let secret = SecretKey::from_bytes(&raw_bytes.into())?;
+    /// let der = secret.to_pkcs8_der()?.as_bytes().to_vec();
+    /// ```
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let decryptor = NanoTdfCollectionDecryptor::from_header_with_kas_key(
+    ///     &header_bytes,
+    ///     &kas_private_key_pkcs8_der,
+    /// )?;
+    /// ```
     pub fn from_header_with_kas_key(
         header_bytes: &[u8],
         kas_private_key: &[u8],
@@ -560,6 +600,11 @@ impl NanoTdfCollectionDecryptor {
     /// Get the tag size
     pub fn tag_size(&self) -> TagSize {
         self.tag_size
+    }
+
+    /// Get the authentication tag size in bytes
+    pub fn tag_size_bytes(&self) -> usize {
+        self.tag_size.bytes()
     }
 
     /// Extract tag size from header's symmetric cipher config
@@ -715,6 +760,13 @@ mod tests {
     fn test_rotation_threshold() {
         let (public_key, _) = generate_test_keypair();
 
+        // threshold=5 means: rotation_threshold_reached() returns true when current_iv >= 5
+        // IV counter starts at 1 and increments after each encrypt:
+        //   Initial: current_iv=1, 1>=5=false
+        //   After encrypt #1: IV used=1, current_iv=2, 2>=5=false
+        //   After encrypt #2: IV used=2, current_iv=3, 3>=5=false
+        //   After encrypt #3: IV used=3, current_iv=4, 4>=5=false
+        //   After encrypt #4: IV used=4, current_iv=5, 5>=5=TRUE
         let collection = NanoTdfCollectionBuilder::new()
             .kas_url("http://localhost:8080/kas")
             .policy_plaintext(b"test-policy".to_vec())
@@ -722,15 +774,16 @@ mod tests {
             .build(&public_key)
             .unwrap();
 
-        // Encrypt items until threshold
+        // Initial: counter=1
         assert!(!collection.rotation_threshold_reached());
 
-        for _ in 0..4 {
+        // Encrypt 3 items: counter goes 1->2->3->4
+        for _ in 0..3 {
             collection.encrypt_item(b"test").unwrap();
             assert!(!collection.rotation_threshold_reached());
         }
 
-        // Fifth item should trigger threshold
+        // Fourth item: counter goes 4->5, which triggers threshold (5>=5)
         collection.encrypt_item(b"test").unwrap();
         assert!(collection.rotation_threshold_reached());
     }

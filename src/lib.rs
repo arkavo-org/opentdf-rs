@@ -120,3 +120,12 @@ pub use opentdf_crypto::{wrap_key_with_rsa_oaep, EcdhKem, OaepHash, RsaOaepKem};
 
 // JSON-RPC types
 pub use jsonrpc::{InlinePayload, TdfJsonRpc, TdfJsonRpcBuilder, TdfManifestInline};
+
+// NanoTDF Collection types (for streaming/RTMP use cases)
+#[cfg(feature = "kas-client")]
+pub use opentdf_crypto::tdf::{
+    NanoTdfCollection, NanoTdfCollectionBuilder, NanoTdfCollectionDecryptor,
+};
+
+#[cfg(feature = "kas-client")]
+pub use opentdf_protocol::nanotdf::CollectionItem;
