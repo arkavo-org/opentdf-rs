@@ -35,6 +35,19 @@ pub struct Payload {
     pub tdf_spec_version: Option<String>,
 }
 
+impl Default for Payload {
+    fn default() -> Self {
+        Self {
+            payload_type: "reference".to_string(),
+            url: "0.payload".to_string(),
+            protocol: "zip".to_string(),
+            is_encrypted: true,
+            mime_type: Some("application/octet-stream".to_string()),
+            tdf_spec_version: Some("3.0.0".to_string()),
+        }
+    }
+}
+
 /// Encryption information in TDF manifest
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EncryptionInformation {
@@ -102,6 +115,16 @@ pub struct EncryptionMethod {
     pub iv: String,
 }
 
+impl Default for EncryptionMethod {
+    fn default() -> Self {
+        Self {
+            algorithm: "AES-256-GCM".to_string(),
+            is_streamable: true,
+            iv: String::new(),
+        }
+    }
+}
+
 /// Integrity information including segments and root signature
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntegrityInformation {
@@ -116,11 +139,32 @@ pub struct IntegrityInformation {
     pub encrypted_segment_size_default: u64,
 }
 
+impl Default for IntegrityInformation {
+    fn default() -> Self {
+        Self {
+            root_signature: RootSignature::default(),
+            segment_hash_alg: "GMAC".to_string(),
+            segments: Vec::new(),
+            segment_size_default: 1024 * 1024,                // 1MB
+            encrypted_segment_size_default: 1024 * 1024 + 28, // +IV+tag
+        }
+    }
+}
+
 /// Root signature for integrity verification
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RootSignature {
     pub alg: String,
     pub sig: String,
+}
+
+impl Default for RootSignature {
+    fn default() -> Self {
+        Self {
+            alg: "HS256".to_string(),
+            sig: String::new(),
+        }
+    }
 }
 
 /// Segment information

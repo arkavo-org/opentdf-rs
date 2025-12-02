@@ -218,6 +218,121 @@ impl TdfJsonRpc {
     }
 }
 
+// ============================================================================
+// Type Conversions between manifest and inline types
+// ============================================================================
+
+impl From<&TdfManifest> for TdfManifestInline {
+    /// Convert a standard TDF manifest to inline format.
+    ///
+    /// Note: The payload value will be empty and must be set separately
+    /// since the original payload is a file reference, not inline data.
+    fn from(manifest: &TdfManifest) -> Self {
+        Self {
+            payload: InlinePayload {
+                payload_type: "inline".to_string(),
+                mime_type: manifest
+                    .payload
+                    .mime_type
+                    .clone()
+                    .unwrap_or_else(|| "application/octet-stream".to_string()),
+                protocol: "base64".to_string(),
+                value: String::new(), // Must be set separately
+                is_encrypted: manifest.payload.is_encrypted,
+            },
+            encryption_information: manifest.encryption_information.clone(),
+            schema_version: manifest.schema_version.clone(),
+        }
+    }
+}
+
+impl From<TdfManifest> for TdfManifestInline {
+    /// Convert a standard TDF manifest to inline format (consuming version).
+    ///
+    /// Note: The payload value will be empty and must be set separately
+    /// since the original payload is a file reference, not inline data.
+    fn from(manifest: TdfManifest) -> Self {
+        Self {
+            payload: InlinePayload {
+                payload_type: "inline".to_string(),
+                mime_type: manifest
+                    .payload
+                    .mime_type
+                    .unwrap_or_else(|| "application/octet-stream".to_string()),
+                protocol: "base64".to_string(),
+                value: String::new(), // Must be set separately
+                is_encrypted: manifest.payload.is_encrypted,
+            },
+            encryption_information: manifest.encryption_information,
+            schema_version: manifest.schema_version,
+        }
+    }
+}
+
+impl From<&TdfManifestInline> for TdfManifest {
+    /// Convert an inline manifest back to standard TDF manifest format.
+    fn from(inline: &TdfManifestInline) -> Self {
+        Self {
+            payload: Payload {
+                payload_type: "reference".to_string(),
+                url: "inline".to_string(),
+                protocol: "base64".to_string(),
+                is_encrypted: inline.payload.is_encrypted,
+                mime_type: Some(inline.payload.mime_type.clone()),
+                tdf_spec_version: None,
+            },
+            encryption_information: inline.encryption_information.clone(),
+            schema_version: inline.schema_version.clone(),
+        }
+    }
+}
+
+impl From<TdfManifestInline> for TdfManifest {
+    /// Convert an inline manifest back to standard TDF manifest format (consuming version).
+    fn from(inline: TdfManifestInline) -> Self {
+        Self {
+            payload: Payload {
+                payload_type: "reference".to_string(),
+                url: "inline".to_string(),
+                protocol: "base64".to_string(),
+                is_encrypted: inline.payload.is_encrypted,
+                mime_type: Some(inline.payload.mime_type),
+                tdf_spec_version: None,
+            },
+            encryption_information: inline.encryption_information,
+            schema_version: inline.schema_version,
+        }
+    }
+}
+
+impl From<&InlinePayload> for Payload {
+    /// Convert an inline payload to a standard payload reference.
+    fn from(inline: &InlinePayload) -> Self {
+        Self {
+            payload_type: "reference".to_string(),
+            url: "inline".to_string(),
+            protocol: "base64".to_string(),
+            is_encrypted: inline.is_encrypted,
+            mime_type: Some(inline.mime_type.clone()),
+            tdf_spec_version: None,
+        }
+    }
+}
+
+impl From<InlinePayload> for Payload {
+    /// Convert an inline payload to a standard payload reference (consuming version).
+    fn from(inline: InlinePayload) -> Self {
+        Self {
+            payload_type: "reference".to_string(),
+            url: "inline".to_string(),
+            protocol: "base64".to_string(),
+            is_encrypted: inline.is_encrypted,
+            mime_type: Some(inline.mime_type),
+            tdf_spec_version: None,
+        }
+    }
+}
+
 impl TdfJsonRpcBuilder {
     /// Set the KAS (Key Access Service) URL
     #[must_use]
