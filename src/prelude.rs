@@ -47,7 +47,16 @@ pub use opentdf_crypto::{
 // Users don't need to explicitly import these anymore
 pub use crate::manifest::{IntegrityInformationExt, KeyAccessExt, TdfManifestExt};
 
-// KAS types (when feature enabled)
+// JSON-RPC types for inline TDF workflows
+pub use crate::jsonrpc::{InlinePayload, TdfJsonRpc, TdfJsonRpcBuilder, TdfManifestInline};
+
+// KAS protocol types for direct KAS integration
+pub use opentdf_protocol::{
+    KasPolicyBinding, KeyAccessObject, KeyAccessObjectWrapper, PolicyRequest, SignedRewrapRequest,
+    UnsignedRewrapRequest,
+};
+
+// KAS client types (when feature enabled)
 #[cfg(feature = "kas-client")]
 pub use crate::kas::KasClient;
 

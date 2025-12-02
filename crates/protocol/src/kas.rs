@@ -6,6 +6,8 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::manifest::{KeyAccess, PolicyBinding};
+
 /// KAS client errors
 #[derive(Debug, Error)]
 pub enum KasError {
@@ -157,7 +159,7 @@ pub struct KeyAccessObject {
 }
 
 /// Policy binding for KAS requests
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KasPolicyBinding {
     pub hash: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -205,4 +207,86 @@ pub struct KeyAccessRewrapResult {
     #[serde(rename = "entityWrappedKey")]
     pub entity_wrapped_key: Option<String>, // Legacy field
     pub error: Option<String>,
+}
+
+// ============================================================================
+// Type Conversions between manifest types and KAS protocol types
+// ============================================================================
+
+impl From<PolicyBinding> for KasPolicyBinding {
+    fn from(pb: PolicyBinding) -> Self {
+        Self {
+            hash: pb.hash,
+            algorithm: Some(pb.alg),
+        }
+    }
+}
+
+impl From<KasPolicyBinding> for PolicyBinding {
+    fn from(kpb: KasPolicyBinding) -> Self {
+        Self {
+            alg: kpb.algorithm.unwrap_or_else(|| "HS256".to_string()),
+            hash: kpb.hash,
+        }
+    }
+}
+
+impl From<&KeyAccess> for KeyAccessObject {
+    fn from(ka: &KeyAccess) -> Self {
+        Self {
+            key_type: ka.access_type.clone(),
+            url: ka.url.clone(),
+            protocol: ka.protocol.clone(),
+            wrapped_key: ka.wrapped_key.clone(),
+            policy_binding: ka.policy_binding.clone().into(),
+            encrypted_metadata: ka.encrypted_metadata.clone(),
+            kid: ka.kid.clone(),
+            header: None,
+        }
+    }
+}
+
+impl From<KeyAccess> for KeyAccessObject {
+    fn from(ka: KeyAccess) -> Self {
+        Self {
+            key_type: ka.access_type,
+            url: ka.url,
+            protocol: ka.protocol,
+            wrapped_key: ka.wrapped_key,
+            policy_binding: ka.policy_binding.into(),
+            encrypted_metadata: ka.encrypted_metadata,
+            kid: ka.kid,
+            header: None,
+        }
+    }
+}
+
+impl From<&KeyAccessObject> for KeyAccess {
+    fn from(kao: &KeyAccessObject) -> Self {
+        Self {
+            access_type: kao.key_type.clone(),
+            url: kao.url.clone(),
+            kid: kao.kid.clone(),
+            protocol: kao.protocol.clone(),
+            wrapped_key: kao.wrapped_key.clone(),
+            policy_binding: kao.policy_binding.clone().into(),
+            encrypted_metadata: kao.encrypted_metadata.clone(),
+            schema_version: Some("1.0".to_string()),
+        }
+    }
+}
+
+impl From<KeyAccessObject> for KeyAccess {
+    fn from(kao: KeyAccessObject) -> Self {
+        Self {
+            access_type: kao.key_type,
+            url: kao.url,
+            kid: kao.kid,
+            protocol: kao.protocol,
+            wrapped_key: kao.wrapped_key,
+            policy_binding: kao.policy_binding.into(),
+            encrypted_metadata: kao.encrypted_metadata,
+            schema_version: Some("1.0".to_string()),
+        }
+    }
 }
