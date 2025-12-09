@@ -2,6 +2,7 @@
 name = "opentdf-crypto"
 version.workspace = true
 edition = "2024"
+rust-version = "1.91"
 description = "OpenTDF cryptographic operations with security hardening"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/arkavo-org/opentdf-rs"
