@@ -19,7 +19,7 @@ aes-gcm.workspace = true
 typenum = "1.17"  # For AES-GCM variable tag sizes
 rand.workspace = true
 sha2.workspace = true
-hmac = "0.12"
+hmac.workspace = true
 base64.workspace = true
 
 # Security hardening
@@ -42,9 +42,9 @@ p256 = { workspace = true, optional = true }
 p384 = { workspace = true, optional = true }
 p521 = { workspace = true, optional = true }
 k256 = { workspace = true, optional = true }
-sha1 = { version = "0.10", optional = true }
-hkdf = { version = "0.12", optional = true }
-pkcs8 = { version = "0.10", features = ["pem"], optional = true }
+sha1 = { workspace = true, optional = true }
+hkdf = { workspace = true, optional = true }
+pkcs8 = { workspace = true, optional = true }
 
 # RSA backends (choose one)
 # aws-lc-rs: Constant-time RSA operations, FIPS validated (default for native)

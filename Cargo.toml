@@ -69,9 +69,15 @@ uuid = { version = "1.11", features = ["v4", "serde"] }
 
 # Cryptography
 aes-gcm = "0.10"
+sha1 = "0.10"
 sha2 = "0.10"
+hmac = "0.12"
+hkdf = "0.12"
 rand = "0.8"
 zeroize = { version = "1.8", features = ["derive", "alloc"] }
+
+# Key encoding
+pkcs8 = { version = "0.10", features = ["pem"] }
 
 # EC curves
 p256 = { version = "0.13", features = ["ecdsa", "pem", "ecdh"] }
@@ -80,14 +86,11 @@ p521 = { version = "0.13", features = ["ecdsa", "pem", "ecdh"] }
 k256 = { version = "0.13", features = ["ecdsa", "pem", "ecdh"] }
 
 # Async runtime
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
 
 [features]
 default = ["kas-client"]
-
-# MCP (Model Context Protocol) server support
-mcp = []
 
 # KAS (Key Access Service) client with aws-lc-rs backend (recommended)
 # Uses constant-time RSA operations, FIPS validated

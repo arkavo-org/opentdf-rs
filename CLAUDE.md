@@ -31,12 +31,6 @@ When starting a new conversation or initializing, please read these files:
 - Build WASM (nodejs): `wasm-pack build --target nodejs --out-dir pkg-node` (from `crates/wasm/`)
 - Test WASM builds for all targets before committing
 
-### MCP Server
-- Run MCP server: `cargo run -p opentdf-mcp-server`
-- Test MCP server: `node tools/test-mcp.js`
-- Test ABAC functionality: `node tools/test-abac-access.js`
-- Audit logging test: `node tools/audit-logging-test.js`
-
 ## Architecture Overview
 
 ### Workspace Structure
@@ -83,12 +77,6 @@ This is a Cargo workspace with the following crates:
 - Shares protocol structs with native implementation
 - Supports all TDF operations in-browser (encrypt, decrypt, policy evaluation)
 
-### MCP Server (`crates/mcp-server`)
-- JSON-RPC 2.0 server over stdio implementing Model Context Protocol
-- Exposes TDF operations as tools for AI agents (Claude, etc.)
-- Tools include: `tdf_create`, `tdf_read`, `policy_create`, `policy_validate`, `attribute_define`, `access_evaluate`, `policy_binding_verify`
-- Includes comprehensive audit logging for compliance
-
 ### Key Design Patterns
 - **Encryption Flow**: Data → AES-256-GCM encryption → Policy binding via HMAC-SHA256 → ZIP archive
 - **Policy Evaluation**: User attributes → Policy tree evaluation → Access decision with audit trail
@@ -116,17 +104,8 @@ This is a Cargo workspace with the following crates:
 - Address all clippy warnings before submitting code: `cargo clippy`
 - Format code before committing: `cargo fmt`
 - When adding new dependencies, document their purpose in comments
-- For MCP server development, test with Node.js tools in `tools/` directory
 - Verify backwards compatibility when modifying public APIs
 - Fix all compiler warnings before committing
-
-### MCP Server Development Notes
-- The MCP server uses JSON-RPC 2.0 over stdio (not HTTP)
-- Tool definitions require both `schema` and `inputSchema` fields for compatibility
-- Protocol version is "2024-11-05"
-- All responses must follow JSON-RPC 2.0 format with `jsonrpc`, `id`, `result`/`error` fields
-- When adding new tools, update both `initialize` and `listTools` responses
-- Test with `tools/test-mcp.js` to verify tool registration and execution
 
 ## PR Review Process
 
