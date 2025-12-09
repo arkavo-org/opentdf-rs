@@ -9,10 +9,10 @@
 use crate::helpers::{generate_key_32, generate_nonce};
 use crate::types::{PayloadKey, PolicyKey};
 use aes_gcm::{
-    aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit},
 };
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -224,9 +224,12 @@ impl TdfEncryption {
 
         let cipher = Aes256Gcm::new_from_slice(self.payload_key.as_slice())
             .map_err(|_| EncryptionError::InvalidKeyLength)?;
-        let mut segments = Vec::new();
-        let mut segment_info = Vec::new();
-        let mut gmac_tags = Vec::new();
+
+        // Pre-allocate vectors with expected capacity for performance
+        let segment_count = data.len().div_ceil(segment_size);
+        let mut segments = Vec::with_capacity(segment_count);
+        let mut segment_info = Vec::with_capacity(segment_count);
+        let mut gmac_tags = Vec::with_capacity(segment_count);
 
         // Process data in segments
         for chunk in data.chunks(segment_size) {
@@ -242,7 +245,6 @@ impl TdfEncryption {
             // AES-GCM output format: [encrypted_data][16-byte auth tag]
             // GMAC is the authentication tag (last 16 bytes)
             let gmac_tag = ciphertext[ciphertext.len() - GCM_TAG_SIZE..].to_vec();
-            gmac_tags.push(gmac_tag.clone());
 
             // Prepend IV to ciphertext for storage (OpenTDF format)
             let mut segment_data = iv.as_slice().to_vec();
@@ -255,6 +257,7 @@ impl TdfEncryption {
             });
 
             segments.push(segment_data);
+            gmac_tags.push(gmac_tag);
         }
 
         Ok(SegmentedPayload {
@@ -280,7 +283,13 @@ impl TdfEncryption {
     ///
     /// # Returns
     ///
-    /// Tuple of (plaintext, gmac_tags) for verification
+    /// Tuple of (plaintext, gmac_tags) for verification.
+    ///
+    /// # Security Note
+    ///
+    /// The returned plaintext is the caller's responsibility. Consider wrapping
+    /// in `zeroize::Zeroizing` if the content is sensitive and should be wiped
+    /// from memory when no longer needed.
     pub fn decrypt_with_segments(
         &self,
         payload: &[u8],
@@ -291,8 +300,11 @@ impl TdfEncryption {
 
         let cipher = Aes256Gcm::new_from_slice(self.payload_key.as_slice())
             .map_err(|_| EncryptionError::InvalidKeyLength)?;
-        let mut plaintext = Vec::new();
-        let mut gmac_tags = Vec::new();
+
+        // Pre-allocate with expected capacity
+        let total_plaintext_size: usize = segments.iter().map(|(pt, _)| *pt as usize).sum();
+        let mut plaintext = Vec::with_capacity(total_plaintext_size);
+        let mut gmac_tags = Vec::with_capacity(segments.len());
         let mut offset = 0;
 
         for (_plaintext_size, encrypted_size) in segments {

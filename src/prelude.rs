@@ -21,6 +21,7 @@
 
 // Re-export core types
 pub use crate::archive::{TdfArchive, TdfArchiveBuilder, TdfArchiveMemoryBuilder, TdfError};
+pub use crate::error::OpenTdfError;
 pub use crate::fqn::{AttributeFqn, FqnValidationRules, NamespaceRegistry};
 pub use crate::policy::{
     AttributeCondition, AttributeIdentifier, AttributePolicy, AttributeValue, FqnError,

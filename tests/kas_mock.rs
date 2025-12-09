@@ -7,9 +7,9 @@
 mod kas_mock_tests {
     use mockito::Server;
     use opentdf::{
+        TdfManifest,
         kas::{KasClient, KeyType},
         manifest::TdfManifestExt,
-        TdfManifest,
     };
 
     /// Helper to create a valid mock KAS rewrap response
@@ -30,7 +30,7 @@ mod kas_mock_tests {
 
     /// Helper to create a properly formatted test manifest with policy
     fn create_test_manifest_with_policy(kas_url: String) -> TdfManifest {
-        use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
         use opentdf::{AttributeIdentifier, AttributePolicy, AttributeValue, Operator, Policy};
 
         // Create a simple policy

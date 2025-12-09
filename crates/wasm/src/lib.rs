@@ -78,7 +78,7 @@ pub async fn tdf_create(data: String, kas_url: String, policy_json: String) -> W
 }
 
 async fn _tdf_create_impl(data: &str, kas_url: &str, policy_json: &str) -> Result<String, String> {
-    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
     // Step 1: Fetch KAS public key from the server
     let kas_key_response = kas::fetch_kas_public_key(kas_url).await?;
@@ -200,7 +200,7 @@ pub fn tdf_read(tdf_data: &str) -> WasmResult {
 }
 
 fn _tdf_read_impl(tdf_data: &str) -> Result<String, String> {
-    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
     // Decode base64 TDF data
     let tdf_bytes = BASE64
@@ -246,7 +246,7 @@ pub async fn tdf_decrypt_with_kas(tdf_data: String, kas_token: String) -> WasmRe
 }
 
 async fn _tdf_decrypt_with_kas_impl(tdf_data: &str, kas_token: &str) -> Result<String, String> {
-    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
     // Step 1: Parse TDF archive and extract manifest
     let tdf_bytes = BASE64
@@ -385,7 +385,7 @@ fn _access_evaluate_impl(policy_json: &str, attributes_json: &str) -> Result<boo
                             return Err(format!(
                                 "Unsupported array element type for attribute '{}'",
                                 key
-                            ))
+                            ));
                         }
                     }
                 } else {

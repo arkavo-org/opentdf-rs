@@ -43,7 +43,7 @@
 
 use crate::kem::ec::{EcCurve, EcdhKem};
 use crate::tdf::nanotdf::NanoTdfError;
-use crate::tdf::nanotdf_crypto::{decrypt, encrypt, NanoTdfIv, TagSize};
+use crate::tdf::nanotdf_crypto::{NanoTdfIv, TagSize, decrypt, encrypt};
 use crate::types::AesKey;
 use opentdf_protocol::binary::BinaryWrite;
 use opentdf_protocol::nanotdf::{
@@ -638,8 +638,8 @@ mod tests {
     // Test key generation helper
     #[cfg(feature = "kas")]
     fn generate_test_keypair() -> (Vec<u8>, Vec<u8>) {
-        use p256::pkcs8::EncodePrivateKey;
         use p256::SecretKey;
+        use p256::pkcs8::EncodePrivateKey;
         use rand::rngs::OsRng;
 
         let secret = SecretKey::random(&mut OsRng);

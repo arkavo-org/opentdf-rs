@@ -15,8 +15,8 @@
 #[cfg(test)]
 mod kas_tests {
     use opentdf::{
-        kas::{EphemeralKeyPair, KasClient},
         TdfArchive, TdfEncryption, TdfManifest,
+        kas::{EphemeralKeyPair, KasClient},
     };
     use std::env;
 

@@ -22,8 +22,8 @@ use thiserror::Error;
 // Conditional imports based on backend
 #[cfg(not(feature = "nanotdf-mbedtls"))]
 use aes_gcm::{
-    aead::{Aead, KeyInit, Payload},
     Aes256Gcm as Aes256Gcm128, // Standard 128-bit tag
+    aead::{Aead, KeyInit, Payload},
 };
 #[cfg(not(feature = "nanotdf-mbedtls"))]
 use typenum::{U12, U13, U14, U15};
@@ -155,7 +155,7 @@ type Aes256Gcm96 = aes_gcm::AesGcm<aes::Aes256, U12, U12>; // 12-byte nonce, 12-
 type Aes256Gcm104 = aes_gcm::AesGcm<aes::Aes256, U12, U13>; // 12-byte nonce, 13-byte tag (104-bit)
 type Aes256Gcm112 = aes_gcm::AesGcm<aes::Aes256, U12, U14>; // 12-byte nonce, 14-byte tag (112-bit)
 type Aes256Gcm120 = aes_gcm::AesGcm<aes::Aes256, U12, U15>; // 12-byte nonce, 15-byte tag (120-bit)
-                                                            // Aes256Gcm128 imported above as the standard variant (12-byte nonce, 16-byte tag, 128-bit)
+// Aes256Gcm128 imported above as the standard variant (12-byte nonce, 16-byte tag, 128-bit)
 
 /// Encrypt data with AES-256-GCM using NanoTDF parameters
 ///

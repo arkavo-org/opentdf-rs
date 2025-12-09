@@ -21,10 +21,10 @@
 //! let signed_token = create_signed_jwt(&unsigned_request, &signing_key)?;
 //! ```
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use opentdf_protocol::UnsignedRewrapRequest;
-use p256::ecdsa::{signature::Signer, SigningKey};
+use p256::ecdsa::{SigningKey, signature::Signer};
 use serde_json::json;
 use std::time::{SystemTime, UNIX_EPOCH};
 

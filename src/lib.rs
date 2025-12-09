@@ -42,6 +42,7 @@
 //! ```
 
 mod archive;
+mod error;
 pub mod fqn;
 pub mod manifest;
 mod policy;
@@ -96,6 +97,9 @@ pub use tdf::{TdfDecryptBuilder, TdfDecryptFileBuilder};
 // Core types
 pub use archive::{TdfArchive, TdfArchiveBuilder, TdfArchiveMemoryBuilder, TdfError};
 
+// Unified error type for SDK consumers
+pub use error::OpenTdfError;
+
 // Policy types
 pub use policy::{
     AttributeCondition, AttributeIdentifier, AttributePolicy, AttributeValue, FqnError,
@@ -112,11 +116,11 @@ pub use kas::{KasClient, KeyType};
 
 #[cfg(feature = "kas-client")]
 pub use kas_key::{
-    fetch_kas_public_key, validate_rsa_public_key_pem, KasKeyError, KasPublicKeyResponse,
+    KasKeyError, KasPublicKeyResponse, fetch_kas_public_key, validate_rsa_public_key_pem,
 };
 
 #[cfg(feature = "kas-client")]
-pub use opentdf_crypto::{wrap_key_with_rsa_oaep, EcdhKem, OaepHash, RsaOaepKem};
+pub use opentdf_crypto::{EcdhKem, OaepHash, RsaOaepKem, wrap_key_with_rsa_oaep};
 
 // JSON-RPC types
 pub use jsonrpc::{InlinePayload, TdfJsonRpc, TdfJsonRpcBuilder, TdfManifestInline};

@@ -122,9 +122,11 @@ mod tests {
         }"#;
 
         let response: KasPublicKeyResponse = serde_json::from_str(json).unwrap();
-        assert!(response
-            .public_key
-            .starts_with("-----BEGIN PUBLIC KEY-----"));
+        assert!(
+            response
+                .public_key
+                .starts_with("-----BEGIN PUBLIC KEY-----")
+        );
         assert_eq!(response.kid, "r1");
     }
 

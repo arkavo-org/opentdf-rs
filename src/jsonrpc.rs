@@ -47,8 +47,8 @@ use crate::manifest::{
     KeyAccess, Payload, RootSignature, Segment, TdfManifest,
 };
 use crate::policy::Policy;
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use opentdf_crypto::{calculate_policy_binding, EncryptionError, TdfEncryption};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use opentdf_crypto::{EncryptionError, TdfEncryption, calculate_policy_binding};
 use serde::{Deserialize, Serialize};
 
 /// TDF envelope for JSON-RPC protocols with inline payload
@@ -166,8 +166,8 @@ impl TdfJsonRpc {
     /// ```
     pub fn decrypt_with_key(&self, payload_key: &[u8]) -> Result<Vec<u8>, EncryptionError> {
         use aes_gcm::{
-            aead::{Aead, KeyInit},
             Aes256Gcm, Nonce,
+            aead::{Aead, KeyInit},
         };
 
         // Decode base64 payload

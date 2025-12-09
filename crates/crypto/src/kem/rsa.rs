@@ -14,7 +14,7 @@
 //!   build requirements cannot be met.
 
 use super::{KemError, KeyEncapsulation};
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
 /// OAEP hash algorithm selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -72,8 +72,8 @@ impl RsaOaepKem {
 mod aws_lc_impl {
     use super::*;
     use aws_lc_rs::rsa::{
-        OaepPrivateDecryptingKey, OaepPublicEncryptingKey, PrivateDecryptingKey,
-        PublicEncryptingKey, OAEP_SHA1_MGF1SHA1, OAEP_SHA256_MGF1SHA256,
+        OAEP_SHA1_MGF1SHA1, OAEP_SHA256_MGF1SHA256, OaepPrivateDecryptingKey,
+        OaepPublicEncryptingKey, PrivateDecryptingKey, PublicEncryptingKey,
     };
 
     /// Parse PEM to DER bytes
@@ -173,8 +173,8 @@ mod rustcrypto_impl {
     use super::*;
     use rand::rngs::OsRng;
     use rsa::{
-        pkcs8::{DecodePrivateKey, DecodePublicKey},
         Oaep, RsaPrivateKey, RsaPublicKey,
+        pkcs8::{DecodePrivateKey, DecodePublicKey},
     };
     use sha1::Sha1;
     use sha2::Sha256;

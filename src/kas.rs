@@ -54,24 +54,24 @@
 #![allow(deprecated)]
 
 use crate::manifest::TdfManifest;
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use opentdf_protocol::{kas::Policy, KasError, *};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use opentdf_protocol::{KasError, kas::Policy, *};
 
 #[cfg(feature = "kas-client")]
 use {
     crate::hkdf::Hkdf,
     crate::p256::{
-        pkcs8::{DecodePublicKey, EncodePublicKey},
         PublicKey, SecretKey,
+        pkcs8::{DecodePublicKey, EncodePublicKey},
     },
     crate::sha2::{Digest, Sha256},
     aes_gcm::{
-        aead::{Aead, KeyInit},
         Aes256Gcm, Nonce,
+        aead::{Aead, KeyInit},
     },
     aws_lc_rs::{
         encoding::{AsDer, Pkcs8V1Der, PublicKeyX509Der},
-        rsa::{KeySize, OaepPrivateDecryptingKey, PrivateDecryptingKey, OAEP_SHA1_MGF1SHA1},
+        rsa::{KeySize, OAEP_SHA1_MGF1SHA1, OaepPrivateDecryptingKey, PrivateDecryptingKey},
     },
     reqwest::Client,
 };
@@ -224,6 +224,55 @@ impl KasClient {
         })
     }
 
+    /// Internal helper for sending signed rewrap requests to KAS
+    ///
+    /// Handles HTTP POST, error mapping for 401/403, and JSON response parsing.
+    async fn send_rewrap_request(
+        &self,
+        signed_request: &SignedRewrapRequest,
+    ) -> Result<RewrapResponse, KasError> {
+        let rewrap_endpoint = format!("{}/kas/v2/rewrap", self.base_url);
+
+        let response = self
+            .http_client
+            .post(&rewrap_endpoint)
+            .header("Authorization", format!("Bearer {}", self.oauth_token))
+            .header("Content-Type", "application/json")
+            .json(signed_request)
+            .send()
+            .await
+            .map_err(|e| KasError::HttpError {
+                status: 0,
+                message: format!("HTTP request failed: {}", e),
+            })?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let error_body = response.text().await.unwrap_or_default();
+            return Err(match status.as_u16() {
+                401 => KasError::AuthenticationFailed {
+                    reason: "Invalid or missing OAuth token".to_string(),
+                },
+                403 => KasError::AccessDenied {
+                    resource: "KAS endpoint".to_string(),
+                    reason: error_body,
+                },
+                _ => KasError::HttpError {
+                    status: status.as_u16(),
+                    message: format!("HTTP {}: {}", status, error_body),
+                },
+            });
+        }
+
+        response
+            .json()
+            .await
+            .map_err(|e| KasError::InvalidResponse {
+                reason: format!("Failed to parse JSON response: {}", e),
+                expected: Some("RewrapResponse".to_string()),
+            })
+    }
+
     /// Rewrap a key from a Standard TDF manifest
     ///
     /// This performs the complete KAS rewrap flow:
@@ -264,50 +313,8 @@ impl KasClient {
             signed_request_token,
         };
 
-        // Make HTTP request to KAS
-        let rewrap_endpoint = format!("{}/kas/v2/rewrap", self.base_url);
-
-        let response = self
-            .http_client
-            .post(&rewrap_endpoint)
-            .header("Authorization", format!("Bearer {}", self.oauth_token))
-            .header("Content-Type", "application/json")
-            .json(&signed_request)
-            .send()
-            .await
-            .map_err(|e| KasError::HttpError {
-                status: 0,
-                message: format!("HTTP request failed: {}", e),
-            })?;
-
-        // Handle HTTP errors
-        let status = response.status();
-        if !status.is_success() {
-            let error_body = response.text().await.unwrap_or_default();
-            return Err(match status.as_u16() {
-                401 => KasError::AuthenticationFailed {
-                    reason: "Invalid or missing OAuth token".to_string(),
-                },
-                403 => KasError::AccessDenied {
-                    resource: "KAS endpoint".to_string(),
-                    reason: error_body.clone(),
-                },
-                _ => KasError::HttpError {
-                    status: status.as_u16(),
-                    message: format!("HTTP {}: {}", status, error_body),
-                },
-            });
-        }
-
-        // Parse response - NanoTDF returns the symmetric key directly
-        let rewrap_response: RewrapResponse =
-            response
-                .json()
-                .await
-                .map_err(|e| KasError::InvalidResponse {
-                    reason: format!("Failed to parse JSON response: {}", e),
-                    expected: Some("RewrapResponse".to_string()),
-                })?;
+        // Send request and parse response
+        let rewrap_response = self.send_rewrap_request(&signed_request).await?;
 
         // For NanoTDF, extract the DEK (symmetric key) directly from response
         // The KAS has already performed ECDH and derived the key
@@ -330,51 +337,8 @@ impl KasClient {
             signed_request_token,
         };
 
-        // Make the HTTP request to KAS
-        let rewrap_endpoint = format!("{}/kas/v2/rewrap", self.base_url);
-
-        let response = self
-            .http_client
-            .post(&rewrap_endpoint)
-            .header("Authorization", format!("Bearer {}", self.oauth_token))
-            .header("Content-Type", "application/json")
-            .json(&signed_request)
-            .send()
-            .await
-            .map_err(|e| KasError::HttpError {
-                status: 0,
-                message: format!("HTTP request failed: {}", e),
-            })?;
-
-        // Handle HTTP errors
-        let status = response.status();
-        if !status.is_success() {
-            let error_body = response.text().await.unwrap_or_default();
-
-            return Err(match status.as_u16() {
-                401 => KasError::AuthenticationFailed {
-                    reason: "Invalid or missing OAuth token".to_string(),
-                },
-                403 => KasError::AccessDenied {
-                    resource: "KAS endpoint".to_string(),
-                    reason: error_body.clone(),
-                },
-                _ => KasError::HttpError {
-                    status: status.as_u16(),
-                    message: format!("HTTP {}: {}", status, error_body),
-                },
-            });
-        }
-
-        // Parse response
-        let rewrap_response: RewrapResponse =
-            response
-                .json()
-                .await
-                .map_err(|e| KasError::InvalidResponse {
-                    reason: format!("Failed to parse JSON response: {}", e),
-                    expected: Some("RewrapResponse".to_string()),
-                })?;
+        // Send request and parse response
+        let rewrap_response = self.send_rewrap_request(&signed_request).await?;
 
         // Extract the wrapped key and session public key
         let (wrapped_key, session_public_key_pem) = self.extract_wrapped_key(&rewrap_response)?;
@@ -400,7 +364,7 @@ impl KasClient {
     /// The JWT is signed with RS256 using the client's internal signing key.
     /// Uses aws-lc-rs for constant-time RSA operations (FIPS validated).
     fn sign_rewrap_request(&self, request: &UnsignedRewrapRequest) -> Result<String, KasError> {
-        use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+        use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
         use serde::{Deserialize, Serialize};
 
         #[derive(Debug, Serialize, Deserialize)]
@@ -814,16 +778,20 @@ mod tests {
             // Test RSA key generation
             let key_pair_rsa =
                 EphemeralKeyPair::new(KeyType::RSA).expect("Failed to generate RSA key pair");
-            assert!(key_pair_rsa
-                .public_key_pem()
-                .starts_with("-----BEGIN PUBLIC KEY-----"));
+            assert!(
+                key_pair_rsa
+                    .public_key_pem()
+                    .starts_with("-----BEGIN PUBLIC KEY-----")
+            );
 
             // Test EC key generation
             let key_pair_ec =
                 EphemeralKeyPair::new(KeyType::EC).expect("Failed to generate EC key pair");
-            assert!(key_pair_ec
-                .public_key_pem()
-                .starts_with("-----BEGIN PUBLIC KEY-----"));
+            assert!(
+                key_pair_ec
+                    .public_key_pem()
+                    .starts_with("-----BEGIN PUBLIC KEY-----")
+            );
         }
     }
 

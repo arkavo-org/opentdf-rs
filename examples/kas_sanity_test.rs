@@ -1,5 +1,5 @@
 // Quick sanity test for ZTDF-JSON with real KAS endpoint
-use opentdf::{jsonrpc::TdfJsonRpc, Policy};
+use opentdf::{Policy, jsonrpc::TdfJsonRpc};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== ZTDF-JSON Sanity Test with https://100.arkavo.net/kas/v2 ===\n");
