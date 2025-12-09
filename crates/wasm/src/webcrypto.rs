@@ -23,23 +23,21 @@ fn get_subtle_crypto() -> Result<SubtleCrypto, String> {
     let global = js_sys::global();
 
     // Try window.crypto (browser context)
-    if let Ok(crypto) = Reflect::get(&global, &JsValue::from_str("crypto")) {
-        if !crypto.is_undefined() {
-            let crypto: Crypto = crypto.unchecked_into();
-            return Ok(crypto.subtle());
-        }
+    if let Ok(crypto) = Reflect::get(&global, &JsValue::from_str("crypto"))
+        && !crypto.is_undefined()
+    {
+        let crypto: Crypto = crypto.unchecked_into();
+        return Ok(crypto.subtle());
     }
 
     // Try self.crypto (Web Worker context)
-    if let Ok(self_obj) = Reflect::get(&global, &JsValue::from_str("self")) {
-        if !self_obj.is_undefined() {
-            if let Ok(crypto) = Reflect::get(&self_obj, &JsValue::from_str("crypto")) {
-                if !crypto.is_undefined() {
-                    let crypto: Crypto = crypto.unchecked_into();
-                    return Ok(crypto.subtle());
-                }
-            }
-        }
+    if let Ok(self_obj) = Reflect::get(&global, &JsValue::from_str("self"))
+        && !self_obj.is_undefined()
+        && let Ok(crypto) = Reflect::get(&self_obj, &JsValue::from_str("crypto"))
+        && !crypto.is_undefined()
+    {
+        let crypto: Crypto = crypto.unchecked_into();
+        return Ok(crypto.subtle());
     }
 
     Err("WebCrypto not available in this environment".to_string())

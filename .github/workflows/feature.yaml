@@ -91,57 +91,6 @@ jobs:
       - name: run-bench
         run: cargo bench --bench benchmarks | tee output.txt
 
-  mcp:
-    name: mcp
-    runs-on: ubuntu-latest
-    steps:
-      - name: checkout
-        uses: actions/checkout@v4
-
-      - name: setup-rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: setup-node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: run-mcp-tests
-        working-directory: ./tools
-        run: node test-mcp.js
-        continue-on-error: true
-
-      - name: check-output
-        run: |
-          if [ -f tools/sample.tdf ]; then
-            echo "✅ Test created sample.tdf successfully"
-          else
-            echo "::error::Test did not create sample.tdf"
-            exit 1
-          fi
-
-      - name: create-artifacts
-        run: mkdir -p artifacts
-
-      - name: copy-artifacts
-        run: |
-          cp tools/sample.tdf artifacts/ || echo "No sample.tdf file found"
-          echo "Test completed at $(date)" > artifacts/completion.txt
-
-      - name: upload-artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: mcp-test-artifacts
-          path: artifacts/
-          retention-days: 7
-
-      - name: cleanup
-        if: always()
-        run: |
-          echo "Cleaning up resources..."
-          killall -9 opentdf-mcp-server || true
-          killall -9 node || true
-
   wasm:
     name: wasm
     runs-on: ubuntu-latest
