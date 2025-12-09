@@ -89,7 +89,7 @@ jobs:
           targets: x86_64-unknown-linux-gnu
 
       - name: run-bench
-        run: cargo bench --bench benchmarks | tee output.txt
+        run: cargo bench --bench memory_builder | tee output.txt
 
   wasm:
     name: wasm
