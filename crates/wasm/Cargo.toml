@@ -5,6 +5,12 @@ edition = "2024"
 description = "WebAssembly bindings for OpenTDF (Trusted Data Format)"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/arkavo-org/opentdf-rs"
+authors = ["Arkavo LLC <info@arkavo.com>"]
+documentation = "https://docs.rs/opentdf-wasm"
+homepage = "https://github.com/arkavo-org/opentdf-rs"
+keywords = ["opentdf", "tdf", "wasm", "webassembly", "browser"]
+categories = ["wasm", "cryptography", "web-programming"]
+readme = "README.md"
 
 [package.metadata.wasm-pack.profile.release]
 # Enable wasm-opt for production builds (20-30% size reduction)
@@ -19,8 +25,8 @@ wasm-opt = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-opentdf = { path = "../..", default-features = false }
-opentdf-protocol = { path = "../protocol" }
+opentdf = { path = "../..", version = "0.9.0", default-features = false }
+opentdf-protocol = { path = "../protocol", version = "0.9.0" }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 serde = { version = "1.0", features = ["derive"] }

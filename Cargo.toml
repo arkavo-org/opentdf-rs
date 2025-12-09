@@ -5,11 +5,17 @@ edition = "2024"
 description = "Rust implementation of OpenTDF (Trusted Data Format)"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/arkavo-org/opentdf-rs"
+authors = ["Arkavo LLC <info@arkavo.com>"]
+documentation = "https://docs.rs/opentdf"
+homepage = "https://github.com/arkavo-org/opentdf-rs"
+keywords = ["opentdf", "tdf", "encryption", "data-protection", "zero-trust"]
+categories = ["cryptography", "encoding", "parser-implementations"]
+readme = "README.md"
 
 [dependencies]
 # New modular crates
-opentdf-protocol = { path = "crates/protocol" }
-opentdf-crypto = { path = "crates/crypto", default-features = false }
+opentdf-protocol = { path = "crates/protocol", version = "0.9.0" }
+opentdf-crypto = { path = "crates/crypto", version = "0.9.0", default-features = false }
 
 # Core dependencies (using workspace versions)
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
