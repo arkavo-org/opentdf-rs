@@ -2,8 +2,8 @@
 //!
 //! The header contains all metadata needed to decrypt the NanoTDF payload.
 
-use crate::binary::{read_u8, write_u8, BinaryRead, BinaryWrite};
-use crate::nanotdf::{resource_locator::ResourceLocator, Policy, MAGIC_NUMBER_AND_VERSION};
+use crate::binary::{BinaryRead, BinaryWrite, read_u8, write_u8};
+use crate::nanotdf::{MAGIC_NUMBER_AND_VERSION, Policy, resource_locator::ResourceLocator};
 use std::io::{self, Read, Write};
 
 /// Magic number and version (3 bytes)

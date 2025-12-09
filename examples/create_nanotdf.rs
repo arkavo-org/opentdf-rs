@@ -5,9 +5,9 @@
 
 use opentdf_crypto::tdf::nanotdf::NanoTdfBuilder;
 use opentdf_protocol::nanotdf::header::EccMode;
+use p256::SecretKey as P256SecretKey;
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use p256::pkcs8::EncodePrivateKey;
-use p256::SecretKey as P256SecretKey;
 use rand::rngs::OsRng;
 use std::env;
 use std::fs;

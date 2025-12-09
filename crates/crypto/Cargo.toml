@@ -1,44 +1,51 @@
 [package]
 name = "opentdf-crypto"
 version.workspace = true
-edition = "2021"
+edition = "2024"
+rust-version = "1.91"
 description = "OpenTDF cryptographic operations with security hardening"
-license = "Apache-2.0"
+license = "MIT OR Apache-2.0"
 repository = "https://github.com/arkavo-org/opentdf-rs"
+authors = ["Arkavo LLC <info@arkavo.com>"]
+documentation = "https://docs.rs/opentdf-crypto"
+homepage = "https://github.com/arkavo-org/opentdf-rs"
+keywords = ["opentdf", "tdf", "cryptography", "aes-gcm", "nanotdf"]
+categories = ["cryptography", "no-std"]
+readme = "README.md"
 
 [dependencies]
-# Core cryptography
+# Core cryptography (using workspace versions where applicable)
 aes = "0.8"  # For AES-256 block cipher
-aes-gcm = "0.10"
+aes-gcm.workspace = true
 typenum = "1.17"  # For AES-GCM variable tag sizes
-rand = "0.8"
-sha2 = "0.10"
-hmac = "0.12"
-base64 = "0.22"
+rand.workspace = true
+sha2.workspace = true
+hmac.workspace = true
+base64.workspace = true
 
 # Security hardening
-zeroize = { version = "1.8", features = ["derive", "alloc"] }
+zeroize.workspace = true
 subtle = "2.6"
 hex = "0.4"
 
 # Serialization
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde.workspace = true
+serde_json.workspace = true
 
 # Error handling
-thiserror = "2.0"
+thiserror.workspace = true
 
 # Protocol types (for NanoTDF)
-opentdf-protocol = { path = "../protocol" }
+opentdf-protocol = { path = "../protocol", version = "0.9.0" }
 
 # KAS feature dependencies (EC, HKDF)
-p256 = { version = "0.13", features = ["ecdsa", "pem", "ecdh"], optional = true }
-p384 = { version = "0.13", features = ["ecdsa", "pem", "ecdh"], optional = true }
-p521 = { version = "0.13", features = ["ecdsa", "pem", "ecdh"], optional = true }
-k256 = { version = "0.13", features = ["ecdsa", "pem", "ecdh"], optional = true }
-sha1 = { version = "0.10", optional = true }
-hkdf = { version = "0.12", optional = true }
-pkcs8 = { version = "0.10", features = ["pem"], optional = true }
+p256 = { workspace = true, optional = true }
+p384 = { workspace = true, optional = true }
+p521 = { workspace = true, optional = true }
+k256 = { workspace = true, optional = true }
+sha1 = { workspace = true, optional = true }
+hkdf = { workspace = true, optional = true }
+pkcs8 = { workspace = true, optional = true }
 
 # RSA backends (choose one)
 # aws-lc-rs: Constant-time RSA operations, FIPS validated (default for native)

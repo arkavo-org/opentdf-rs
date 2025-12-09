@@ -56,7 +56,7 @@ impl<'a> TdfEntry<'a> {
     /// ```
     #[cfg(feature = "kas-client")]
     pub async fn decrypt_with_kas(&self, kas_client: &KasClient) -> Result<Vec<u8>, TdfError> {
-        use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
         // Unwrap the payload key using KAS
         // KasClient handles JWT signing internally
@@ -124,8 +124,8 @@ impl<'a> TdfEntry<'a> {
 
             // Create decryption cipher
             use aes_gcm::{
-                aead::{Aead, KeyInit},
                 Aes256Gcm, Nonce,
+                aead::{Aead, KeyInit},
             };
 
             let cipher = Aes256Gcm::new_from_slice(&payload_key).map_err(|_| {

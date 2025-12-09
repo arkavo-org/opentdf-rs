@@ -31,16 +31,16 @@
 //! ```
 
 use crate::kem::ec::{EcCurve, EcdhKem};
-use crate::tdf::nanotdf_crypto::{decrypt, encrypt, NanoTdfIv, TagSize};
-use opentdf_protocol::binary::{read_u24_be, write_u24_be, BinaryRead, BinaryWrite};
+use crate::tdf::nanotdf_crypto::{NanoTdfIv, TagSize, decrypt, encrypt};
+use opentdf_protocol::binary::{BinaryRead, BinaryWrite, read_u24_be, write_u24_be};
 use opentdf_protocol::nanotdf::{
+    MagicNumberAndVersion,
     header::{
         EccAndBindingMode, EccMode, Header, PayloadSignatureMode, SymmetricAndPayloadConfig,
         SymmetricCipher,
     },
     policy::{Policy, PolicyBody},
     resource_locator::{Protocol, ResourceLocator},
-    MagicNumberAndVersion,
 };
 use std::io::{self, Cursor, Read, Write};
 use thiserror::Error;
@@ -84,9 +84,7 @@ pub enum NanoTdfError {
     )]
     IvExhausted,
 
-    #[error(
-        "Collection rotation threshold reached ({0} items). Consider creating new collection."
-    )]
+    #[error("Collection rotation threshold reached ({0} items). Consider creating new collection.")]
     RotationThresholdReached(u32),
 
     #[error("Invalid DEK length: expected 32 bytes, got {0}")]
@@ -296,7 +294,7 @@ impl NanoTdfBuilder {
                 _ => {
                     return Err(NanoTdfError::Unsupported(
                         "Encrypted policy with key access not supported".to_string(),
-                    ))
+                    ));
                 }
             };
 
@@ -460,7 +458,7 @@ impl NanoTdf {
                 _ => {
                     return Err(NanoTdfError::Unsupported(
                         "Encrypted policy with key access not supported".to_string(),
-                    ))
+                    ));
                 }
             };
 

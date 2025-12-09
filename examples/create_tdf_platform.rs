@@ -10,8 +10,9 @@
 //! ```
 
 use opentdf::{
+    Policy, TdfArchiveBuilder, TdfEncryption, TdfManifest,
     manifest::{IntegrityInformationExt, KeyAccessExt, TdfManifestExt},
-    wrap_key_with_rsa_oaep, Policy, TdfArchiveBuilder, TdfEncryption, TdfManifest,
+    wrap_key_with_rsa_oaep,
 };
 use std::env;
 

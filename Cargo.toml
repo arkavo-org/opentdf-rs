@@ -1,31 +1,38 @@
 [package]
 name = "opentdf"
 version.workspace = true
-edition = "2021"
+edition = "2024"
+rust-version = "1.91"
 description = "Rust implementation of OpenTDF (Trusted Data Format)"
-license = "Apache-2.0"
+license = "MIT OR Apache-2.0"
 repository = "https://github.com/arkavo-org/opentdf-rs"
+authors = ["Arkavo LLC <info@arkavo.com>"]
+documentation = "https://docs.rs/opentdf"
+homepage = "https://github.com/arkavo-org/opentdf-rs"
+keywords = ["opentdf", "tdf", "encryption", "data-protection", "zero-trust"]
+categories = ["cryptography", "encoding", "parser-implementations"]
+readme = "README.md"
 
 [dependencies]
 # New modular crates
-opentdf-protocol = { path = "crates/protocol" }
-opentdf-crypto = { path = "crates/crypto", default-features = false }
+opentdf-protocol = { path = "crates/protocol", version = "0.9.0" }
+opentdf-crypto = { path = "crates/crypto", version = "0.9.0", default-features = false }
 
-# Core dependencies
+# Core dependencies (using workspace versions)
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
-serde_json = "1.0"
-serde = { version = "1.0", features = ["derive"] }
-base64 = "0.22"
-thiserror = "2.0"
-chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1.11", features = ["v4", "serde"] }
-aes-gcm = "0.10"
+serde_json.workspace = true
+serde.workspace = true
+base64.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+aes-gcm.workspace = true
 
 # KAS client dependencies (simplified, crypto moved to opentdf-crypto)
-reqwest = { version = "0.12", default-features = false, features = ["json"], optional = true }
-tokio = { version = "1", features = ["full"], optional = true }
+reqwest = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
 jsonwebtoken = { version = "9", optional = true }
-rand = { version = "0.8", optional = true }
+rand = { workspace = true, optional = true }
 # RSA operations use aws-lc-rs (constant-time, FIPS validated)
 aws-lc-rs = { version = "1.15", optional = true }
 pem = { version = "3.0", optional = true }
@@ -42,13 +49,49 @@ rand = "0.8"
 members = ["crates/protocol", "crates/crypto", "crates/wasm"]
 
 [workspace.package]
-version = "0.8.0"
+version = "0.9.0"
+
+[workspace.dependencies]
+# Core serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+thiserror = "2.0"
+
+# Encoding
+base64 = "0.22"
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Identifiers
+uuid = { version = "1.11", features = ["v4", "serde"] }
+
+# Cryptography
+aes-gcm = "0.10"
+sha1 = "0.10"
+sha2 = "0.10"
+hmac = "0.12"
+hkdf = "0.12"
+rand = "0.8"
+zeroize = { version = "1.8", features = ["derive", "alloc"] }
+
+# Key encoding
+pkcs8 = { version = "0.10", features = ["pem"] }
+
+# EC curves
+p256 = { version = "0.13", features = ["ecdsa", "pem", "ecdh"] }
+p384 = { version = "0.13", features = ["ecdsa", "pem", "ecdh"] }
+p521 = { version = "0.13", features = ["ecdsa", "pem", "ecdh"] }
+k256 = { version = "0.13", features = ["ecdsa", "pem", "ecdh"] }
+
+# Async runtime
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
 
 [features]
 default = ["kas-client"]
-
-# MCP (Model Context Protocol) server support
-mcp = []
 
 # KAS (Key Access Service) client with aws-lc-rs backend (recommended)
 # Uses constant-time RSA operations, FIPS validated

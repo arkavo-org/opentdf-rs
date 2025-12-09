@@ -7,7 +7,7 @@
 //! - Constant-time operations (browser-native)
 //! - No RUSTSEC-2023-0071 vulnerability exposure
 
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use opentdf_protocol::kas::*;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
@@ -206,7 +206,7 @@ pub fn build_rewrap_request(
 /// Signs the rewrap request with an ephemeral P-256 ECDSA key.
 /// The JWT includes the requestBody (as a JSON string), iat, and exp claims.
 pub fn create_signed_jwt(request: &UnsignedRewrapRequest) -> Result<String, String> {
-    use p256::ecdsa::{signature::Signer, SigningKey};
+    use p256::ecdsa::{SigningKey, signature::Signer};
     use rand::rngs::OsRng;
 
     // Generate ephemeral P-256 signing key
@@ -403,9 +403,11 @@ mod tests {
         }"#;
 
         let response: KasPublicKeyResponse = serde_json::from_str(json).unwrap();
-        assert!(response
-            .public_key
-            .starts_with("-----BEGIN PUBLIC KEY-----"));
+        assert!(
+            response
+                .public_key
+                .starts_with("-----BEGIN PUBLIC KEY-----")
+        );
         assert_eq!(response.kid, "r1");
     }
 }

@@ -4,11 +4,12 @@
 //! Critically, it uses constant-time comparison to prevent timing attacks.
 
 use crate::types::PayloadKey;
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -48,7 +49,8 @@ pub fn calculate_root_signature(
     payload_key: &PayloadKey,
 ) -> Result<String, HmacError> {
     // Concatenate all raw GMAC tags
-    let mut aggregate_hash = Vec::new();
+    // Use Zeroizing to ensure cryptographic material is wiped from memory on drop
+    let mut aggregate_hash = Zeroizing::new(Vec::with_capacity(gmac_tags.len() * 16));
     for tag in gmac_tags {
         aggregate_hash.extend_from_slice(tag);
     }
@@ -80,7 +82,8 @@ pub fn verify_root_signature(
     expected_sig_b64: &str,
 ) -> Result<(), HmacError> {
     // Concatenate all raw GMAC tags
-    let mut aggregate_hash = Vec::new();
+    // Use Zeroizing to ensure cryptographic material is wiped from memory on drop
+    let mut aggregate_hash = Zeroizing::new(Vec::with_capacity(gmac_tags.len() * 16));
     for tag in gmac_tags {
         aggregate_hash.extend_from_slice(tag);
     }

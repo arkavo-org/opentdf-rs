@@ -5,9 +5,9 @@
 
 use opentdf_crypto::tdf::nanotdf::NanoTdfBuilder;
 use opentdf_protocol::nanotdf::header::EccMode;
+use p256::PublicKey as P256PublicKey;
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use p256::pkcs8::DecodePublicKey;
-use p256::PublicKey as P256PublicKey;
 use std::fs;
 
 fn main() {
@@ -103,7 +103,9 @@ cZiEMC62vIBEpi8wHRB+qlSGFFQhud5n0RlgTT6eqK6kdgtgOaEzEzJCEA==
                         filename
                     );
                     println!("    --host http://localhost:8080 --tls-no-verify \\");
-                    println!("    --with-client-creds '{{\"clientId\":\"opentdf\",\"clientSecret\":\"secret\"}}'");
+                    println!(
+                        "    --with-client-creds '{{\"clientId\":\"opentdf\",\"clientSecret\":\"secret\"}}'"
+                    );
 
                     println!("\n✓ This should work because:");
                     println!("  1. File was encrypted with KAS's EC public key (kid=e1)");

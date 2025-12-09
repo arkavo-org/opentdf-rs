@@ -1,6 +1,6 @@
 //! NanoTDF Policy Structures
 
-use crate::binary::{read_u16_be, read_u8, write_u16_be, write_u8, BinaryRead, BinaryWrite};
+use crate::binary::{BinaryRead, BinaryWrite, read_u8, read_u16_be, write_u8, write_u16_be};
 use crate::nanotdf::resource_locator::ResourceLocator;
 use std::io::{self, Read, Write};
 

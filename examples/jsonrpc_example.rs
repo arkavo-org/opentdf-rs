@@ -7,7 +7,7 @@
 //!
 //! Run with: cargo run --example jsonrpc_example
 
-use opentdf::{jsonrpc::TdfJsonRpc, Policy};
+use opentdf::{Policy, jsonrpc::TdfJsonRpc};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== ZTDF-JSON Example ===\n");

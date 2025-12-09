@@ -4,7 +4,7 @@
 
 use crate::types::{AesKey, Nonce96};
 use aes_gcm::{Aes256Gcm, KeyInit};
-use rand::{rngs::OsRng, RngCore};
+use rand::{RngCore, rngs::OsRng};
 use thiserror::Error;
 
 #[derive(Debug, Error)]

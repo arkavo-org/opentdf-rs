@@ -3,7 +3,7 @@
 //! The Resource Locator provides a compact way to reference external resources
 //! like KAS endpoints and remote policies.
 
-use crate::binary::{read_u8, write_u8, BinaryRead, BinaryWrite};
+use crate::binary::{BinaryRead, BinaryWrite, read_u8, write_u8};
 use std::io::{self, Read, Write};
 
 /// Protocol type for resource location

@@ -5,7 +5,7 @@
 
 use crate::policy::{Policy, PolicyError};
 use opentdf_crypto::{
-    calculate_policy_binding, calculate_root_signature, verify_root_signature, PayloadKey,
+    PayloadKey, calculate_policy_binding, calculate_root_signature, verify_root_signature,
 };
 
 // Re-export protocol types for backward compatibility
@@ -137,7 +137,7 @@ impl TdfManifestExt for TdfManifest {
             Err(e) => {
                 return Err(PolicyError::SerializationError(serde_json::Error::io(
                     std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()),
-                )))
+                )));
             }
         };
         Policy::from_json(&policy_json)

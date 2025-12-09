@@ -1,8 +1,8 @@
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use opentdf::{
-    manifest::{KeyAccessExt, TdfManifestExt},
     AttributeIdentifier, AttributePolicy, AttributeValue, Operator, Policy, PolicyBody, TdfArchive,
     TdfArchiveBuilder, TdfEncryption, TdfManifest,
+    manifest::{KeyAccessExt, TdfManifestExt},
 };
 use std::fs::File;
 use std::io::Read;

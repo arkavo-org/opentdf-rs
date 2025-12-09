@@ -1,17 +1,24 @@
 [package]
 name = "opentdf-protocol"
 version.workspace = true
-edition = "2021"
+edition = "2024"
+rust-version = "1.91"
 description = "OpenTDF protocol types and structures (no crypto, no I/O)"
-license = "Apache-2.0"
+license = "MIT OR Apache-2.0"
 repository = "https://github.com/arkavo-org/opentdf-rs"
+authors = ["Arkavo LLC <info@arkavo.com>"]
+documentation = "https://docs.rs/opentdf-protocol"
+homepage = "https://github.com/arkavo-org/opentdf-rs"
+keywords = ["opentdf", "tdf", "protocol", "serialization"]
+categories = ["encoding", "parser-implementations", "data-structures"]
+readme = "README.md"
 
 [dependencies]
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-base64 = "0.22"
-chrono = { version = "0.4", features = ["serde"] }
-thiserror = "2.0"
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
 
 # UUID with conditional features for WASM support
 [target.'cfg(target_arch = "wasm32")'.dependencies]

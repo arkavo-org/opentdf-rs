@@ -389,8 +389,8 @@ impl KeyEncapsulation for EcdhKem {
 #[cfg(all(test, feature = "kas"))]
 mod tests {
     use super::*;
-    use p256::pkcs8::EncodePrivateKey;
     use p256::SecretKey;
+    use p256::pkcs8::EncodePrivateKey;
     use rand::rngs::OsRng;
 
     #[test]

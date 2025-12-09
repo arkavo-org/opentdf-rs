@@ -724,15 +724,15 @@ impl Policy {
         }
 
         // Validate time window
-        if let (Some(from), Some(to)) = (self.valid_from, self.valid_to) {
-            if from >= to {
-                errors.push(ValidationError {
-                    field: "time_window".to_string(),
-                    error_type: ValidationErrorType::OutOfRange,
-                    message: format!("valid_from ({}) must be before valid_to ({})", from, to),
-                    suggestion: Some("Ensure valid_from is earlier than valid_to".to_string()),
-                });
-            }
+        if let (Some(from), Some(to)) = (self.valid_from, self.valid_to)
+            && from >= to
+        {
+            errors.push(ValidationError {
+                field: "time_window".to_string(),
+                error_type: ValidationErrorType::OutOfRange,
+                message: format!("valid_from ({}) must be before valid_to ({})", from, to),
+                suggestion: Some("Ensure valid_from is earlier than valid_to".to_string()),
+            });
         }
 
         // Validate attribute policies
@@ -1147,7 +1147,7 @@ fn evaluate_condition(
             return Err(PolicyError::EvaluationError {
                 reason: "Value required for this operator".to_string(),
                 attribute: Some(condition.attribute.as_string()),
-            })
+            });
         }
     };
 
@@ -1735,9 +1735,11 @@ fn test_policy_validate_invalid_time_window() {
 
     if let Err(PolicyError::ValidationFailed(errors)) = result {
         assert!(errors.iter().any(|e| e.field == "time_window"));
-        assert!(errors
-            .iter()
-            .any(|e| e.error_type == ValidationErrorType::OutOfRange));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.error_type == ValidationErrorType::OutOfRange)
+        );
     } else {
         panic!("Expected ValidationFailed error");
     }
@@ -1759,9 +1761,11 @@ fn test_policy_validate_empty_dissem_with_attributes() {
 
     if let Err(PolicyError::ValidationFailed(errors)) = result {
         assert!(errors.iter().any(|e| e.field == "dissem"));
-        assert!(errors
-            .iter()
-            .any(|e| e.error_type == ValidationErrorType::EmptyList));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.error_type == ValidationErrorType::EmptyList)
+        );
     } else {
         panic!("Expected ValidationFailed error");
     }
@@ -1783,9 +1787,11 @@ fn test_policy_validate_duplicate_dissem_entities() {
 
     if let Err(PolicyError::ValidationFailed(errors)) = result {
         assert!(errors.iter().any(|e| e.field.starts_with("dissem[")));
-        assert!(errors
-            .iter()
-            .any(|e| e.message.contains("Duplicate dissemination entity")));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("Duplicate dissemination entity"))
+        );
     } else {
         panic!("Expected ValidationFailed error");
     }
@@ -1811,9 +1817,11 @@ fn test_policy_validate_empty_dissem_entry() {
 
     if let Err(PolicyError::ValidationFailed(errors)) = result {
         assert!(errors.len() >= 2); // At least 2 empty entries
-        assert!(errors
-            .iter()
-            .any(|e| e.message.contains("Empty dissemination entity")));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("Empty dissemination entity"))
+        );
     } else {
         panic!("Expected ValidationFailed error");
     }

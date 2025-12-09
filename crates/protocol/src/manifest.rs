@@ -218,13 +218,13 @@ impl TdfManifest {
 
     /// Set the policy for the manifest using a raw string
     pub fn set_policy_raw(&mut self, policy: &str) {
-        use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
         self.encryption_information.policy = BASE64.encode(policy);
     }
 
     /// Get the decoded policy from the manifest as a raw string
     pub fn get_policy_raw(&self) -> Result<String, base64::DecodeError> {
-        use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
         let bytes = BASE64.decode(&self.encryption_information.policy)?;
         String::from_utf8(bytes)
             .map_err(|err| base64::DecodeError::InvalidByte(err.utf8_error().valid_up_to(), 0))
@@ -261,7 +261,7 @@ impl TdfManifest {
 impl KeyAccess {
     /// Set encrypted metadata
     pub fn set_encrypted_metadata(&mut self, metadata: &str) {
-        use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
         self.encrypted_metadata = Some(BASE64.encode(metadata));
     }
 

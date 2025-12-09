@@ -36,5 +36,5 @@ pub use nanotdf_collection::{
 };
 #[cfg(feature = "kem-ec")]
 pub use nanotdf_crypto::{
-    decrypt, encrypt, generate_gmac, verify_gmac, NanoTdfCryptoError, NanoTdfIv, TagSize,
+    NanoTdfCryptoError, NanoTdfIv, TagSize, decrypt, encrypt, generate_gmac, verify_gmac,
 };
