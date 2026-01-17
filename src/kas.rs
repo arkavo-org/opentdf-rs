@@ -481,6 +481,7 @@ impl KasClient {
                         encrypted_metadata: kao.encrypted_metadata.clone(),
                         kid: kao.kid.clone(),
                         header: None, // Not used for standard TDF
+                        ephemeral_public_key: kao.ephemeral_public_key.clone(),
                     },
                 })
             })
@@ -531,7 +532,8 @@ impl KasClient {
                 },
                 encrypted_metadata: None,
                 kid: None,
-                header: Some(header_b64), // NanoTDF header bytes (base64)
+                header: Some(header_b64),   // NanoTDF header bytes (base64)
+                ephemeral_public_key: None, // Not used for NanoTDF rewrap
             },
         };
 

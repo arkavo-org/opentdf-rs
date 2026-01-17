@@ -18,10 +18,10 @@ pub mod nanotdf;
 pub use kas::{
     KasError, KasPolicyBinding, KeyAccessObject, KeyAccessObjectWrapper, KeyAccessRewrapResult,
     Policy as KasPolicy, PolicyRequest, PolicyRewrapResult, RewrapResponse, SignedRewrapRequest,
-    UnsignedRewrapRequest,
+    UnsignedRewrapRequest, algorithm,
 };
 
 pub use manifest::{
     EncryptionInformation, EncryptionMethod, IntegrityInformation, KeyAccess, Payload,
-    PolicyBinding, RootSignature, Segment, TdfManifest,
+    PolicyBinding, RootSignature, Segment, TdfManifest, key_access_type,
 };

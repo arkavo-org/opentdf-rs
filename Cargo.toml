@@ -15,8 +15,8 @@ readme = "README.md"
 
 [dependencies]
 # New modular crates
-opentdf-protocol = { path = "crates/protocol", version = "0.9.0" }
-opentdf-crypto = { path = "crates/crypto", version = "0.9.0", default-features = false }
+opentdf-protocol = { path = "crates/protocol", version = "0.10.0" }
+opentdf-crypto = { path = "crates/crypto", version = "0.10.0", default-features = false }
 
 # Core dependencies (using workspace versions)
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
@@ -49,7 +49,7 @@ rand = "0.8"
 members = ["crates/protocol", "crates/crypto", "crates/wasm"]
 
 [workspace.package]
-version = "0.9.0"
+version = "0.10.0"
 
 [workspace.dependencies]
 # Core serialization
