@@ -215,6 +215,9 @@ pub struct InlinePayload {
 // ============================================================================
 
 /// Builder for creating TDF-JSON envelopes (spec-compliant)
+///
+/// Requires the `kas-client` feature for EC key wrapping support.
+#[cfg(feature = "kas-client")]
 pub struct TdfJsonBuilder {
     data: Vec<u8>,
     kas_url: Option<String>,
@@ -226,6 +229,8 @@ pub struct TdfJsonBuilder {
 
 impl TdfJson {
     /// Create a new builder for encrypting data into TDF-JSON format
+    ///
+    /// Requires the `kas-client` feature for EC key wrapping support.
     ///
     /// # Example
     ///
@@ -254,6 +259,7 @@ impl TdfJson {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg(feature = "kas-client")]
     pub fn encrypt(data: &[u8]) -> TdfJsonBuilder {
         TdfJsonBuilder {
             data: data.to_vec(),
@@ -344,6 +350,7 @@ impl TdfJson {
     }
 }
 
+#[cfg(feature = "kas-client")]
 impl TdfJsonBuilder {
     /// Set the KAS (Key Access Service) URL
     #[must_use]
@@ -413,25 +420,14 @@ impl TdfJsonBuilder {
             .map_err(|_| EncryptionError::KeyGenerationError)?;
 
         // Wrap key using EC (ECDH + HKDF + AES-GCM) - KAS public key is required
-        #[cfg(feature = "kas-client")]
-        let (wrapped_key, ephemeral_public_key) = {
-            let kas_pem = self
-                .kas_public_key_pem
-                .ok_or(EncryptionError::KeyGenerationError)?;
-            let ec_result = opentdf_crypto::wrap_key_with_ec(&kas_pem, payload_key)
-                .map_err(|_| EncryptionError::KeyGenerationError)?;
-            (ec_result.wrapped_key, Some(ec_result.ephemeral_public_key))
-        };
-
-        #[cfg(not(feature = "kas-client"))]
-        let (wrapped_key, ephemeral_public_key) = {
-            let kas_pem = self
-                .kas_public_key_pem
-                .ok_or(EncryptionError::KeyGenerationError)?;
-            let ec_result = opentdf_crypto::wrap_key_with_ec(&kas_pem, payload_key)
-                .map_err(|_| EncryptionError::KeyGenerationError)?;
-            (ec_result.wrapped_key, Some(ec_result.ephemeral_public_key))
-        };
+        // This requires the kas-client feature which provides EC key wrapping
+        let kas_pem = self
+            .kas_public_key_pem
+            .ok_or(EncryptionError::KeyGenerationError)?;
+        let ec_result = opentdf_crypto::wrap_key_with_ec(&kas_pem, payload_key)
+            .map_err(|_| EncryptionError::KeyGenerationError)?;
+        let (wrapped_key, ephemeral_public_key) =
+            (ec_result.wrapped_key, Some(ec_result.ephemeral_public_key));
 
         // Create key access object
         let key_access = KeyAccess {
@@ -1255,6 +1251,7 @@ mod tests {
     // TDF-JSON Spec-Compliant Tests
     // ========================================================================
 
+    #[cfg(feature = "kas-client")]
     #[test]
     fn test_tdf_json_create_envelope() {
         let policy = Policy::new(
@@ -1283,6 +1280,7 @@ mod tests {
         assert!(envelope.payload.length.is_some());
     }
 
+    #[cfg(feature = "kas-client")]
     #[test]
     fn test_tdf_json_serialize_deserialize() {
         let policy = Policy::new(
@@ -1421,6 +1419,7 @@ mod tests {
         assert_eq!(original_data, decrypted.as_slice());
     }
 
+    #[cfg(feature = "kas-client")]
     #[test]
     fn test_tdf_json_format_id() {
         let policy = Policy::new(
@@ -1440,6 +1439,7 @@ mod tests {
         assert_eq!(envelope.format_id(), "json");
     }
 
+    #[cfg(feature = "kas-client")]
     #[test]
     fn test_tdf_json_to_bytes() {
         let policy = Policy::new(
@@ -1465,6 +1465,7 @@ mod tests {
         assert_eq!(parsed.tdf, "json");
     }
 
+    #[cfg(feature = "kas-client")]
     #[test]
     fn test_tdf_json_no_created_timestamp() {
         let policy = Policy::new(
@@ -1489,6 +1490,7 @@ mod tests {
         assert!(!json.contains("created"));
     }
 
+    #[cfg(feature = "kas-client")]
     #[test]
     fn test_tdf_json_to_standard_manifest() {
         let policy = Policy::new(

@@ -319,6 +319,9 @@ impl From<base64::DecodeError> for TdfCborError {
 // ============================================================================
 
 /// Builder for creating TDF-CBOR containers
+///
+/// Requires the `kas-client` feature for EC key wrapping support.
+#[cfg(feature = "kas-client")]
 pub struct TdfCborBuilder {
     data: Vec<u8>,
     kas_url: Option<String>,
@@ -330,6 +333,9 @@ pub struct TdfCborBuilder {
 
 impl TdfCbor {
     /// Create a new builder for encrypting data into TDF-CBOR format
+    ///
+    /// Requires the `kas-client` feature for EC key wrapping support.
+    #[cfg(feature = "kas-client")]
     pub fn encrypt(data: &[u8]) -> TdfCborBuilder {
         TdfCborBuilder {
             data: data.to_vec(),
@@ -1428,6 +1434,7 @@ impl TdfCbor {
     }
 }
 
+#[cfg(feature = "kas-client")]
 impl TdfCborBuilder {
     /// Set the KAS (Key Access Service) URL
     #[must_use]
@@ -1501,25 +1508,14 @@ impl TdfCborBuilder {
         let ciphertext_bytes = BASE64.decode(&encrypted_payload.ciphertext)?;
 
         // Wrap key using EC (ECDH + HKDF + AES-GCM) - KAS public key is required
-        #[cfg(feature = "kas-client")]
-        let (wrapped_key, ephemeral_public_key) = {
-            let kas_pem = self
-                .kas_public_key_pem
-                .ok_or_else(|| TdfCborError::MissingField("kas_public_key".to_string()))?;
-            let ec_result = opentdf_crypto::wrap_key_with_ec(&kas_pem, payload_key)
-                .map_err(|e| TdfCborError::EncodingError(format!("EC wrap failed: {:?}", e)))?;
-            (ec_result.wrapped_key, Some(ec_result.ephemeral_public_key))
-        };
-
-        #[cfg(not(feature = "kas-client"))]
-        let (wrapped_key, ephemeral_public_key) = {
-            let kas_pem = self
-                .kas_public_key_pem
-                .ok_or_else(|| TdfCborError::MissingField("kas_public_key".to_string()))?;
-            let ec_result = opentdf_crypto::wrap_key_with_ec(&kas_pem, payload_key)
-                .map_err(|e| TdfCborError::EncodingError(format!("EC wrap failed: {:?}", e)))?;
-            (ec_result.wrapped_key, Some(ec_result.ephemeral_public_key))
-        };
+        // This requires the kas-client feature which provides EC key wrapping
+        let kas_pem = self
+            .kas_public_key_pem
+            .ok_or_else(|| TdfCborError::MissingField("kas_public_key".to_string()))?;
+        let ec_result = opentdf_crypto::wrap_key_with_ec(&kas_pem, payload_key)
+            .map_err(|e| TdfCborError::EncodingError(format!("EC wrap failed: {:?}", e)))?;
+        let (wrapped_key, ephemeral_public_key) =
+            (ec_result.wrapped_key, Some(ec_result.ephemeral_public_key));
 
         // Create key access object
         let key_access = KeyAccess {
@@ -1679,6 +1675,7 @@ mod tests {
         assert!(!TdfCbor::has_magic_bytes(&short));
     }
 
+    #[cfg(feature = "kas-client")]
     #[test]
     fn test_create_cbor_envelope() {
         let policy = Policy::new(
@@ -1706,7 +1703,7 @@ mod tests {
         assert!(!container.payload.value.is_empty());
     }
 
-    #[cfg(feature = "cbor")]
+    #[cfg(all(feature = "cbor", feature = "kas-client"))]
     #[test]
     fn test_cbor_roundtrip() {
         let policy = Policy::new(
