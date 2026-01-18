@@ -487,16 +487,14 @@ pub fn wrap_key_with_ec(
     combined.extend_from_slice(&ciphertext);
     let wrapped_key = BASE64.encode(&combined);
 
-    // Convert ephemeral public key to PEM format
-    let ephemeral_der = ephemeral_public.to_encoded_point(false);
-    let ephemeral_pem = format!(
-        "-----BEGIN PUBLIC KEY-----\n{}\n-----END PUBLIC KEY-----",
-        BASE64.encode(ephemeral_der.as_bytes())
-    );
+    // Convert ephemeral public key to compressed SEC1 format (33 bytes for P-256)
+    // Much smaller than PEM (~140 bytes) or uncompressed (65 bytes)
+    let ephemeral_compressed = ephemeral_public.to_encoded_point(true);
+    let ephemeral_b64 = BASE64.encode(ephemeral_compressed.as_bytes());
 
     Ok(EcWrappedKeyResult {
         wrapped_key,
-        ephemeral_public_key: ephemeral_pem,
+        ephemeral_public_key: ephemeral_b64,
     })
 }
 
@@ -532,18 +530,26 @@ pub fn unwrap_key_with_ec(
         .or_else(|_| SecretKey::from_sec1_der(&der_bytes))
         .map_err(|_| KemError::InvalidPrivateKey)?;
 
-    // Parse ephemeral public key from PEM
-    let ephemeral_pem_lines: Vec<&str> = ephemeral_public_key_pem.lines().collect();
-    let ephemeral_base64: String = ephemeral_pem_lines
-        .iter()
-        .filter(|line| !line.starts_with("-----"))
-        .map(|s| s.trim())
-        .collect();
-    let ephemeral_der = BASE64
-        .decode(&ephemeral_base64)
-        .map_err(|e| KemError::InvalidKey(format!("Invalid ephemeral PEM encoding: {}", e)))?;
+    // Parse ephemeral public key - supports both base64 SEC1 and PEM formats
+    let ephemeral_bytes = if ephemeral_public_key_pem.contains("-----BEGIN") {
+        // PEM format (legacy)
+        let pem_lines: Vec<&str> = ephemeral_public_key_pem.lines().collect();
+        let base64_content: String = pem_lines
+            .iter()
+            .filter(|line| !line.starts_with("-----"))
+            .map(|s| s.trim())
+            .collect();
+        BASE64
+            .decode(&base64_content)
+            .map_err(|e| KemError::InvalidKey(format!("Invalid ephemeral PEM encoding: {}", e)))?
+    } else {
+        // Base64 SEC1 format (compressed or uncompressed)
+        BASE64
+            .decode(ephemeral_public_key_pem)
+            .map_err(|e| KemError::InvalidKey(format!("Invalid ephemeral key encoding: {}", e)))?
+    };
 
-    let ephemeral_public = PublicKey::from_sec1_bytes(&ephemeral_der)
+    let ephemeral_public = PublicKey::from_sec1_bytes(&ephemeral_bytes)
         .map_err(|_| KemError::InvalidPublicKey)?;
 
     // Perform ECDH
