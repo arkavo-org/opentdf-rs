@@ -27,7 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         eprintln!("  {} read-json <input>", args[0]);
         eprintln!("  {} read-cbor <input>", args[0]);
-        eprintln!("");
+        eprintln!();
         eprintln!("Note: Provide EC public key PEM for real key wrapping (smaller files)");
         std::process::exit(1);
     }

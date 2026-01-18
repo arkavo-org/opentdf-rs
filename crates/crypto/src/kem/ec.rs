@@ -443,14 +443,12 @@ pub fn wrap_key_with_ec(
     // Parse recipient's public key from DER (SPKI format)
     let recipient_key = PublicKey::from_sec1_bytes(&der_bytes)
         .or_else(|_| {
-            // Try parsing as SPKI (SubjectPublicKeyInfo) format
-            // SPKI has ASN.1 header before the key bytes
-            // For P-256, the key is typically at offset 26 (65 bytes for uncompressed)
-            if der_bytes.len() > 26 {
-                PublicKey::from_sec1_bytes(&der_bytes[26..])
-            } else {
-                Err(p256::elliptic_curve::Error)
-            }
+            // Try parsing as SPKI (SubjectPublicKeyInfo) format using proper ASN.1 parsing
+            use spki::SubjectPublicKeyInfoRef;
+            let spki = SubjectPublicKeyInfoRef::try_from(der_bytes.as_slice())
+                .map_err(|_| p256::elliptic_curve::Error)?;
+            // Extract the raw public key bytes from the SPKI structure
+            PublicKey::from_sec1_bytes(spki.subject_public_key.raw_bytes())
         })
         .map_err(|_| KemError::InvalidPublicKey)?;
 
@@ -463,12 +461,12 @@ pub fn wrap_key_with_ec(
 
     // Derive wrapping key using HKDF-SHA256 (empty salt and info for TDF compatibility)
     let hkdf = Hkdf::<Sha256>::new(None, shared_secret.raw_secret_bytes());
-    let mut wrap_key = [0u8; 32];
-    hkdf.expand(&[], &mut wrap_key)
+    let mut wrap_key = Zeroizing::new([0u8; 32]);
+    hkdf.expand(&[], wrap_key.as_mut())
         .map_err(|_| KemError::KeyDerivationFailed)?;
 
     // Wrap the symmetric key with AES-GCM
-    let cipher = Aes256Gcm::new_from_slice(&wrap_key)
+    let cipher = Aes256Gcm::new_from_slice(wrap_key.as_ref())
         .map_err(|_| KemError::WrapError("Invalid key".into()))?;
 
     // Generate random nonce
@@ -560,8 +558,8 @@ pub fn unwrap_key_with_ec(
 
     // Derive wrapping key using HKDF-SHA256
     let hkdf = Hkdf::<Sha256>::new(None, shared_secret.raw_secret_bytes());
-    let mut wrap_key = [0u8; 32];
-    hkdf.expand(&[], &mut wrap_key)
+    let mut wrap_key = Zeroizing::new([0u8; 32]);
+    hkdf.expand(&[], wrap_key.as_mut())
         .map_err(|_| KemError::KeyDerivationFailed)?;
 
     // Decode wrapped key
@@ -569,8 +567,8 @@ pub fn unwrap_key_with_ec(
         .decode(wrapped_key_base64)
         .map_err(|e| KemError::UnwrapError(format!("Invalid wrapped key encoding: {}", e)))?;
 
-    // Parse: nonce (12) + ciphertext + tag
-    if wrapped_data.len() < 28 {
+    // Parse: nonce (12) + ciphertext (32) + tag (16) = 60 bytes minimum for AES-256 key
+    if wrapped_data.len() < 60 {
         return Err(KemError::UnwrapError("Wrapped key too short".into()));
     }
 
@@ -578,7 +576,7 @@ pub fn unwrap_key_with_ec(
     let ciphertext = &wrapped_data[12..];
 
     // Unwrap with AES-GCM
-    let cipher = Aes256Gcm::new_from_slice(&wrap_key)
+    let cipher = Aes256Gcm::new_from_slice(wrap_key.as_ref())
         .map_err(|_| KemError::UnwrapError("Invalid wrap key".into()))?;
     #[allow(deprecated)]
     let nonce = Nonce::from_slice(nonce_bytes);

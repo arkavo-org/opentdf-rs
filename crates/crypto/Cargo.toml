@@ -46,6 +46,7 @@ k256 = { workspace = true, optional = true }
 sha1 = { workspace = true, optional = true }
 hkdf = { workspace = true, optional = true }
 pkcs8 = { workspace = true, optional = true }
+spki = { version = "0.7", optional = true }
 
 # RSA backends (choose one)
 # aws-lc-rs: Constant-time RSA operations, FIPS validated (default for native)
@@ -77,7 +78,7 @@ rustcrypto-provider = ["dep:rsa"]
 
 # KEM implementations
 kem-rsa = ["sha1", "pkcs8"]
-kem-ec = ["p256", "p384", "p521", "k256", "sha1", "hkdf", "pkcs8"]
+kem-ec = ["p256", "p384", "p521", "k256", "sha1", "hkdf", "pkcs8", "spki"]
 
 # NanoTDF support (requires EC KEM for ECDH key agreement)
 nanotdf = ["kem-ec"]

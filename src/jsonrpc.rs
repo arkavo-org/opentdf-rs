@@ -11,7 +11,7 @@
 //!
 //! # Example
 //!
-//! ```rust
+//! ```rust,no_run
 //! use opentdf::{Tdf, Policy, jsonrpc::TdfJson};
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -22,9 +22,13 @@
 //!     vec!["user@example.com".to_string()]
 //! );
 //!
+//! // Load KAS public key (from your KAS server)
+//! let kas_public_key = std::fs::read_to_string("kas_public_key.pem")?;
+//!
 //! // Encrypt data and get TDF-JSON envelope
 //! let envelope = TdfJson::encrypt(b"Sensitive data")
 //!     .kas_url("https://kas.example.com")
+//!     .kas_public_key(&kas_public_key)
 //!     .policy(policy)
 //!     .build()?;
 //!
@@ -225,7 +229,7 @@ impl TdfJson {
     ///
     /// # Example
     ///
-    /// ```rust
+    /// ```rust,no_run
     /// use opentdf::{Policy, jsonrpc::TdfJson};
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -235,8 +239,12 @@ impl TdfJson {
     ///     vec!["user@example.com".to_string()]
     /// );
     ///
+    /// // Load KAS public key from your KAS server
+    /// let kas_public_key = std::fs::read_to_string("kas_public_key.pem")?;
+    ///
     /// let envelope = TdfJson::encrypt(b"Hello, World!")
     ///     .kas_url("https://kas.example.com")
+    ///     .kas_public_key(&kas_public_key)
     ///     .policy(policy)
     ///     .mime_type("text/plain")
     ///     .build()?;
@@ -344,11 +352,13 @@ impl TdfJsonBuilder {
         self
     }
 
-    /// Set the KAS public key PEM for EC key wrapping
+    /// Set the KAS public key PEM for EC key wrapping (required)
     ///
-    /// If provided, uses EC (ECDH + HKDF + AES-GCM) key wrapping instead of
-    /// the default mock wrapping. This produces smaller wrapped keys (~60 bytes
-    /// vs 256 bytes for RSA-2048).
+    /// Uses EC (ECDH + HKDF + AES-GCM) key wrapping. This produces smaller
+    /// wrapped keys (~60 bytes vs 256 bytes for RSA-2048).
+    ///
+    /// This method is required - TDF-JSON documents cannot be created without
+    /// a valid KAS public key for key wrapping.
     #[must_use]
     pub fn kas_public_key(mut self, pem: &str) -> Self {
         self.kas_public_key_pem = Some(pem.to_string());
@@ -402,21 +412,26 @@ impl TdfJsonBuilder {
         let policy_hash = calculate_policy_binding(&policy_b64, payload_key)
             .map_err(|_| EncryptionError::KeyGenerationError)?;
 
-        // Wrap key - use EC if KAS public key provided, otherwise use default
+        // Wrap key using EC (ECDH + HKDF + AES-GCM) - KAS public key is required
         #[cfg(feature = "kas-client")]
-        let (wrapped_key, ephemeral_public_key) = if let Some(ref kas_pem) = self.kas_public_key_pem
-        {
-            // Use EC key wrapping (ECDH + HKDF + AES-GCM)
-            let ec_result = opentdf_crypto::wrap_key_with_ec(kas_pem, payload_key)
+        let (wrapped_key, ephemeral_public_key) = {
+            let kas_pem = self
+                .kas_public_key_pem
+                .ok_or(EncryptionError::KeyGenerationError)?;
+            let ec_result = opentdf_crypto::wrap_key_with_ec(&kas_pem, payload_key)
                 .map_err(|_| EncryptionError::KeyGenerationError)?;
             (ec_result.wrapped_key, Some(ec_result.ephemeral_public_key))
-        } else {
-            // Use default mock wrapping (payload key encrypted with policy key)
-            (encrypted_payload.encrypted_key.clone(), None)
         };
 
         #[cfg(not(feature = "kas-client"))]
-        let (wrapped_key, ephemeral_public_key) = (encrypted_payload.encrypted_key.clone(), None);
+        let (wrapped_key, ephemeral_public_key) = {
+            let kas_pem = self
+                .kas_public_key_pem
+                .ok_or(EncryptionError::KeyGenerationError)?;
+            let ec_result = opentdf_crypto::wrap_key_with_ec(&kas_pem, payload_key)
+                .map_err(|_| EncryptionError::KeyGenerationError)?;
+            (ec_result.wrapped_key, Some(ec_result.ephemeral_public_key))
+        };
 
         // Create key access object
         let key_access = KeyAccess {
@@ -886,6 +901,33 @@ impl TdfJsonRpcBuilder {
 mod tests {
     use super::*;
 
+    /// Get test KAS URL from environment variable or use default
+    fn test_kas_url() -> String {
+        std::env::var("TEST_KAS_URL").unwrap_or_else(|_| "https://100.arkavo.net".to_string())
+    }
+
+    /// Generate a test EC key pair for testing TDF-JSON encryption
+    /// Returns (private_key_pem, public_key_pem)
+    fn generate_test_ec_key_pair() -> (String, String) {
+        use p256::SecretKey;
+        use p256::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
+        use rand::rngs::OsRng;
+
+        let secret_key = SecretKey::random(&mut OsRng);
+        let public_key = secret_key.public_key();
+
+        let private_pem = secret_key
+            .to_pkcs8_pem(LineEnding::LF)
+            .expect("Failed to encode private key")
+            .to_string();
+
+        let public_pem = public_key
+            .to_public_key_pem(LineEnding::LF)
+            .expect("Failed to encode public key");
+
+        (private_pem, public_pem)
+    }
+
     #[test]
     fn test_create_jsonrpc_envelope() {
         let policy = Policy::new(
@@ -895,7 +937,7 @@ mod tests {
         );
 
         let envelope = TdfJsonRpc::encrypt(b"Hello, World!")
-            .kas_url("https://kas.example.com")
+            .kas_url(&test_kas_url())
             .policy(policy)
             .mime_type("text/plain")
             .build()
@@ -917,7 +959,7 @@ mod tests {
         );
 
         let envelope = TdfJsonRpc::encrypt(b"Test data")
-            .kas_url("https://kas.example.com")
+            .kas_url(&test_kas_url())
             .policy(policy)
             .build()
             .expect("Failed to create envelope");
@@ -963,7 +1005,7 @@ mod tests {
         // Create key access object
         let key_access = KeyAccess {
             access_type: "wrapped".to_string(),
-            url: "https://kas.example.com".to_string(),
+            url: test_kas_url(),
             kid: None,
             protocol: "kas".to_string(),
             wrapped_key: encrypted_payload.encrypted_key.clone(),
@@ -1048,7 +1090,7 @@ mod tests {
         );
 
         let envelope = TdfJsonRpc::encrypt(b"Secret data")
-            .kas_url("https://kas.example.com")
+            .kas_url(&test_kas_url())
             .policy(policy)
             .build()
             .expect("Failed to create envelope");
@@ -1069,7 +1111,7 @@ mod tests {
         );
 
         let envelope = TdfJsonRpc::encrypt(b"Secret data")
-            .kas_url("https://kas.example.com")
+            .kas_url(&test_kas_url())
             .policy(policy)
             .build()
             .expect("Failed to create envelope");
@@ -1104,7 +1146,7 @@ mod tests {
     #[test]
     fn test_builder_missing_policy() {
         let result = TdfJsonRpc::encrypt(b"Data")
-            .kas_url("https://kas.example.com")
+            .kas_url(&test_kas_url())
             .build();
 
         assert!(result.is_err(), "Build should fail without policy");
@@ -1127,7 +1169,7 @@ mod tests {
 
         // Encrypt
         let envelope = TdfJsonRpc::encrypt(original_data)
-            .kas_url("https://kas.example.com")
+            .kas_url(&test_kas_url())
             .policy(policy)
             .mime_type("text/plain")
             .build()
@@ -1159,7 +1201,7 @@ mod tests {
         );
 
         let envelope = TdfJsonRpc::encrypt(b"")
-            .kas_url("https://kas.example.com")
+            .kas_url(&test_kas_url())
             .policy(policy)
             .build()
             .expect("Failed to create envelope with empty payload");
@@ -1179,7 +1221,7 @@ mod tests {
         let large_data = vec![0u8; 1024 * 1024];
 
         let envelope = TdfJsonRpc::encrypt(&large_data)
-            .kas_url("https://kas.example.com")
+            .kas_url(&test_kas_url())
             .policy(policy)
             .build()
             .expect("Failed to create envelope with large payload");
@@ -1200,7 +1242,7 @@ mod tests {
         );
 
         let envelope = TdfJsonRpc::encrypt(b"JSON data")
-            .kas_url("https://kas.example.com")
+            .kas_url(&test_kas_url())
             .policy(policy)
             .mime_type("application/json")
             .build()
@@ -1220,9 +1262,11 @@ mod tests {
             vec![],
             vec!["user@example.com".to_string()],
         );
+        let (_private_pem, public_pem) = generate_test_ec_key_pair();
 
         let envelope = TdfJson::encrypt(b"Hello, World!")
-            .kas_url("https://kas.example.com")
+            .kas_url(&test_kas_url())
+            .kas_public_key(&public_pem)
             .policy(policy)
             .mime_type("text/plain")
             .build()
@@ -1246,9 +1290,11 @@ mod tests {
             vec![],
             vec!["user@example.com".to_string()],
         );
+        let (_private_pem, public_pem) = generate_test_ec_key_pair();
 
         let envelope = TdfJson::encrypt(b"Test data")
-            .kas_url("https://kas.example.com")
+            .kas_url(&test_kas_url())
+            .kas_public_key(&public_pem)
             .policy(policy)
             .include_created(false) // Exclude for deterministic testing
             .build()
@@ -1299,7 +1345,7 @@ mod tests {
         // Create key access object
         let key_access = KeyAccess {
             access_type: "wrapped".to_string(),
-            url: "https://kas.example.com".to_string(),
+            url: test_kas_url(),
             kid: None,
             protocol: "kas".to_string(),
             wrapped_key: encrypted_payload.encrypted_key.clone(),
@@ -1382,9 +1428,11 @@ mod tests {
             vec![],
             vec!["user@example.com".to_string()],
         );
+        let (_private_pem, public_pem) = generate_test_ec_key_pair();
 
         let envelope = TdfJson::encrypt(b"Test")
-            .kas_url("https://kas.example.com")
+            .kas_url(&test_kas_url())
+            .kas_public_key(&public_pem)
             .policy(policy)
             .build()
             .expect("Failed to create envelope");
@@ -1399,9 +1447,11 @@ mod tests {
             vec![],
             vec!["user@example.com".to_string()],
         );
+        let (_private_pem, public_pem) = generate_test_ec_key_pair();
 
         let envelope = TdfJson::encrypt(b"Test")
-            .kas_url("https://kas.example.com")
+            .kas_url(&test_kas_url())
+            .kas_public_key(&public_pem)
             .policy(policy)
             .include_created(false)
             .build()
@@ -1422,9 +1472,11 @@ mod tests {
             vec![],
             vec!["user@example.com".to_string()],
         );
+        let (_private_pem, public_pem) = generate_test_ec_key_pair();
 
         let envelope = TdfJson::encrypt(b"Test")
-            .kas_url("https://kas.example.com")
+            .kas_url(&test_kas_url())
+            .kas_public_key(&public_pem)
             .policy(policy)
             .include_created(false)
             .build()
@@ -1444,9 +1496,11 @@ mod tests {
             vec![],
             vec!["user@example.com".to_string()],
         );
+        let (_private_pem, public_pem) = generate_test_ec_key_pair();
 
         let envelope = TdfJson::encrypt(b"Test")
-            .kas_url("https://kas.example.com")
+            .kas_url(&test_kas_url())
+            .kas_public_key(&public_pem)
             .policy(policy)
             .mime_type("text/plain")
             .build()

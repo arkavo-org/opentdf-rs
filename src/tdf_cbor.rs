@@ -396,17 +396,17 @@ impl TdfCbor {
                     }
                 }
                 key::VERSION => {
-                    if let Value::Array(arr) = v {
-                        if arr.len() == 3 {
-                            let mut ver = [0u8; 3];
-                            for (i, val) in arr.iter().enumerate() {
-                                if let Value::Integer(n) = val {
-                                    let i128_val: i128 = (*n).into();
-                                    ver[i] = i128_val as u8;
-                                }
+                    if let Value::Array(arr) = v
+                        && arr.len() == 3
+                    {
+                        let mut ver = [0u8; 3];
+                        for (i, val) in arr.iter().enumerate() {
+                            if let Value::Integer(n) = val {
+                                let i128_val: i128 = (*n).into();
+                                ver[i] = i128_val as u8;
                             }
-                            version = Some(ver);
                         }
+                        version = Some(ver);
                     }
                 }
                 key::CREATED => {
@@ -1436,11 +1436,13 @@ impl TdfCborBuilder {
         self
     }
 
-    /// Set the KAS public key PEM for EC key wrapping
+    /// Set the KAS public key PEM for EC key wrapping (required)
     ///
-    /// If provided, uses EC (ECDH + HKDF + AES-GCM) key wrapping instead of
-    /// the default mock wrapping. This produces smaller wrapped keys (~60 bytes
-    /// vs 256 bytes for RSA-2048).
+    /// Uses EC (ECDH + HKDF + AES-GCM) key wrapping. This produces smaller
+    /// wrapped keys (~60 bytes vs 256 bytes for RSA-2048).
+    ///
+    /// This method is required - TDF-CBOR documents cannot be created without
+    /// a valid KAS public key for key wrapping.
     #[must_use]
     pub fn kas_public_key(mut self, pem: &str) -> Self {
         self.kas_public_key_pem = Some(pem.to_string());
@@ -1498,21 +1500,26 @@ impl TdfCborBuilder {
         // Decode the base64 ciphertext to get raw bytes
         let ciphertext_bytes = BASE64.decode(&encrypted_payload.ciphertext)?;
 
-        // Wrap key - use EC if KAS public key provided, otherwise use default
+        // Wrap key using EC (ECDH + HKDF + AES-GCM) - KAS public key is required
         #[cfg(feature = "kas-client")]
-        let (wrapped_key, ephemeral_public_key) = if let Some(ref kas_pem) = self.kas_public_key_pem
-        {
-            // Use EC key wrapping (ECDH + HKDF + AES-GCM)
-            let ec_result = opentdf_crypto::wrap_key_with_ec(kas_pem, payload_key)
+        let (wrapped_key, ephemeral_public_key) = {
+            let kas_pem = self
+                .kas_public_key_pem
+                .ok_or_else(|| TdfCborError::MissingField("kas_public_key".to_string()))?;
+            let ec_result = opentdf_crypto::wrap_key_with_ec(&kas_pem, payload_key)
                 .map_err(|e| TdfCborError::EncodingError(format!("EC wrap failed: {:?}", e)))?;
             (ec_result.wrapped_key, Some(ec_result.ephemeral_public_key))
-        } else {
-            // Use default mock wrapping (payload key encrypted with policy key)
-            (encrypted_payload.encrypted_key.clone(), None)
         };
 
         #[cfg(not(feature = "kas-client"))]
-        let (wrapped_key, ephemeral_public_key) = (encrypted_payload.encrypted_key.clone(), None);
+        let (wrapped_key, ephemeral_public_key) = {
+            let kas_pem = self
+                .kas_public_key_pem
+                .ok_or_else(|| TdfCborError::MissingField("kas_public_key".to_string()))?;
+            let ec_result = opentdf_crypto::wrap_key_with_ec(&kas_pem, payload_key)
+                .map_err(|e| TdfCborError::EncodingError(format!("EC wrap failed: {:?}", e)))?;
+            (ec_result.wrapped_key, Some(ec_result.ephemeral_public_key))
+        };
 
         // Create key access object
         let key_access = KeyAccess {
@@ -1558,7 +1565,7 @@ impl TdfCborBuilder {
         // Calculate root signature
         integrity_info
             .generate_root_signature(&[gmac_tag], payload_key)
-            .map_err(|e| TdfCborError::EncodingError(e))?;
+            .map_err(TdfCborError::EncodingError)?;
 
         // Create encryption information
         let encryption_info = EncryptionInformation {
@@ -1623,6 +1630,33 @@ pub fn is_tdf_cbor(data: &[u8]) -> bool {
 mod tests {
     use super::*;
 
+    /// Get test KAS URL from environment variable or use default
+    fn test_kas_url() -> String {
+        std::env::var("TEST_KAS_URL").unwrap_or_else(|_| "https://100.arkavo.net".to_string())
+    }
+
+    /// Generate a test EC key pair for testing TDF-CBOR encryption
+    /// Returns (private_key_pem, public_key_pem)
+    fn generate_test_ec_key_pair() -> (String, String) {
+        use p256::SecretKey;
+        use p256::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
+        use rand::rngs::OsRng;
+
+        let secret_key = SecretKey::random(&mut OsRng);
+        let public_key = secret_key.public_key();
+
+        let private_pem = secret_key
+            .to_pkcs8_pem(LineEnding::LF)
+            .expect("Failed to encode private key")
+            .to_string();
+
+        let public_pem = public_key
+            .to_public_key_pem(LineEnding::LF)
+            .expect("Failed to encode public key");
+
+        (private_pem, public_pem)
+    }
+
     #[test]
     fn test_cbor_magic_bytes() {
         assert_eq!(CBOR_MAGIC, [0xD9, 0xD9, 0xF7, 0xA5]);
@@ -1652,9 +1686,11 @@ mod tests {
             vec![],
             vec!["user@example.com".to_string()],
         );
+        let (_private_pem, public_pem) = generate_test_ec_key_pair();
 
         let container = TdfCbor::encrypt(b"Hello, World!")
-            .kas_url("https://kas.example.com")
+            .kas_url(&test_kas_url())
+            .kas_public_key(&public_pem)
             .policy(policy)
             .mime_type("text/plain")
             .build()
@@ -1678,9 +1714,11 @@ mod tests {
             vec![],
             vec!["user@example.com".to_string()],
         );
+        let (_private_pem, public_pem) = generate_test_ec_key_pair();
 
         let original = TdfCbor::encrypt(b"Test data for CBOR")
-            .kas_url("https://kas.example.com")
+            .kas_url(&test_kas_url())
+            .kas_public_key(&public_pem)
             .policy(policy)
             .include_created(false)
             .build()
@@ -1715,9 +1753,7 @@ mod tests {
 
     #[test]
     fn test_builder_missing_policy() {
-        let result = TdfCbor::encrypt(b"Data")
-            .kas_url("https://kas.example.com")
-            .build();
+        let result = TdfCbor::encrypt(b"Data").kas_url(&test_kas_url()).build();
 
         assert!(result.is_err());
     }

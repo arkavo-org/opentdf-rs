@@ -1,4 +1,8 @@
 // Quick sanity test for ZTDF-JSON with real KAS endpoint
+// Note: This example uses the deprecated TdfJsonRpc API for backwards compatibility testing.
+// New code should use TdfJson with kas_public_key().
+#![allow(deprecated)]
+
 use opentdf::{Policy, jsonrpc::TdfJsonRpc};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
