@@ -48,7 +48,11 @@ pub use opentdf_crypto::{
 // Users don't need to explicitly import these anymore
 pub use crate::manifest::{IntegrityInformationExt, KeyAccessExt, TdfManifestExt};
 
-// JSON-RPC types for inline TDF workflows
+// TDF-JSON types for inline TDF workflows (spec-compliant)
+pub use crate::jsonrpc::{JsonPayload, TdfJson, TdfJsonBuilder, TdfJsonManifest};
+
+// Legacy JSON-RPC types (deprecated, for backward compatibility)
+#[allow(deprecated)]
 pub use crate::jsonrpc::{InlinePayload, TdfJsonRpc, TdfJsonRpcBuilder, TdfManifestInline};
 
 // KAS protocol types for direct KAS integration

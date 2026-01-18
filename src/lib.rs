@@ -57,6 +57,10 @@ pub mod kas_key;
 // JSON-RPC integration (ZTDF-JSON format)
 pub mod jsonrpc;
 
+// TDF-CBOR format (optional, requires "cbor" feature)
+#[cfg(feature = "cbor")]
+pub mod tdf_cbor;
+
 // Prelude for convenient imports
 pub mod prelude;
 
@@ -122,7 +126,11 @@ pub use kas_key::{
 #[cfg(feature = "kas-client")]
 pub use opentdf_crypto::{EcdhKem, OaepHash, RsaOaepKem, wrap_key_with_rsa_oaep};
 
-// JSON-RPC types
+// TDF-JSON types (spec-compliant)
+pub use jsonrpc::{JsonPayload, TdfJson, TdfJsonBuilder, TdfJsonManifest};
+
+// Legacy JSON-RPC types (deprecated)
+#[allow(deprecated)]
 pub use jsonrpc::{InlinePayload, TdfJsonRpc, TdfJsonRpcBuilder, TdfManifestInline};
 
 // NanoTDF Collection types (for streaming/RTMP use cases)
