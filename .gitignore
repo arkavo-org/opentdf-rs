@@ -35,3 +35,12 @@ Cargo.lock
 .arkavo/memory_server/
 .arkavo/prompts/
 *.backup
+
+# Mock testing keys and temporary files
+*.pem
+*.key
+*.der
+/tmp/
+xtest_*/
+kas_public_*.pem
+fresh_token.txt
