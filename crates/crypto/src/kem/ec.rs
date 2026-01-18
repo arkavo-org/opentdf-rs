@@ -386,6 +386,202 @@ impl KeyEncapsulation for EcdhKem {
     }
 }
 
+// ============================================================================
+// EC Key Wrapping for TDF-JSON/CBOR (ECIES: ECDH + HKDF + AES-GCM)
+// ============================================================================
+
+/// Result of EC key wrapping containing wrapped key and ephemeral public key
+#[derive(Debug, Clone)]
+pub struct EcWrappedKeyResult {
+    /// The wrapped symmetric key (base64: nonce + ciphertext + tag)
+    pub wrapped_key: String,
+    /// The ephemeral public key in PEM format
+    pub ephemeral_public_key: String,
+}
+
+/// Wrap a symmetric key using EC (ECIES: ECDH + HKDF + AES-GCM)
+///
+/// This generates an ephemeral key pair and uses ECDH with the recipient's
+/// public key to derive a wrapping key, then wraps the symmetric key with AES-GCM.
+///
+/// # Arguments
+///
+/// * `recipient_public_key_pem` - The recipient's EC public key in PEM format
+/// * `symmetric_key` - The symmetric key to wrap (32 bytes for AES-256)
+///
+/// # Returns
+///
+/// `EcWrappedKeyResult` containing the wrapped key (base64) and ephemeral public key (PEM)
+#[cfg(feature = "kem-ec")]
+pub fn wrap_key_with_ec(
+    recipient_public_key_pem: &str,
+    symmetric_key: &[u8],
+) -> Result<EcWrappedKeyResult, KemError> {
+    use aes_gcm::{
+        Aes256Gcm, Nonce,
+        aead::{Aead, KeyInit},
+    };
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+    use hkdf::Hkdf;
+    use p256::ecdh::EphemeralSecret;
+    use p256::elliptic_curve::sec1::ToEncodedPoint;
+    use p256::PublicKey;
+    use rand::rngs::OsRng;
+    use sha2::Sha256;
+
+    // Parse PEM to get DER bytes
+    let pem_lines: Vec<&str> = recipient_public_key_pem.lines().collect();
+    let base64_content: String = pem_lines
+        .iter()
+        .filter(|line| !line.starts_with("-----"))
+        .map(|s| s.trim())
+        .collect();
+    let der_bytes = BASE64
+        .decode(&base64_content)
+        .map_err(|e| KemError::InvalidKey(format!("Invalid PEM encoding: {}", e)))?;
+
+    // Parse recipient's public key from DER (SPKI format)
+    let recipient_key = PublicKey::from_sec1_bytes(&der_bytes)
+        .or_else(|_| {
+            // Try parsing as SPKI (SubjectPublicKeyInfo) format
+            // SPKI has ASN.1 header before the key bytes
+            // For P-256, the key is typically at offset 26 (65 bytes for uncompressed)
+            if der_bytes.len() > 26 {
+                PublicKey::from_sec1_bytes(&der_bytes[26..])
+            } else {
+                Err(p256::elliptic_curve::Error)
+            }
+        })
+        .map_err(|_| KemError::InvalidPublicKey)?;
+
+    // Generate ephemeral key pair
+    let ephemeral_secret = EphemeralSecret::random(&mut OsRng);
+    let ephemeral_public = ephemeral_secret.public_key();
+
+    // Perform ECDH
+    let shared_secret = ephemeral_secret.diffie_hellman(&recipient_key);
+
+    // Derive wrapping key using HKDF-SHA256 (empty salt and info for TDF compatibility)
+    let hkdf = Hkdf::<Sha256>::new(None, shared_secret.raw_secret_bytes());
+    let mut wrap_key = [0u8; 32];
+    hkdf.expand(&[], &mut wrap_key)
+        .map_err(|_| KemError::KeyDerivationFailed)?;
+
+    // Wrap the symmetric key with AES-GCM
+    let cipher =
+        Aes256Gcm::new_from_slice(&wrap_key).map_err(|_| KemError::WrapError("Invalid key".into()))?;
+
+    // Generate random nonce
+    let mut nonce_bytes = [0u8; 12];
+    use rand::RngCore;
+    OsRng.fill_bytes(&mut nonce_bytes);
+    #[allow(deprecated)]
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    let ciphertext = cipher
+        .encrypt(nonce, symmetric_key)
+        .map_err(|e| KemError::WrapError(format!("AES-GCM encryption failed: {}", e)))?;
+
+    // Format: nonce + ciphertext + tag (combined by AES-GCM)
+    let mut combined = nonce_bytes.to_vec();
+    combined.extend_from_slice(&ciphertext);
+    let wrapped_key = BASE64.encode(&combined);
+
+    // Convert ephemeral public key to PEM format
+    let ephemeral_der = ephemeral_public.to_encoded_point(false);
+    let ephemeral_pem = format!(
+        "-----BEGIN PUBLIC KEY-----\n{}\n-----END PUBLIC KEY-----",
+        BASE64.encode(ephemeral_der.as_bytes())
+    );
+
+    Ok(EcWrappedKeyResult {
+        wrapped_key,
+        ephemeral_public_key: ephemeral_pem,
+    })
+}
+
+/// Unwrap a symmetric key using EC (ECIES: ECDH + HKDF + AES-GCM)
+#[cfg(feature = "kem-ec")]
+pub fn unwrap_key_with_ec(
+    private_key_pem: &str,
+    wrapped_key_base64: &str,
+    ephemeral_public_key_pem: &str,
+) -> Result<Vec<u8>, KemError> {
+    use aes_gcm::{
+        Aes256Gcm, Nonce,
+        aead::{Aead, KeyInit},
+    };
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+    use hkdf::Hkdf;
+    use p256::{PublicKey, SecretKey};
+    use pkcs8::DecodePrivateKey;
+    use sha2::Sha256;
+
+    // Parse private key from PEM
+    let pem_lines: Vec<&str> = private_key_pem.lines().collect();
+    let base64_content: String = pem_lines
+        .iter()
+        .filter(|line| !line.starts_with("-----"))
+        .map(|s| s.trim())
+        .collect();
+    let der_bytes = BASE64
+        .decode(&base64_content)
+        .map_err(|e| KemError::InvalidKey(format!("Invalid PEM encoding: {}", e)))?;
+
+    let private_key = SecretKey::from_pkcs8_der(&der_bytes)
+        .or_else(|_| SecretKey::from_sec1_der(&der_bytes))
+        .map_err(|_| KemError::InvalidPrivateKey)?;
+
+    // Parse ephemeral public key from PEM
+    let ephemeral_pem_lines: Vec<&str> = ephemeral_public_key_pem.lines().collect();
+    let ephemeral_base64: String = ephemeral_pem_lines
+        .iter()
+        .filter(|line| !line.starts_with("-----"))
+        .map(|s| s.trim())
+        .collect();
+    let ephemeral_der = BASE64
+        .decode(&ephemeral_base64)
+        .map_err(|e| KemError::InvalidKey(format!("Invalid ephemeral PEM encoding: {}", e)))?;
+
+    let ephemeral_public = PublicKey::from_sec1_bytes(&ephemeral_der)
+        .map_err(|_| KemError::InvalidPublicKey)?;
+
+    // Perform ECDH
+    let shared_secret =
+        p256::ecdh::diffie_hellman(private_key.to_nonzero_scalar(), ephemeral_public.as_affine());
+
+    // Derive wrapping key using HKDF-SHA256
+    let hkdf = Hkdf::<Sha256>::new(None, shared_secret.raw_secret_bytes());
+    let mut wrap_key = [0u8; 32];
+    hkdf.expand(&[], &mut wrap_key)
+        .map_err(|_| KemError::KeyDerivationFailed)?;
+
+    // Decode wrapped key
+    let wrapped_data = BASE64
+        .decode(wrapped_key_base64)
+        .map_err(|e| KemError::UnwrapError(format!("Invalid wrapped key encoding: {}", e)))?;
+
+    // Parse: nonce (12) + ciphertext + tag
+    if wrapped_data.len() < 28 {
+        return Err(KemError::UnwrapError("Wrapped key too short".into()));
+    }
+
+    let nonce_bytes = &wrapped_data[..12];
+    let ciphertext = &wrapped_data[12..];
+
+    // Unwrap with AES-GCM
+    let cipher = Aes256Gcm::new_from_slice(&wrap_key)
+        .map_err(|_| KemError::UnwrapError("Invalid wrap key".into()))?;
+    #[allow(deprecated)]
+    let nonce = Nonce::from_slice(nonce_bytes);
+
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|e| KemError::UnwrapError(format!("AES-GCM decryption failed: {}", e)))?;
+
+    Ok(plaintext)
+}
+
 #[cfg(all(test, feature = "kas"))]
 mod tests {
     use super::*;

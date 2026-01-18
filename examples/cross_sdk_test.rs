@@ -1,8 +1,8 @@
 //! Cross-SDK testing tool for TDF-JSON and TDF-CBOR formats
 //!
 //! Usage:
-//!   cargo run --example cross_sdk_test --features cbor -- create-json <input> <output>
-//!   cargo run --example cross_sdk_test --features cbor -- create-cbor <input> <output>
+//!   cargo run --example cross_sdk_test --features cbor -- create-json <input> <output> [kas_pubkey_pem]
+//!   cargo run --example cross_sdk_test --features cbor -- create-cbor <input> <output> [kas_pubkey_pem]
 //!   cargo run --example cross_sdk_test --features cbor -- read-json <input>
 //!   cargo run --example cross_sdk_test --features cbor -- read-cbor <input>
 
@@ -17,10 +17,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if args.len() < 3 {
         eprintln!("Usage:");
-        eprintln!("  {} create-json <input> <output>", args[0]);
-        eprintln!("  {} create-cbor <input> <output>", args[0]);
+        eprintln!("  {} create-json <input> <output> [kas_pubkey_pem]", args[0]);
+        eprintln!("  {} create-cbor <input> <output> [kas_pubkey_pem]", args[0]);
         eprintln!("  {} read-json <input>", args[0]);
         eprintln!("  {} read-cbor <input>", args[0]);
+        eprintln!("");
+        eprintln!("Note: Provide EC public key PEM for real key wrapping (smaller files)");
         std::process::exit(1);
     }
 
@@ -29,11 +31,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match command.as_str() {
         "create-json" => {
             if args.len() < 4 {
-                eprintln!("Usage: {} create-json <input> <output>", args[0]);
+                eprintln!("Usage: {} create-json <input> <output> [kas_pubkey_pem]", args[0]);
                 std::process::exit(1);
             }
             let input_path = &args[2];
             let output_path = &args[3];
+            let kas_pubkey_path = args.get(4);
 
             let plaintext = fs::read(input_path)?;
             println!("Read {} bytes from {}", plaintext.len(), input_path);
@@ -44,11 +47,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 vec!["test@example.com".to_string()],
             );
 
-            let tdf_json = TdfJson::encrypt(&plaintext)
+            let mut builder = TdfJson::encrypt(&plaintext)
                 .kas_url("https://kas.example.com")
                 .policy(policy)
-                .mime_type("text/plain")
-                .build()?;
+                .mime_type("text/plain");
+
+            // Use EC key wrapping if public key provided
+            if let Some(pem_path) = kas_pubkey_path {
+                let pem = fs::read_to_string(pem_path)?;
+                println!("Using EC key wrapping with {}", pem_path);
+                builder = builder.kas_public_key(&pem);
+            }
+
+            let tdf_json = builder.build()?;
 
             let json_bytes = serde_json::to_vec_pretty(&tdf_json)?;
             fs::write(output_path, &json_bytes)?;
@@ -56,16 +67,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Created TDF-JSON: {} bytes -> {}", json_bytes.len(), output_path);
             println!("TDF type: {}", tdf_json.tdf);
             println!("Version: {}", tdf_json.version);
+
+            // Show wrapped key size
+            if let Some(kao) = tdf_json.manifest.encryption_information.key_access.first() {
+                println!("Wrapped key size: {} bytes", kao.wrapped_key.len());
+                if kao.ephemeral_public_key.is_some() {
+                    println!("Key wrapping: EC (ECDH + HKDF + AES-GCM)");
+                } else {
+                    println!("Key wrapping: Mock (AES-GCM with policy key)");
+                }
+            }
             Ok(())
         }
 
         "create-cbor" => {
             if args.len() < 4 {
-                eprintln!("Usage: {} create-cbor <input> <output>", args[0]);
+                eprintln!("Usage: {} create-cbor <input> <output> [kas_pubkey_pem]", args[0]);
                 std::process::exit(1);
             }
             let input_path = &args[2];
             let output_path = &args[3];
+            let kas_pubkey_path = args.get(4);
 
             let plaintext = fs::read(input_path)?;
             println!("Read {} bytes from {}", plaintext.len(), input_path);
@@ -76,11 +98,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 vec!["test@example.com".to_string()],
             );
 
-            let tdf_cbor = TdfCbor::encrypt(&plaintext)
+            let mut builder = TdfCbor::encrypt(&plaintext)
                 .kas_url("https://kas.example.com")
                 .policy(policy)
-                .mime_type("text/plain")
-                .build()?;
+                .mime_type("text/plain");
+
+            // Use EC key wrapping if public key provided
+            if let Some(pem_path) = kas_pubkey_path {
+                let pem = fs::read_to_string(pem_path)?;
+                println!("Using EC key wrapping with {}", pem_path);
+                builder = builder.kas_public_key(&pem);
+            }
+
+            let tdf_cbor = builder.build()?;
 
             let cbor_bytes = tdf_cbor.to_bytes()?;
             fs::write(output_path, &cbor_bytes)?;
@@ -92,6 +122,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Verify magic bytes
             if cbor_bytes.len() >= 3 && cbor_bytes[0..3] == [0xD9, 0xD9, 0xF7] {
                 println!("Magic bytes: OK (CBOR self-describe tag)");
+            }
+
+            // Show wrapped key size
+            if let Some(kao) = tdf_cbor.manifest.encryption_information.key_access.first() {
+                println!("Wrapped key size: {} bytes", kao.wrapped_key.len());
+                if kao.ephemeral_public_key.is_some() {
+                    println!("Key wrapping: EC (ECDH + HKDF + AES-GCM)");
+                } else {
+                    println!("Key wrapping: Mock (AES-GCM with policy key)");
+                }
             }
             Ok(())
         }

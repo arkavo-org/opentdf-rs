@@ -214,6 +214,7 @@ pub struct InlinePayload {
 pub struct TdfJsonBuilder {
     data: Vec<u8>,
     kas_url: Option<String>,
+    kas_public_key_pem: Option<String>,
     policy: Option<Policy>,
     mime_type: Option<String>,
     include_created: bool,
@@ -249,6 +250,7 @@ impl TdfJson {
         TdfJsonBuilder {
             data: data.to_vec(),
             kas_url: None,
+            kas_public_key_pem: None,
             policy: None,
             mime_type: None,
             include_created: true,
@@ -342,6 +344,17 @@ impl TdfJsonBuilder {
         self
     }
 
+    /// Set the KAS public key PEM for EC key wrapping
+    ///
+    /// If provided, uses EC (ECDH + HKDF + AES-GCM) key wrapping instead of
+    /// the default mock wrapping. This produces smaller wrapped keys (~60 bytes
+    /// vs 256 bytes for RSA-2048).
+    #[must_use]
+    pub fn kas_public_key(mut self, pem: &str) -> Self {
+        self.kas_public_key_pem = Some(pem.to_string());
+        self
+    }
+
     /// Set the access control policy
     #[must_use]
     pub fn policy(mut self, policy: Policy) -> Self {
@@ -389,20 +402,36 @@ impl TdfJsonBuilder {
         let policy_hash = calculate_policy_binding(&policy_b64, payload_key)
             .map_err(|_| EncryptionError::KeyGenerationError)?;
 
+        // Wrap key - use EC if KAS public key provided, otherwise use default
+        #[cfg(feature = "kas-client")]
+        let (wrapped_key, ephemeral_public_key) = if let Some(ref kas_pem) = self.kas_public_key_pem
+        {
+            // Use EC key wrapping (ECDH + HKDF + AES-GCM)
+            let ec_result = opentdf_crypto::wrap_key_with_ec(kas_pem, payload_key)
+                .map_err(|_| EncryptionError::KeyGenerationError)?;
+            (ec_result.wrapped_key, Some(ec_result.ephemeral_public_key))
+        } else {
+            // Use default mock wrapping (payload key encrypted with policy key)
+            (encrypted_payload.encrypted_key.clone(), None)
+        };
+
+        #[cfg(not(feature = "kas-client"))]
+        let (wrapped_key, ephemeral_public_key) = (encrypted_payload.encrypted_key.clone(), None);
+
         // Create key access object
         let key_access = KeyAccess {
             access_type: "wrapped".to_string(),
             url: kas_url,
             kid: None,
             protocol: "kas".to_string(),
-            wrapped_key: encrypted_payload.encrypted_key.clone(),
+            wrapped_key,
             policy_binding: crate::manifest::PolicyBinding {
                 alg: "HS256".to_string(),
                 hash: policy_hash,
             },
             encrypted_metadata: None,
             schema_version: Some("1.0".to_string()),
-            ephemeral_public_key: None,
+            ephemeral_public_key,
         };
 
         // Calculate encrypted size
