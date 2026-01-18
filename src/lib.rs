@@ -127,7 +127,10 @@ pub use kas_key::{
 pub use opentdf_crypto::{EcdhKem, OaepHash, RsaOaepKem, wrap_key_with_rsa_oaep};
 
 // TDF-JSON types (spec-compliant)
-pub use jsonrpc::{JsonPayload, TdfJson, TdfJsonBuilder, TdfJsonManifest};
+pub use jsonrpc::{JsonPayload, TdfJson, TdfJsonManifest};
+
+#[cfg(feature = "kas-client")]
+pub use jsonrpc::TdfJsonBuilder;
 
 // Legacy JSON-RPC types (deprecated)
 #[allow(deprecated)]

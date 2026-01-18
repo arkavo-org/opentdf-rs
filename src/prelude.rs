@@ -49,7 +49,10 @@ pub use opentdf_crypto::{
 pub use crate::manifest::{IntegrityInformationExt, KeyAccessExt, TdfManifestExt};
 
 // TDF-JSON types for inline TDF workflows (spec-compliant)
-pub use crate::jsonrpc::{JsonPayload, TdfJson, TdfJsonBuilder, TdfJsonManifest};
+pub use crate::jsonrpc::{JsonPayload, TdfJson, TdfJsonManifest};
+
+#[cfg(feature = "kas-client")]
+pub use crate::jsonrpc::TdfJsonBuilder;
 
 // Legacy JSON-RPC types (deprecated, for backward compatibility)
 #[allow(deprecated)]
