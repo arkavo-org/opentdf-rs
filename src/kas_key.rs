@@ -192,6 +192,9 @@ pub async fn fetch_kas_ec_public_key(
 /// Parse and validate a PEM-encoded EC public key (P-256/secp256r1)
 ///
 /// This function validates that the key is in proper PEM format and can be parsed as a P-256 public key.
+/// It handles both:
+/// - Proper SPKI format (standard "BEGIN PUBLIC KEY" with algorithm OID)
+/// - Raw SEC1 format (some KAS servers return raw EC point bytes in PEM wrapper)
 ///
 /// # Arguments
 ///
@@ -202,14 +205,56 @@ pub async fn fetch_kas_ec_public_key(
 /// The validated PEM string if parsing succeeds
 #[cfg(feature = "kas-client")]
 pub fn validate_ec_public_key_pem(pem: &str) -> Result<String, KasKeyError> {
+    use crate::pkcs8::EncodePublicKey;
+
     // Normalize line endings (handle \r\n from some servers)
     let normalized = pem.replace("\r\n", "\n");
 
-    // Try to parse as P-256 public key
-    P256PublicKey::from_public_key_pem(&normalized)
-        .map_err(|e| KasKeyError::EcParseError(format!("Failed to parse EC public key: {}", e)))?;
+    // First try standard SPKI format
+    if let Ok(_key) = P256PublicKey::from_public_key_pem(&normalized) {
+        return Ok(normalized);
+    }
 
-    Ok(normalized)
+    // Some KAS servers return raw SEC1 bytes in a PEM wrapper
+    // Try to extract and parse as SEC1 format
+    let parsed = pem::parse(&normalized)
+        .map_err(|e| KasKeyError::EcParseError(format!("Failed to parse PEM: {}", e)))?;
+
+    let der_bytes = parsed.contents();
+
+    // Check if this looks like a raw SEC1 point (starts with 0x04 for uncompressed)
+    if der_bytes.first() == Some(&0x04) && der_bytes.len() == 65 {
+        // Parse as SEC1 uncompressed point
+        let key = P256PublicKey::from_sec1_bytes(der_bytes).map_err(|e| {
+            KasKeyError::EcParseError(format!("Failed to parse SEC1 EC public key: {}", e))
+        })?;
+
+        // Re-encode as proper SPKI PEM for consistency
+        let spki_pem = key
+            .to_public_key_pem(Default::default())
+            .map_err(|e| KasKeyError::EcParseError(format!("Failed to encode as SPKI: {}", e)))?;
+
+        return Ok(spki_pem.to_string());
+    }
+
+    // Check for compressed point (0x02 or 0x03, 33 bytes)
+    if (der_bytes.first() == Some(&0x02) || der_bytes.first() == Some(&0x03))
+        && der_bytes.len() == 33
+    {
+        let key = P256PublicKey::from_sec1_bytes(der_bytes).map_err(|e| {
+            KasKeyError::EcParseError(format!("Failed to parse compressed SEC1 key: {}", e))
+        })?;
+
+        let spki_pem = key
+            .to_public_key_pem(Default::default())
+            .map_err(|e| KasKeyError::EcParseError(format!("Failed to encode as SPKI: {}", e)))?;
+
+        return Ok(spki_pem.to_string());
+    }
+
+    Err(KasKeyError::EcParseError(
+        "Unrecognized EC public key format".to_string(),
+    ))
 }
 
 #[cfg(test)]
