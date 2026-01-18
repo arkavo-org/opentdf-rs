@@ -394,6 +394,7 @@ impl TdfJsonRpcBuilder {
             },
             encrypted_metadata: None,
             schema_version: Some("1.0".to_string()),
+            ephemeral_public_key: None, // RSA wrapping, no ephemeral key needed
         };
 
         // Calculate encrypted size from base64 string length (more efficient than decoding)
@@ -557,6 +558,7 @@ mod tests {
             },
             encrypted_metadata: None,
             schema_version: Some("1.0".to_string()),
+            ephemeral_public_key: None,
         };
 
         // Create integrity information

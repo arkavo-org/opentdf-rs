@@ -156,6 +156,45 @@ pub struct KeyAccessObject {
     /// NanoTDF header bytes (base64 encoded) - used for NanoTDF rewrap requests
     #[serde(skip_serializing_if = "Option::is_none")]
     pub header: Option<String>,
+    /// Ephemeral public key for EC-wrapped keys (PEM format)
+    #[serde(rename = "ephemeralPublicKey", skip_serializing_if = "Option::is_none")]
+    pub ephemeral_public_key: Option<String>,
+}
+
+/// Algorithm types for KAS rewrap requests
+pub mod algorithm {
+    /// RSA-2048 algorithm for standard key wrapping
+    pub const RSA_2048: &str = "rsa:2048";
+    /// EC P-256 algorithm for ECIES key wrapping
+    pub const EC_P256: &str = "ec:secp256r1";
+    /// EC P-384 algorithm for ECIES key wrapping
+    pub const EC_P384: &str = "ec:secp384r1";
+    /// EC P-521 algorithm for ECIES key wrapping
+    pub const EC_P521: &str = "ec:secp521r1";
+}
+
+impl KeyAccessObject {
+    /// Detect the appropriate algorithm based on key type
+    pub fn detect_algorithm(&self) -> &'static str {
+        use crate::manifest::key_access_type;
+        if self.key_type == key_access_type::EC_WRAPPED {
+            algorithm::EC_P256 // Default to P-256 for EC wrapping
+        } else {
+            algorithm::RSA_2048
+        }
+    }
+
+    /// Check if this key access uses EC wrapping
+    pub fn is_ec_wrapped(&self) -> bool {
+        use crate::manifest::key_access_type;
+        self.key_type == key_access_type::EC_WRAPPED
+    }
+
+    /// Check if this key access uses RSA wrapping
+    pub fn is_rsa_wrapped(&self) -> bool {
+        use crate::manifest::key_access_type;
+        self.key_type == key_access_type::WRAPPED
+    }
 }
 
 /// Policy binding for KAS requests
@@ -242,6 +281,7 @@ impl From<&KeyAccess> for KeyAccessObject {
             encrypted_metadata: ka.encrypted_metadata.clone(),
             kid: ka.kid.clone(),
             header: None,
+            ephemeral_public_key: ka.ephemeral_public_key.clone(),
         }
     }
 }
@@ -257,6 +297,7 @@ impl From<KeyAccess> for KeyAccessObject {
             encrypted_metadata: ka.encrypted_metadata,
             kid: ka.kid,
             header: None,
+            ephemeral_public_key: ka.ephemeral_public_key,
         }
     }
 }
@@ -272,6 +313,7 @@ impl From<&KeyAccessObject> for KeyAccess {
             policy_binding: kao.policy_binding.clone().into(),
             encrypted_metadata: kao.encrypted_metadata.clone(),
             schema_version: Some("1.0".to_string()),
+            ephemeral_public_key: kao.ephemeral_public_key.clone(),
         }
     }
 }
@@ -287,6 +329,7 @@ impl From<KeyAccessObject> for KeyAccess {
             policy_binding: kao.policy_binding.into(),
             encrypted_metadata: kao.encrypted_metadata,
             schema_version: Some("1.0".to_string()),
+            ephemeral_public_key: kao.ephemeral_public_key,
         }
     }
 }

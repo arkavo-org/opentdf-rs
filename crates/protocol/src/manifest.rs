@@ -68,6 +68,18 @@ pub struct PolicyBinding {
     pub hash: String,
 }
 
+/// Key access type constants for TDF3
+pub mod key_access_type {
+    /// Standard RSA-wrapped key (RSA-OAEP)
+    pub const WRAPPED: &str = "wrapped";
+    /// EC-wrapped key (ECIES: ECDH + HKDF + AES-GCM)
+    pub const EC_WRAPPED: &str = "ec-wrapped";
+    /// Remote key access (key stored on KAS)
+    pub const REMOTE: &str = "remote";
+    /// Remote wrapped key access
+    pub const REMOTE_WRAPPED: &str = "remoteWrapped";
+}
+
 /// Key access object in manifest
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct KeyAccess {
@@ -85,13 +97,16 @@ pub struct KeyAccess {
     pub encrypted_metadata: Option<String>,
     #[serde(rename = "schemaVersion", skip_serializing_if = "Option::is_none")]
     pub schema_version: Option<String>,
+    /// Ephemeral public key for EC-wrapped keys (PEM format)
+    #[serde(rename = "ephemeralPublicKey", skip_serializing_if = "Option::is_none")]
+    pub ephemeral_public_key: Option<String>,
 }
 
 impl KeyAccess {
-    /// Creates a new KeyAccess object with default values
+    /// Creates a new KeyAccess object with default values (RSA-wrapped)
     pub fn new(url: String) -> Self {
         KeyAccess {
-            access_type: "wrapped".to_string(),
+            access_type: key_access_type::WRAPPED.to_string(),
             url,
             kid: None,
             protocol: "kas".to_string(),
@@ -102,7 +117,41 @@ impl KeyAccess {
             },
             encrypted_metadata: None,
             schema_version: Some("1.0".to_string()),
+            ephemeral_public_key: None,
         }
+    }
+
+    /// Creates a new KeyAccess object for EC-wrapped keys
+    pub fn new_ec_wrapped(url: String) -> Self {
+        KeyAccess {
+            access_type: key_access_type::EC_WRAPPED.to_string(),
+            url,
+            kid: None,
+            protocol: "kas".to_string(),
+            wrapped_key: String::new(),
+            policy_binding: PolicyBinding {
+                alg: "HS256".to_string(),
+                hash: String::new(),
+            },
+            encrypted_metadata: None,
+            schema_version: Some("1.0".to_string()),
+            ephemeral_public_key: None,
+        }
+    }
+
+    /// Check if this key access uses EC wrapping
+    pub fn is_ec_wrapped(&self) -> bool {
+        self.access_type == key_access_type::EC_WRAPPED
+    }
+
+    /// Check if this key access uses RSA wrapping
+    pub fn is_rsa_wrapped(&self) -> bool {
+        self.access_type == key_access_type::WRAPPED
+    }
+
+    /// Set the ephemeral public key (for EC-wrapped keys)
+    pub fn set_ephemeral_public_key(&mut self, pem: String) {
+        self.ephemeral_public_key = Some(pem);
     }
 }
 
