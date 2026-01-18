@@ -7,7 +7,7 @@
 //!
 //! Run with: cargo run --example jsonrpc_example
 
-use opentdf::{jsonrpc::TdfJson, Policy};
+use opentdf::{Policy, jsonrpc::TdfJson};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== TDF-JSON Example ===\n");
@@ -53,7 +53,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Encrypted: {}", received_envelope.payload.is_encrypted);
     println!(
         "Algorithm: {}",
-        received_envelope.manifest.encryption_information.method.algorithm
+        received_envelope
+            .manifest
+            .encryption_information
+            .method
+            .algorithm
     );
 
     // 5. In production, you would:

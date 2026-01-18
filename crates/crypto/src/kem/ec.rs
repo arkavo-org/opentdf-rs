@@ -423,9 +423,9 @@ pub fn wrap_key_with_ec(
     };
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use hkdf::Hkdf;
+    use p256::PublicKey;
     use p256::ecdh::EphemeralSecret;
     use p256::elliptic_curve::sec1::ToEncodedPoint;
-    use p256::PublicKey;
     use rand::rngs::OsRng;
     use sha2::Sha256;
 
@@ -468,8 +468,8 @@ pub fn wrap_key_with_ec(
         .map_err(|_| KemError::KeyDerivationFailed)?;
 
     // Wrap the symmetric key with AES-GCM
-    let cipher =
-        Aes256Gcm::new_from_slice(&wrap_key).map_err(|_| KemError::WrapError("Invalid key".into()))?;
+    let cipher = Aes256Gcm::new_from_slice(&wrap_key)
+        .map_err(|_| KemError::WrapError("Invalid key".into()))?;
 
     // Generate random nonce
     let mut nonce_bytes = [0u8; 12];
@@ -549,12 +549,14 @@ pub fn unwrap_key_with_ec(
             .map_err(|e| KemError::InvalidKey(format!("Invalid ephemeral key encoding: {}", e)))?
     };
 
-    let ephemeral_public = PublicKey::from_sec1_bytes(&ephemeral_bytes)
-        .map_err(|_| KemError::InvalidPublicKey)?;
+    let ephemeral_public =
+        PublicKey::from_sec1_bytes(&ephemeral_bytes).map_err(|_| KemError::InvalidPublicKey)?;
 
     // Perform ECDH
-    let shared_secret =
-        p256::ecdh::diffie_hellman(private_key.to_nonzero_scalar(), ephemeral_public.as_affine());
+    let shared_secret = p256::ecdh::diffie_hellman(
+        private_key.to_nonzero_scalar(),
+        ephemeral_public.as_affine(),
+    );
 
     // Derive wrapping key using HKDF-SHA256
     let hkdf = Hkdf::<Sha256>::new(None, shared_secret.raw_secret_bytes());

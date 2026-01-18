@@ -11,14 +11,20 @@ use std::fs;
 
 #[cfg(feature = "cbor")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use opentdf::{jsonrpc::TdfJson, tdf_cbor::TdfCbor, Policy};
+    use opentdf::{Policy, jsonrpc::TdfJson, tdf_cbor::TdfCbor};
 
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 3 {
         eprintln!("Usage:");
-        eprintln!("  {} create-json <input> <output> [kas_pubkey_pem]", args[0]);
-        eprintln!("  {} create-cbor <input> <output> [kas_pubkey_pem]", args[0]);
+        eprintln!(
+            "  {} create-json <input> <output> [kas_pubkey_pem]",
+            args[0]
+        );
+        eprintln!(
+            "  {} create-cbor <input> <output> [kas_pubkey_pem]",
+            args[0]
+        );
         eprintln!("  {} read-json <input>", args[0]);
         eprintln!("  {} read-cbor <input>", args[0]);
         eprintln!("");
@@ -31,7 +37,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match command.as_str() {
         "create-json" => {
             if args.len() < 4 {
-                eprintln!("Usage: {} create-json <input> <output> [kas_pubkey_pem]", args[0]);
+                eprintln!(
+                    "Usage: {} create-json <input> <output> [kas_pubkey_pem]",
+                    args[0]
+                );
                 std::process::exit(1);
             }
             let input_path = &args[2];
@@ -64,7 +73,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let json_bytes = serde_json::to_vec_pretty(&tdf_json)?;
             fs::write(output_path, &json_bytes)?;
 
-            println!("Created TDF-JSON: {} bytes -> {}", json_bytes.len(), output_path);
+            println!(
+                "Created TDF-JSON: {} bytes -> {}",
+                json_bytes.len(),
+                output_path
+            );
             println!("TDF type: {}", tdf_json.tdf);
             println!("Version: {}", tdf_json.version);
 
@@ -82,7 +95,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         "create-cbor" => {
             if args.len() < 4 {
-                eprintln!("Usage: {} create-cbor <input> <output> [kas_pubkey_pem]", args[0]);
+                eprintln!(
+                    "Usage: {} create-cbor <input> <output> [kas_pubkey_pem]",
+                    args[0]
+                );
                 std::process::exit(1);
             }
             let input_path = &args[2];
@@ -115,9 +131,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let cbor_bytes = tdf_cbor.to_bytes()?;
             fs::write(output_path, &cbor_bytes)?;
 
-            println!("Created TDF-CBOR: {} bytes -> {}", cbor_bytes.len(), output_path);
+            println!(
+                "Created TDF-CBOR: {} bytes -> {}",
+                cbor_bytes.len(),
+                output_path
+            );
             println!("TDF type: {}", tdf_cbor.tdf);
-            println!("Version: {}.{}.{}", tdf_cbor.version[0], tdf_cbor.version[1], tdf_cbor.version[2]);
+            println!(
+                "Version: {}.{}.{}",
+                tdf_cbor.version[0], tdf_cbor.version[1], tdf_cbor.version[2]
+            );
 
             // Verify magic bytes
             if cbor_bytes.len() >= 3 && cbor_bytes[0..3] == [0xD9, 0xD9, 0xF7] {
@@ -160,9 +183,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  Value length: {} chars", tdf_json.payload.value.len());
 
             println!("\nEncryption:");
-            println!("  Type: {}", tdf_json.manifest.encryption_information.encryption_type);
-            println!("  Algorithm: {}", tdf_json.manifest.encryption_information.method.algorithm);
-            println!("  Key access objects: {}", tdf_json.manifest.encryption_information.key_access.len());
+            println!(
+                "  Type: {}",
+                tdf_json.manifest.encryption_information.encryption_type
+            );
+            println!(
+                "  Algorithm: {}",
+                tdf_json.manifest.encryption_information.method.algorithm
+            );
+            println!(
+                "  Key access objects: {}",
+                tdf_json.manifest.encryption_information.key_access.len()
+            );
 
             println!("\n✓ TDF-JSON parsed successfully");
             Ok(())
@@ -185,7 +217,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             println!("\n=== TDF-CBOR Structure ===");
             println!("TDF type: {}", tdf_cbor.tdf);
-            println!("Version: {}.{}.{}", tdf_cbor.version[0], tdf_cbor.version[1], tdf_cbor.version[2]);
+            println!(
+                "Version: {}.{}.{}",
+                tdf_cbor.version[0], tdf_cbor.version[1], tdf_cbor.version[2]
+            );
             if let Some(created) = tdf_cbor.created {
                 println!("Created: {}", created);
             }
@@ -200,9 +235,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  Value length: {} bytes", tdf_cbor.payload.value.len());
 
             println!("\nEncryption:");
-            println!("  Type: {}", tdf_cbor.manifest.encryption_information.encryption_type);
-            println!("  Algorithm: {}", tdf_cbor.manifest.encryption_information.method.algorithm);
-            println!("  Key access objects: {}", tdf_cbor.manifest.encryption_information.key_access.len());
+            println!(
+                "  Type: {}",
+                tdf_cbor.manifest.encryption_information.encryption_type
+            );
+            println!(
+                "  Algorithm: {}",
+                tdf_cbor.manifest.encryption_information.method.algorithm
+            );
+            println!(
+                "  Key access objects: {}",
+                tdf_cbor.manifest.encryption_information.key_access.len()
+            );
 
             println!("\n✓ TDF-CBOR parsed successfully");
             Ok(())

@@ -9,7 +9,7 @@
 
 #[cfg(feature = "cbor")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use opentdf::{tdf_cbor::TdfCbor, Policy};
+    use opentdf::{Policy, tdf_cbor::TdfCbor};
 
     println!("=== TDF-CBOR Example ===\n");
 
@@ -38,19 +38,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n=== CBOR Envelope ===");
     println!("CBOR size: {} bytes", cbor_bytes.len());
-    println!("First 16 bytes (hex): {:02x?}", &cbor_bytes[..16.min(cbor_bytes.len())]);
+    println!(
+        "First 16 bytes (hex): {:02x?}",
+        &cbor_bytes[..16.min(cbor_bytes.len())]
+    );
 
     // Check magic bytes
     if cbor_bytes.len() >= 3 && cbor_bytes[0..3] == [0xD9, 0xD9, 0xF7] {
         println!("Magic bytes verified: CBOR self-describe tag (55799)");
     }
 
+    // Save to file for cross-SDK testing
+    std::fs::write("/tmp/tdf-cross-test/rust_new_enums.cbor", &cbor_bytes)?;
+    println!("Saved to: /tmp/tdf-cross-test/rust_new_enums.cbor");
+
     // 4. Deserialize from CBOR bytes
     let received = TdfCbor::from_bytes(&cbor_bytes)?;
 
     println!("\n=== Received Envelope ===");
     println!("TDF type: {}", received.tdf);
-    println!("Version: {}.{}.{}", received.version[0], received.version[1], received.version[2]);
+    println!(
+        "Version: {}.{}.{}",
+        received.version[0], received.version[1], received.version[2]
+    );
     println!("Payload type: {}", received.payload.payload_type);
     println!("Payload protocol: {}", received.payload.protocol);
     if let Some(ref mime) = received.payload.mime_type {
@@ -87,7 +97,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let savings = (1.0 - (cbor_bytes.len() as f64 / json_bytes.len() as f64)) * 100.0;
     println!("CBOR is {:.1}% smaller than JSON", savings);
 
-    // 6. In production, you would:
+    // 6. Cross-SDK interoperability test
+    println!("\n=== Cross-SDK Test ===");
+    let swift_cbor_path = "/tmp/tdf-cross-test/swift_new_enums.cbor";
+    if std::path::Path::new(swift_cbor_path).exists() {
+        let swift_bytes = std::fs::read(swift_cbor_path)?;
+        println!(
+            "Reading Swift-created CBOR ({} bytes)...",
+            swift_bytes.len()
+        );
+        match TdfCbor::from_bytes(&swift_bytes) {
+            Ok(swift_parsed) => {
+                println!("✓ Successfully parsed Swift CBOR!");
+                println!("  TDF type: {}", swift_parsed.tdf);
+                println!(
+                    "  Version: {}.{}.{}",
+                    swift_parsed.version[0], swift_parsed.version[1], swift_parsed.version[2]
+                );
+                println!("  Payload type: {}", swift_parsed.payload.payload_type);
+                println!("  Protocol: {}", swift_parsed.payload.protocol);
+                println!("  Payload size: {} bytes", swift_parsed.payload.value.len());
+            }
+            Err(e) => {
+                println!("✗ Failed to parse Swift CBOR: {}", e);
+            }
+        }
+    } else {
+        println!("Note: Swift CBOR not found at {}", swift_cbor_path);
+        println!("      Run Swift CLI first to create it for cross-SDK testing.");
+    }
+
+    // 7. In production, you would:
     //    - Extract the wrapped key from key_access
     //    - Send it to KAS for unwrapping (with JWT authentication)
     //    - Receive the unwrapped payload key
