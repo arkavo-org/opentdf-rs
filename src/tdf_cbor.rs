@@ -110,6 +110,7 @@ pub struct TdfCbor {
 
 /// TDF manifest for TDF-CBOR format
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TdfCborManifest {
     /// Encryption information including key access and policy
     pub encryption_information: EncryptionInformation,
