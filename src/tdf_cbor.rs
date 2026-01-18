@@ -71,6 +71,29 @@ pub mod key {
     pub const PAYLOAD: u64 = 5;
 }
 
+/// Payload integer key mappings per TDF-CBOR spec section 3.1
+pub mod payload_key {
+    pub const TYPE: u64 = 1;
+    pub const PROTOCOL: u64 = 2;
+    pub const MIME_TYPE: u64 = 3;
+    pub const IS_ENCRYPTED: u64 = 4;
+    pub const LENGTH: u64 = 5;
+    pub const VALUE: u64 = 6;
+}
+
+/// Enumerated values per TDF-CBOR spec section 1.5
+pub mod enums {
+    // Payload type: 0=inline, 1=reference
+    pub const PAYLOAD_TYPE_INLINE: u64 = 0;
+    #[allow(dead_code)]
+    pub const PAYLOAD_TYPE_REFERENCE: u64 = 1;
+
+    // Payload protocol: 0=binary, 1=binary-chunked
+    pub const PAYLOAD_PROTOCOL_BINARY: u64 = 0;
+    #[allow(dead_code)]
+    pub const PAYLOAD_PROTOCOL_BINARY_CHUNKED: u64 = 1;
+}
+
 // ============================================================================
 // TDF-CBOR Spec-Compliant Types
 // ============================================================================
@@ -314,33 +337,71 @@ impl TdfCbor {
                         let mut value = Vec::new();
 
                         for (pk, pv) in payload_map {
-                            let pkey = match pk {
-                                Value::Text(s) => s,
+                            // Support both integer keys (new spec) and string keys (legacy)
+                            let pkey: u64 = match pk {
+                                Value::Integer(i) => {
+                                    let i128_val: i128 = i.into();
+                                    i128_val as u64
+                                }
+                                Value::Text(s) => match s.as_str() {
+                                    "type" => payload_key::TYPE,
+                                    "protocol" => payload_key::PROTOCOL,
+                                    "mimeType" => payload_key::MIME_TYPE,
+                                    "isEncrypted" => payload_key::IS_ENCRYPTED,
+                                    "value" => payload_key::VALUE,
+                                    _ => continue,
+                                },
                                 _ => continue,
                             };
 
-                            match pkey.as_str() {
-                                "type" => {
-                                    if let Value::Text(s) = pv {
-                                        payload_type = s;
+                            match pkey {
+                                payload_key::TYPE => {
+                                    // Support both integer enum (new) and string (legacy)
+                                    match pv {
+                                        Value::Integer(i) => {
+                                            let i128_val: i128 = i.into();
+                                            payload_type = match i128_val as u64 {
+                                                enums::PAYLOAD_TYPE_INLINE => "inline".to_string(),
+                                                enums::PAYLOAD_TYPE_REFERENCE => {
+                                                    "reference".to_string()
+                                                }
+                                                _ => "inline".to_string(),
+                                            };
+                                        }
+                                        Value::Text(s) => payload_type = s,
+                                        _ => {}
                                     }
                                 }
-                                "protocol" => {
-                                    if let Value::Text(s) = pv {
-                                        protocol = s;
+                                payload_key::PROTOCOL => {
+                                    // Support both integer enum (new) and string (legacy)
+                                    match pv {
+                                        Value::Integer(i) => {
+                                            let i128_val: i128 = i.into();
+                                            protocol = match i128_val as u64 {
+                                                enums::PAYLOAD_PROTOCOL_BINARY => {
+                                                    "binary".to_string()
+                                                }
+                                                enums::PAYLOAD_PROTOCOL_BINARY_CHUNKED => {
+                                                    "binary-chunked".to_string()
+                                                }
+                                                _ => "binary".to_string(),
+                                            };
+                                        }
+                                        Value::Text(s) => protocol = s,
+                                        _ => {}
                                     }
                                 }
-                                "mimeType" => {
+                                payload_key::MIME_TYPE => {
                                     if let Value::Text(s) = pv {
                                         mime_type = Some(s);
                                     }
                                 }
-                                "isEncrypted" => {
+                                payload_key::IS_ENCRYPTED => {
                                     if let Value::Bool(b) = pv {
                                         is_encrypted = b;
                                     }
                                 }
-                                "value" => {
+                                payload_key::VALUE => {
                                     if let Value::Bytes(b) = pv {
                                         value = b;
                                     }
@@ -410,28 +471,42 @@ impl TdfCbor {
             Value::Text(manifest_json),
         ));
 
-        // Build payload map
+        // Build payload map with integer keys and enum values per spec section 1.5
+        let payload_type_enum = match self.payload.payload_type.as_str() {
+            "inline" => enums::PAYLOAD_TYPE_INLINE,
+            "reference" => enums::PAYLOAD_TYPE_REFERENCE,
+            _ => enums::PAYLOAD_TYPE_INLINE,
+        };
+        let protocol_enum = match self.payload.protocol.as_str() {
+            "binary" => enums::PAYLOAD_PROTOCOL_BINARY,
+            "binary-chunked" => enums::PAYLOAD_PROTOCOL_BINARY_CHUNKED,
+            _ => enums::PAYLOAD_PROTOCOL_BINARY,
+        };
+
         let mut payload_map = vec![
             (
-                Value::Text("type".to_string()),
-                Value::Text(self.payload.payload_type.clone()),
+                Value::Integer(payload_key::TYPE.into()),
+                Value::Integer(payload_type_enum.into()),
             ),
             (
-                Value::Text("protocol".to_string()),
-                Value::Text(self.payload.protocol.clone()),
+                Value::Integer(payload_key::PROTOCOL.into()),
+                Value::Integer(protocol_enum.into()),
             ),
             (
-                Value::Text("isEncrypted".to_string()),
+                Value::Integer(payload_key::IS_ENCRYPTED.into()),
                 Value::Bool(self.payload.is_encrypted),
             ),
             (
-                Value::Text("value".to_string()),
+                Value::Integer(payload_key::VALUE.into()),
                 Value::Bytes(self.payload.value.clone()),
             ),
         ];
 
         if let Some(ref mt) = self.payload.mime_type {
-            payload_map.push((Value::Text("mimeType".to_string()), Value::Text(mt.clone())));
+            payload_map.push((
+                Value::Integer(payload_key::MIME_TYPE.into()),
+                Value::Text(mt.clone()),
+            ));
         }
 
         map.push((
