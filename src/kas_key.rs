@@ -1,7 +1,7 @@
 //! KAS public key retrieval and parsing
 //!
 //! This module provides functionality to fetch and parse KAS public keys
-//! from an OpenTDF platform for RSA key wrapping operations.
+//! from an OpenTDF platform for RSA and EC key wrapping operations.
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -12,6 +12,10 @@ use reqwest::Client;
 // Use aws-lc-rs for RSA public key validation (constant-time, FIPS validated)
 #[cfg(feature = "kas-client")]
 use aws_lc_rs::rsa::PublicEncryptingKey;
+
+// Use p256 for EC public key validation (re-exported from crate root)
+#[cfg(feature = "kas-client")]
+use crate::p256::{PublicKey as P256PublicKey, pkcs8::DecodePublicKey};
 
 /// Errors that can occur during KAS public key operations
 #[derive(Debug, Error)]
@@ -28,17 +32,31 @@ pub enum KasKeyError {
     #[error("RSA parse error: {0}")]
     RsaParseError(String),
 
+    #[error("EC parse error: {0}")]
+    EcParseError(String),
+
     #[cfg(feature = "kas-client")]
     #[error("Reqwest error: {0}")]
     ReqwestError(#[from] reqwest::Error),
 }
 
-/// Response structure from KAS public key endpoint
+/// Response structure from KAS public key endpoint (camelCase format)
 #[derive(Debug, Serialize, Deserialize)]
 pub struct KasPublicKeyResponse {
     #[serde(rename = "publicKey")]
     pub public_key: String, // PEM-encoded RSA public key
     pub kid: String, // Key ID
+}
+
+/// Response structure from KAS public key endpoint (snake_case format)
+///
+/// Some KAS implementations return keys in snake_case format.
+/// This struct handles both formats via serde aliases.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct KasEcPublicKeyResponse {
+    #[serde(alias = "public_key", alias = "publicKey")]
+    pub public_key: String, // PEM-encoded EC public key
+    pub kid: String, // Key ID (e.g., "ec:secp256r1")
 }
 
 /// Fetch the KAS public key from the platform
@@ -110,6 +128,90 @@ pub fn validate_rsa_public_key_pem(pem: &str) -> Result<String, KasKeyError> {
     Ok(pem.to_string())
 }
 
+/// Fetch the KAS EC public key from the platform
+///
+/// # Arguments
+///
+/// * `kas_url` - Base URL of the KAS service (e.g., "http://localhost:8080" or "http://localhost:8080/kas")
+/// * `http_client` - HTTP client to use for the request
+///
+/// # Returns
+///
+/// The KAS EC public key response containing the PEM-encoded key and key ID
+///
+/// # Example
+///
+/// ```no_run
+/// use opentdf::kas_key::{fetch_kas_ec_public_key, KasEcPublicKeyResponse};
+/// use reqwest::Client;
+///
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let client = Client::new();
+/// let response = fetch_kas_ec_public_key("https://kas.example.com", &client).await?;
+/// println!("Key ID: {}", response.kid);
+/// println!("Public Key: {}", response.public_key);
+/// # Ok(())
+/// # }
+/// ```
+#[cfg(feature = "kas-client")]
+pub async fn fetch_kas_ec_public_key(
+    kas_url: &str,
+    http_client: &Client,
+) -> Result<KasEcPublicKeyResponse, KasKeyError> {
+    // Construct the public key endpoint URL
+    let endpoint = if kas_url.ends_with("/kas") {
+        format!("{}/v2/kas_public_key", kas_url)
+    } else if kas_url.ends_with('/') {
+        format!("{}kas/v2/kas_public_key", kas_url)
+    } else {
+        format!("{}/kas/v2/kas_public_key", kas_url)
+    };
+
+    // Make the HTTP GET request
+    let response = http_client.get(&endpoint).send().await?;
+
+    // Check for HTTP errors
+    let status = response.status();
+    if !status.is_success() {
+        let error_body = response.text().await.unwrap_or_default();
+        return Err(KasKeyError::HttpError(format!(
+            "HTTP {}: {}",
+            status, error_body
+        )));
+    }
+
+    // Parse the JSON response
+    let key_response: KasEcPublicKeyResponse = response.json().await?;
+
+    // Validate the key is actually an EC key
+    validate_ec_public_key_pem(&key_response.public_key)?;
+
+    Ok(key_response)
+}
+
+/// Parse and validate a PEM-encoded EC public key (P-256/secp256r1)
+///
+/// This function validates that the key is in proper PEM format and can be parsed as a P-256 public key.
+///
+/// # Arguments
+///
+/// * `pem` - PEM-encoded EC public key string
+///
+/// # Returns
+///
+/// The validated PEM string if parsing succeeds
+#[cfg(feature = "kas-client")]
+pub fn validate_ec_public_key_pem(pem: &str) -> Result<String, KasKeyError> {
+    // Normalize line endings (handle \r\n from some servers)
+    let normalized = pem.replace("\r\n", "\n");
+
+    // Try to parse as P-256 public key
+    P256PublicKey::from_public_key_pem(&normalized)
+        .map_err(|e| KasKeyError::EcParseError(format!("Failed to parse EC public key: {}", e)))?;
+
+    Ok(normalized)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,6 +251,62 @@ PvJX+E+ceUD7JIZc87FvaA5OqwFUFXqJfYNU4ZE7d6ovRja8JwnErHa+7pEk6KkN
 
         let invalid_pem = "not a valid pem";
         let result = validate_rsa_public_key_pem(invalid_pem);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_kas_ec_public_key_response_deserialization_snake_case() {
+        // Test snake_case format (from actual KAS server)
+        let json = r#"{
+            "public_key": "-----BEGIN PUBLIC KEY-----\nBP7ISW0/0W1VJIFfv+Zvij25a+WVxx1PtiuVcrRLBkCSdH8YpLGVwwu7cAjwF2YB\nNyzrzkRqm0K4inv5zOIqiLg=\n-----END PUBLIC KEY-----\n",
+            "kid": "ec:secp256r1"
+        }"#;
+
+        let response: KasEcPublicKeyResponse = serde_json::from_str(json).unwrap();
+        assert!(
+            response
+                .public_key
+                .starts_with("-----BEGIN PUBLIC KEY-----")
+        );
+        assert_eq!(response.kid, "ec:secp256r1");
+    }
+
+    #[test]
+    fn test_kas_ec_public_key_response_deserialization_camel_case() {
+        // Test camelCase format (alternative format)
+        let json = r#"{
+            "publicKey": "-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----\n",
+            "kid": "ec:secp256r1"
+        }"#;
+
+        let response: KasEcPublicKeyResponse = serde_json::from_str(json).unwrap();
+        assert!(
+            response
+                .public_key
+                .starts_with("-----BEGIN PUBLIC KEY-----")
+        );
+        assert_eq!(response.kid, "ec:secp256r1");
+    }
+
+    #[cfg(feature = "kas-client")]
+    #[test]
+    fn test_validate_ec_public_key_pem() {
+        // This is a valid P-256 public key
+        let valid_pem = r#"-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE/shJbT/RbVUkgV+/5m+KPblr5ZXH
+HU+2K5VytEsGQJJ0fxiksZXDC7twCPAXZgE3LOvORGqbQriKe/nM4iqIuA==
+-----END PUBLIC KEY-----"#;
+
+        let result = validate_ec_public_key_pem(valid_pem);
+        assert!(result.is_ok());
+
+        // Test with Windows line endings
+        let crlf_pem = "-----BEGIN PUBLIC KEY-----\r\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE/shJbT/RbVUkgV+/5m+KPblr5ZXH\r\nHU+2K5VytEsGQJJ0fxiksZXDC7twCPAXZgE3LOvORGqbQriKe/nM4iqIuA==\r\n-----END PUBLIC KEY-----\r\n";
+        let result = validate_ec_public_key_pem(crlf_pem);
+        assert!(result.is_ok());
+
+        let invalid_pem = "not a valid pem";
+        let result = validate_ec_public_key_pem(invalid_pem);
         assert!(result.is_err());
     }
 }
