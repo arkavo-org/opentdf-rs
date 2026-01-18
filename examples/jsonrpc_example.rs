@@ -1,16 +1,16 @@
-//! Example demonstrating ZTDF-JSON format for JSON-RPC protocols
+//! Example demonstrating TDF-JSON format for JSON-RPC protocols
 //!
 //! This example shows how to:
-//! 1. Create a TDF envelope with inline payload (ZTDF-JSON format)
+//! 1. Create a TDF envelope with inline payload (TDF-JSON format)
 //! 2. Serialize it to JSON for transmission over JSON-RPC
 //! 3. Deserialize and decrypt the payload
 //!
 //! Run with: cargo run --example jsonrpc_example
 
-use opentdf::{Policy, jsonrpc::TdfJsonRpc};
+use opentdf::{Policy, jsonrpc::TdfJson};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("=== ZTDF-JSON Example ===\n");
+    println!("=== TDF-JSON Example ===\n");
 
     // 1. Create a policy with attribute-based access control
     let policy = Policy::new(
@@ -21,16 +21,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Created policy for user@example.com");
 
-    // 2. Encrypt data into ZTDF-JSON format
+    // 2. Encrypt data into TDF-JSON format
     let original_data = b"This is sensitive data for JSON-RPC transmission";
 
-    let envelope = TdfJsonRpc::encrypt(original_data)
+    let envelope = TdfJson::encrypt(original_data)
         .kas_url("https://kas.example.com")
         .policy(policy)
         .mime_type("text/plain")
         .build()?;
 
-    println!("Encrypted data into ZTDF-JSON envelope");
+    println!("Encrypted data into TDF-JSON envelope");
 
     // 3. Serialize to JSON (ready for JSON-RPC transmission)
     let json = serde_json::to_string_pretty(&envelope)?;
@@ -41,22 +41,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("JSON size: {} bytes", json.len());
 
     // 4. Simulate transmission and deserialization
-    let received_envelope: TdfJsonRpc = serde_json::from_str(&json)?;
+    let received_envelope: TdfJson = serde_json::from_str(&json)?;
 
     println!("\n=== Received Envelope ===");
+    println!("TDF type: {}", received_envelope.tdf);
     println!("Version: {}", received_envelope.version);
-    println!(
-        "Payload type: {}",
-        received_envelope.manifest.payload.payload_type
-    );
-    println!(
-        "MIME type: {}",
-        received_envelope.manifest.payload.mime_type
-    );
-    println!(
-        "Encrypted: {}",
-        received_envelope.manifest.payload.is_encrypted
-    );
+    println!("Payload type: {}", received_envelope.payload.payload_type);
+    if let Some(ref mime) = received_envelope.payload.mime_type {
+        println!("MIME type: {}", mime);
+    }
+    println!("Encrypted: {}", received_envelope.payload.is_encrypted);
     println!(
         "Algorithm: {}",
         received_envelope

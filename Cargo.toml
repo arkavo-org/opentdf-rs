@@ -37,6 +37,9 @@ rand = { workspace = true, optional = true }
 aws-lc-rs = { version = "1.15", optional = true }
 pem = { version = "3.0", optional = true }
 
+# CBOR encoding for TDF-CBOR format (optional)
+ciborium = { version = "0.2", optional = true }
+
 [dev-dependencies]
 tempfile = "3.14"
 mockito = "1.6"
@@ -44,6 +47,12 @@ criterion = "0.5"
 # Required for jwt_helper.rs example
 p256 = { version = "0.13", features = ["ecdsa", "pem"] }
 rand = "0.8"
+# Required for mock KAS server and xtest CLI
+axum = "0.8"
+tower = "0.5"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs"] }
+clap = { version = "4", features = ["derive"] }
+hex = "0.4"
 
 [workspace]
 members = ["crates/protocol", "crates/crypto", "crates/wasm"]
@@ -108,6 +117,9 @@ _kas-client-base = ["dep:reqwest", "dep:tokio", "dep:jsonwebtoken", "dep:rand", 
 rustls-tls = ["reqwest?/rustls-tls"]
 native-tls = ["reqwest?/native-tls"]
 
+# TDF-CBOR format support (optional)
+cbor = ["dep:ciborium"]
+
 # Deprecated aliases for backwards compatibility
 kas = ["kas-client"]
 rustcrypto-rsa = ["opentdf-crypto/rustcrypto-provider"]
@@ -132,6 +144,18 @@ required-features = ["kas-client"]
 [[example]]
 name = "jwt_helper"
 required-features = ["kas-client"]
+
+[[example]]
+name = "tdf_cbor_example"
+required-features = ["cbor"]
+
+[[example]]
+name = "mock_kas_server"
+required-features = ["kas-client", "cbor"]
+
+[[example]]
+name = "xtest_cli"
+required-features = ["kas-client", "cbor"]
 
 [[bench]]
 name = "memory_builder"

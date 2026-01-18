@@ -62,7 +62,7 @@ pub use kem::rsa::{OaepHash, RsaOaepKem, wrap_key_with_rsa_oaep};
 
 // EC KEM exports
 #[cfg(feature = "kem-ec")]
-pub use kem::ec::{EcCurve, EcdhKem};
+pub use kem::ec::{EcCurve, EcWrappedKeyResult, EcdhKem, unwrap_key_with_ec, wrap_key_with_ec};
 
 // PQC (Post-Quantum Cryptography) exports - always available
 pub use kem::pqc::{HybridKem, MlKemLevel, MlKemWrapper};

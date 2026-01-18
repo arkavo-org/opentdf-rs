@@ -168,9 +168,52 @@ mod kas_tests {
         // In a real scenario, the wrapped_key would be re-wrapped by KAS
         // and we'd use KAS to unwrap it for decryption
     }
+
+    #[tokio::test]
+    #[ignore] // Requires KAS server
+    async fn test_fetch_kas_ec_public_key() {
+        use opentdf::{fetch_kas_ec_public_key, validate_ec_public_key_pem};
+        use reqwest::Client;
+
+        // Use environment variable or default to production server
+        let kas_url =
+            std::env::var("KAS_URL").unwrap_or_else(|_| "https://100.arkavo.net".to_string());
+
+        println!("Fetching EC public key from {}...", kas_url);
+
+        let client = Client::builder()
+            .danger_accept_invalid_certs(true) // For testing with self-signed certs
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .expect("Failed to build HTTP client");
+
+        match fetch_kas_ec_public_key(&kas_url, &client).await {
+            Ok(response) => {
+                println!("✓ Successfully fetched EC public key!");
+                println!("  Key ID: {}", response.kid);
+                println!("  Public Key:\n{}", response.public_key);
+
+                // Validate the key
+                let validated = validate_ec_public_key_pem(&response.public_key)
+                    .expect("Key validation failed");
+                println!("✓ Key validation passed");
+                println!("  Normalized length: {} bytes", validated.len());
+
+                // Verify it's an EC key
+                assert!(
+                    response.kid.contains("ec") || response.kid.contains("secp256"),
+                    "Expected EC key, got: {}",
+                    response.kid
+                );
+            }
+            Err(e) => {
+                panic!("Failed to fetch EC public key: {}", e);
+            }
+        }
+    }
 }
 
-#[cfg(not(feature = "kas"))]
+#[cfg(not(feature = "kas-client"))]
 #[test]
 fn kas_feature_disabled() {
     // This test passes when KAS feature is not enabled
