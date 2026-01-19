@@ -55,7 +55,7 @@ clap = { version = "4", features = ["derive"] }
 hex = "0.4"
 
 [workspace]
-members = ["crates/protocol", "crates/crypto", "crates/wasm"]
+members = ["crates/protocol", "crates/crypto", "crates/kas", "crates/wasm"]
 
 [workspace.package]
 version = "0.10.0"
