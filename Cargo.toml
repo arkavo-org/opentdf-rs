@@ -15,8 +15,8 @@ readme = "README.md"
 
 [dependencies]
 # New modular crates
-opentdf-protocol = { path = "crates/protocol", version = "0.10.0" }
-opentdf-crypto = { path = "crates/crypto", version = "0.10.0", default-features = false }
+opentdf-protocol = { path = "crates/protocol", version = "0.11.0" }
+opentdf-crypto = { path = "crates/crypto", version = "0.11.0", default-features = false }
 
 # Core dependencies (using workspace versions)
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
@@ -53,12 +53,17 @@ tower = "0.5"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs"] }
 clap = { version = "4", features = ["derive"] }
 hex = "0.4"
+# KAS crate for server-side crypto operations in mock_kas_server (EC only, RSA uses aws-lc-rs)
+opentdf-kas = { path = "crates/kas" }
+# Additional crypto dependencies for mock_kas_server
+hkdf = "0.12"
+sha2 = "0.10"
 
 [workspace]
 members = ["crates/protocol", "crates/crypto", "crates/kas", "crates/wasm"]
 
 [workspace.package]
-version = "0.10.0"
+version = "0.11.0"
 
 [workspace.dependencies]
 # Core serialization

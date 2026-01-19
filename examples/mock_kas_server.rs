@@ -3,6 +3,9 @@
 //! This lightweight HTTP server implements the KAS v2 protocol for testing
 //! cross-SDK compatibility between opentdf-rs and OpenTDFKit.
 //!
+//! Uses opentdf-kas crate for EC operations (NanoTDF/JSON/CBOR) and
+//! aws-lc-rs for RSA operations (Standard TDF) to avoid timing vulnerabilities.
+//!
 //! # Endpoints
 //!
 //! - `GET /kas/v2/kas_public_key` - Returns RSA-2048 public key (PEM)
@@ -28,6 +31,7 @@ use axum::{
     routing::{get, post},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use opentdf_kas::{KasEcKeypair, custom_ecdh, rewrap_dek_simple};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -37,16 +41,16 @@ use std::sync::{Arc, RwLock};
 // ============================================================================
 
 /// Shared server state containing keys and wrapped key store
+///
+/// Uses opentdf-kas crate for EC keys and aws-lc-rs for RSA keys (constant-time).
 #[derive(Clone)]
 struct AppState {
-    /// RSA private key for unwrapping (DER format)
+    /// EC keypair for NanoTDF/JSON/CBOR unwrapping (uses kas crate)
+    ec_keypair: Arc<KasEcKeypair>,
+    /// RSA private key for Standard TDF unwrapping (DER format, uses aws-lc-rs)
     rsa_private_key_der: Vec<u8>,
     /// RSA public key PEM for clients
     rsa_public_key_pem: String,
-    /// EC private key for NanoTDF unwrapping
-    ec_private_key_pem: String,
-    /// EC public key PEM for clients
-    ec_public_key_pem: String,
     /// Store mapping policy_id -> symmetric key (for deterministic testing)
     #[allow(dead_code)]
     key_store: Arc<RwLock<HashMap<String, Vec<u8>>>>,
@@ -54,7 +58,10 @@ struct AppState {
 
 impl AppState {
     fn new() -> Self {
-        // Generate RSA-2048 key pair using aws-lc-rs
+        // Generate EC keypair using kas crate
+        let ec_keypair = KasEcKeypair::generate().expect("Failed to generate EC keypair");
+
+        // Generate RSA-2048 keypair using aws-lc-rs (constant-time, FIPS validated)
         let rsa_private = aws_lc_rs::rsa::KeyPair::generate(aws_lc_rs::rsa::KeySize::Rsa2048)
             .expect("Failed to generate RSA key pair");
 
@@ -65,29 +72,24 @@ impl AppState {
             .to_vec();
 
         let public_key_der = rsa_private.public_key().as_ref().to_vec();
-
         let public_key_pem = pem::encode(&pem::Pem::new("PUBLIC KEY", public_key_der));
 
-        // Generate EC P-256 key pair
-        let ec_secret = p256::SecretKey::random(&mut rand::rngs::OsRng);
-        let ec_public = ec_secret.public_key();
-
-        use p256::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
-        let ec_private_pem = ec_secret
-            .to_pkcs8_pem(LineEnding::LF)
-            .expect("Failed to encode EC private key")
-            .to_string();
-        let ec_public_pem = ec_public
-            .to_public_key_pem(LineEnding::LF)
-            .expect("Failed to encode EC public key");
-
         Self {
+            ec_keypair: Arc::new(ec_keypair),
             rsa_private_key_der: private_key_der,
             rsa_public_key_pem: public_key_pem,
-            ec_private_key_pem: ec_private_pem,
-            ec_public_key_pem: ec_public_pem,
             key_store: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Get EC public key PEM
+    fn ec_public_key_pem(&self) -> &str {
+        self.ec_keypair.public_key_pem()
+    }
+
+    /// Get RSA public key PEM
+    fn rsa_public_key_pem(&self) -> &str {
+        &self.rsa_public_key_pem
     }
 
     /// Store a symmetric key for a policy ID
@@ -245,9 +247,9 @@ async fn get_public_key(State(state): State<AppState>, headers: HeaderMap) -> im
 
     // If the request specifically asks for EC key
     let public_key = if algorithm.contains("ec") {
-        state.ec_public_key_pem.clone()
+        state.ec_public_key_pem().to_string()
     } else {
-        state.rsa_public_key_pem.clone()
+        state.rsa_public_key_pem().to_string()
     };
 
     Json(PublicKeyResponse { public_key })
@@ -261,9 +263,9 @@ async fn get_public_key_with_algorithm(
     let algorithm = params.get("algorithm").map(|s| s.as_str()).unwrap_or("");
 
     let public_key = if algorithm.starts_with("ec:") || algorithm == "ec" {
-        state.ec_public_key_pem.clone()
+        state.ec_public_key_pem().to_string()
     } else {
-        state.rsa_public_key_pem.clone()
+        state.rsa_public_key_pem().to_string()
     };
 
     Json(PublicKeyResponse { public_key })
@@ -472,6 +474,9 @@ fn derive_symmetric_key(policy_id: &str) -> Vec<u8> {
 }
 
 /// Unwrap an RSA-wrapped key and re-wrap for the client
+///
+/// Uses aws-lc-rs for RSA decryption (constant-time, FIPS validated) and
+/// opentdf-kas crate for ECDH and rewrapping.
 fn unwrap_rsa_wrapped_key(
     state: &AppState,
     wrapped_key_b64: &str,
@@ -484,14 +489,14 @@ fn unwrap_rsa_wrapped_key(
         .decode(wrapped_key_b64)
         .map_err(|e| format!("Failed to decode wrapped key: {}", e))?;
 
-    // Load the KAS private key
+    // Load the KAS private key using aws-lc-rs
     let private_key = PrivateDecryptingKey::from_pkcs8(&state.rsa_private_key_der)
         .map_err(|e| format!("Failed to load KAS private key: {:?}", e))?;
 
     let oaep_key = OaepPrivateDecryptingKey::new(private_key)
         .map_err(|e| format!("Failed to create OAEP key: {:?}", e))?;
 
-    // Decrypt the wrapped key
+    // Decrypt the wrapped key using constant-time RSA-OAEP
     let mut plaintext = vec![0u8; oaep_key.min_output_size()];
     let decrypted = oaep_key
         .decrypt(&OAEP_SHA1_MGF1SHA1, &wrapped_key, &mut plaintext, None)
@@ -506,9 +511,20 @@ fn unwrap_rsa_wrapped_key(
             let session_private = p256::SecretKey::random(&mut rand::rngs::OsRng);
             let session_public = session_private.public_key();
 
-            // For EC client key, use ECDH + AES-GCM
-            let wrapped_for_client =
-                wrap_key_for_ec_client(&session_private, &client_public, &symmetric_key)?;
+            // Compute session shared secret using kas crate's custom_ecdh
+            let session_shared_secret = custom_ecdh(&session_private, &client_public)
+                .map_err(|e| format!("ECDH failed: {}", e))?;
+
+            // Use kas crate's rewrap_dek_simple to wrap the DEK for the client
+            let (rewrap_nonce, wrapped_dek) =
+                rewrap_dek_simple(&symmetric_key, &session_shared_secret)
+                    .map_err(|e| format!("Rewrap failed: {}", e))?;
+
+            // Encode as base64 (nonce + wrapped_dek)
+            let mut combined = Vec::with_capacity(rewrap_nonce.len() + wrapped_dek.len());
+            combined.extend_from_slice(&rewrap_nonce);
+            combined.extend_from_slice(&wrapped_dek);
+            let wrapped_for_client = BASE64.encode(&combined);
 
             use p256::pkcs8::EncodePublicKey;
             let session_public_pem = session_public
@@ -518,44 +534,40 @@ fn unwrap_rsa_wrapped_key(
             Ok((wrapped_for_client, session_public_pem))
         }
         Err(_) => {
-            // Fall back to RSA wrapping
+            // Fall back to RSA wrapping (no session key needed)
             parse_rsa_public_key_and_wrap(&symmetric_key, client_public_key_pem)
         }
     }
 }
 
 /// Unwrap an EC-wrapped key and re-wrap for the client
+///
+/// Uses opentdf-kas crate for EC key agreement and rewrapping.
 fn unwrap_ec_wrapped_key(
     state: &AppState,
     ephemeral_public_key_b64: &str,
     wrapped_key_b64: &str,
     client_public_key_pem: &str,
 ) -> Result<(String, String), String> {
-    // Decode ephemeral public key
+    // Decode ephemeral public key from TDF
     let ephemeral_pk_bytes = BASE64
         .decode(ephemeral_public_key_b64)
         .map_err(|e| format!("Failed to decode ephemeral public key: {}", e))?;
-
-    // Parse KAS EC private key
-    use p256::pkcs8::DecodePrivateKey;
-    let kas_private = p256::SecretKey::from_pkcs8_pem(&state.ec_private_key_pem)
-        .map_err(|e| format!("Failed to parse KAS EC private key: {}", e))?;
 
     // Parse ephemeral public key (SEC1 compressed/uncompressed format)
     let ephemeral_public = p256::PublicKey::from_sec1_bytes(&ephemeral_pk_bytes)
         .map_err(|e| format!("Failed to parse ephemeral public key: {}", e))?;
 
-    // Perform ECDH
-    let shared_secret = p256::ecdh::diffie_hellman(
-        kas_private.to_nonzero_scalar(),
-        ephemeral_public.as_affine(),
-    );
+    // Perform ECDH between KAS private key and TDF ephemeral public key
+    // using kas crate's custom_ecdh (returns x-coordinate)
+    let dek_shared_secret = custom_ecdh(state.ec_keypair.private_key(), &ephemeral_public)
+        .map_err(|e| format!("ECDH with TDF ephemeral key failed: {}", e))?;
 
-    // Derive symmetric key using HKDF
-    use opentdf_crypto::hkdf::Hkdf;
-    use opentdf_crypto::sha2::Sha256;
+    // Derive symmetric key using HKDF (no salt, empty info for TDF-JSON/CBOR format)
+    use hkdf::Hkdf;
+    use sha2::Sha256;
 
-    let hkdf = Hkdf::<Sha256>::new(None, shared_secret.raw_secret_bytes());
+    let hkdf = Hkdf::<Sha256>::new(None, &dek_shared_secret);
     let mut unwrap_key = [0u8; 32];
     hkdf.expand(&[], &mut unwrap_key)
         .map_err(|e| format!("HKDF expansion failed: {}", e))?;
@@ -591,16 +603,26 @@ fn unwrap_ec_wrapped_key(
         .decrypt(nonce, ciphertext_and_tag)
         .map_err(|e| format!("AES-GCM decryption failed: {}", e))?;
 
-    // Generate session key pair for re-wrapping
+    // Generate session key pair for re-wrapping to client
     let session_private = p256::SecretKey::random(&mut rand::rngs::OsRng);
     let session_public = session_private.public_key();
 
     // Parse client's public key
     let client_public = parse_ec_public_key(client_public_key_pem)?;
 
-    // Wrap key for client
-    let wrapped_for_client =
-        wrap_key_for_ec_client(&session_private, &client_public, &symmetric_key)?;
+    // Compute session shared secret with client using kas crate's custom_ecdh
+    let session_shared_secret = custom_ecdh(&session_private, &client_public)
+        .map_err(|e| format!("ECDH with client key failed: {}", e))?;
+
+    // Use kas crate's rewrap_dek_simple to wrap the DEK for the client
+    let (rewrap_nonce, wrapped_dek) = rewrap_dek_simple(&symmetric_key, &session_shared_secret)
+        .map_err(|e| format!("Rewrap failed: {}", e))?;
+
+    // Encode as base64 (nonce + wrapped_dek)
+    let mut combined = Vec::with_capacity(rewrap_nonce.len() + wrapped_dek.len());
+    combined.extend_from_slice(&rewrap_nonce);
+    combined.extend_from_slice(&wrapped_dek);
+    let wrapped_for_client = BASE64.encode(&combined);
 
     use p256::pkcs8::EncodePublicKey;
     let session_public_pem = session_public
@@ -645,57 +667,6 @@ fn parse_rsa_public_key_and_wrap(
     Ok((BASE64.encode(result), String::new()))
 }
 
-/// Wrap a symmetric key for an EC client using ECDH + AES-GCM
-fn wrap_key_for_ec_client(
-    session_private: &p256::SecretKey,
-    client_public: &p256::PublicKey,
-    symmetric_key: &[u8],
-) -> Result<String, String> {
-    // Perform ECDH
-    let shared_secret = p256::ecdh::diffie_hellman(
-        session_private.to_nonzero_scalar(),
-        client_public.as_affine(),
-    );
-
-    // Derive wrapping key using HKDF
-    use opentdf_crypto::hkdf::Hkdf;
-    use opentdf_crypto::sha2::Sha256;
-
-    // Use same salt as the client will use
-    let mut salt_hasher = opentdf_crypto::sha2::Sha256::new();
-    use opentdf_crypto::sha2::Digest;
-    salt_hasher.update(b"TDF");
-    let salt = salt_hasher.finalize();
-
-    let hkdf = Hkdf::<Sha256>::new(Some(&salt), shared_secret.raw_secret_bytes());
-    let mut wrap_key = [0u8; 32];
-    hkdf.expand(&[], &mut wrap_key)
-        .map_err(|e| format!("HKDF expansion failed: {}", e))?;
-
-    // Generate random nonce
-    use aes_gcm::{
-        Aes256Gcm,
-        aead::{Aead, AeadCore, KeyInit},
-    };
-    use rand::rngs::OsRng;
-
-    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
-
-    let cipher = Aes256Gcm::new_from_slice(&wrap_key)
-        .map_err(|e| format!("Failed to create cipher: {}", e))?;
-
-    #[allow(deprecated)]
-    let ciphertext = cipher
-        .encrypt(&nonce, symmetric_key)
-        .map_err(|e| format!("AES-GCM encryption failed: {}", e))?;
-
-    // Concatenate nonce + ciphertext
-    let mut result = nonce.to_vec();
-    result.extend_from_slice(&ciphertext);
-
-    Ok(BASE64.encode(&result))
-}
-
 // ============================================================================
 // Main Server
 // ============================================================================
@@ -714,11 +685,11 @@ async fn main() {
     std::fs::create_dir_all(temp_dir).expect("Failed to create temp directory");
 
     let rsa_key_path = temp_dir.join("kas_public_rsa.pem");
-    std::fs::write(&rsa_key_path, &state.rsa_public_key_pem)
+    std::fs::write(&rsa_key_path, state.rsa_public_key_pem())
         .expect("Failed to write RSA public key");
 
     let ec_key_path = temp_dir.join("kas_public_ec.pem");
-    std::fs::write(&ec_key_path, &state.ec_public_key_pem).expect("Failed to write EC public key");
+    std::fs::write(&ec_key_path, state.ec_public_key_pem()).expect("Failed to write EC public key");
 
     println!("=== Mock KAS Server ===");
     println!("Port: {}", port);
