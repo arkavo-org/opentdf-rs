@@ -1,4 +1,4 @@
-# opentdf-kas-server
+# opentdf-kas
 
 Server-side cryptographic operations for OpenTDF Key Access Service (KAS) implementations.
 
@@ -20,7 +20,7 @@ This crate provides the cryptographic primitives needed to implement a KAS serve
 ## Usage
 
 ```rust
-use opentdf_kas_server::{KasEcKeypair, ec_unwrap};
+use opentdf_kas::{KasEcKeypair, ec_unwrap};
 
 // Generate or load KAS EC keypair
 let kas_keypair = KasEcKeypair::generate()?;

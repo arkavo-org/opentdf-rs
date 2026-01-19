@@ -15,9 +15,9 @@
 //! # Example
 //!
 //! ```
-//! use opentdf_kas_server::{KasEcKeypair, ec_unwrap};
+//! use opentdf_kas::{KasEcKeypair, ec_unwrap};
 //!
-//! # fn example() -> Result<(), opentdf_kas_server::KasServerError> {
+//! # fn example() -> Result<(), opentdf_kas::KasServerError> {
 //! // Generate KAS EC keypair
 //! let kas_keypair = KasEcKeypair::generate()?;
 //!
