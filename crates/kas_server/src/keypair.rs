@@ -1,8 +1,8 @@
 //! KAS keypair management for EC and RSA keys
 
 use crate::error::KasServerError;
-use p256::{PublicKey as P256PublicKey, SecretKey as P256SecretKey};
 use p256::elliptic_curve::sec1::ToEncodedPoint;
+use p256::{PublicKey as P256PublicKey, SecretKey as P256SecretKey};
 
 /// EC P-256 keypair for NanoTDF operations
 #[derive(Clone)]
@@ -66,8 +66,8 @@ impl KasEcKeypair {
 
     /// Parse PEM-encoded public key
     pub fn parse_public_key_pem(pem_str: &str) -> Result<P256PublicKey, KasServerError> {
-        let pem_parsed = pem::parse(pem_str)
-            .map_err(|e| KasServerError::InvalidPublicKey(e.to_string()))?;
+        let pem_parsed =
+            pem::parse(pem_str).map_err(|e| KasServerError::InvalidPublicKey(e.to_string()))?;
         P256PublicKey::from_sec1_bytes(pem_parsed.contents())
             .map_err(|e| KasServerError::InvalidPublicKey(e.to_string()))
     }

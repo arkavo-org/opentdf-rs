@@ -97,7 +97,10 @@ mod tests {
 
     #[test]
     fn test_algorithm_parsing() {
-        assert_eq!(KeyAlgorithm::parse("ec:secp256r1"), Some(KeyAlgorithm::EcP256));
+        assert_eq!(
+            KeyAlgorithm::parse("ec:secp256r1"),
+            Some(KeyAlgorithm::EcP256)
+        );
         assert_eq!(KeyAlgorithm::parse("ec"), Some(KeyAlgorithm::EcP256));
         assert_eq!(KeyAlgorithm::parse("rsa:2048"), Some(KeyAlgorithm::Rsa2048));
         assert_eq!(KeyAlgorithm::parse("rsa"), Some(KeyAlgorithm::Rsa2048));
