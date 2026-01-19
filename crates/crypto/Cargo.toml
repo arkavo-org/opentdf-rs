@@ -36,7 +36,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 # Protocol types (for NanoTDF)
-opentdf-protocol = { path = "../protocol", version = "0.10.0" }
+opentdf-protocol = { path = "../protocol", version = "0.11.0" }
 
 # KAS feature dependencies (EC, HKDF)
 p256 = { workspace = true, optional = true }
