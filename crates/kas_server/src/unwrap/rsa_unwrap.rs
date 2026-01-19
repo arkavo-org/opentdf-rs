@@ -1,6 +1,16 @@
 //! RSA (Standard TDF) unwrap operations
 //!
 //! Provides RSA-OAEP decryption for Standard TDF wrapped keys.
+//!
+//! # SHA-1 Usage in RSA-OAEP
+//!
+//! This module uses SHA-1 as the hash function for RSA-OAEP padding. This is
+//! intentional for compatibility with the OpenTDF specification and existing
+//! TDF files created by other OpenTDF implementations.
+//!
+//! **Security Note**: SHA-1's collision vulnerabilities do not affect OAEP
+//! security. OAEP requires only preimage resistance, which SHA-1 still
+//! provides. The use of SHA-1 here is safe and follows the OpenTDF spec.
 
 use crate::error::KasServerError;
 use crate::rewrap::{encode_wrapped_key, rewrap_dek_simple};

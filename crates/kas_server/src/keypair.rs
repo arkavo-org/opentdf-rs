@@ -1,4 +1,14 @@
 //! KAS keypair management for EC and RSA keys
+//!
+//! # EC Public Key Format
+//!
+//! EC public keys are encoded using SEC1 uncompressed format (65 bytes for P-256)
+//! wrapped in a PEM block with "PUBLIC KEY" label. This format stores the raw
+//! elliptic curve point coordinates.
+//!
+//! For external interoperability with systems expecting SPKI (SubjectPublicKeyInfo)
+//! format, the raw SEC1 bytes can be extracted and re-encoded as needed. The SEC1
+//! format is used here for simplicity and direct compatibility with the p256 crate.
 
 use crate::error::KasServerError;
 use p256::elliptic_curve::sec1::ToEncodedPoint;
