@@ -44,9 +44,9 @@ pub mod unwrap;
 pub use error::KasServerError;
 
 // Re-export keypair types
-pub use keypair::{KasEcKeypair, KasKeypair};
 #[cfg(feature = "rsa")]
 pub use keypair::KasRsaKeypair;
+pub use keypair::{KasEcKeypair, KasKeypair};
 
 // Re-export rewrap functions
 pub use rewrap::{encode_wrapped_key, rewrap_dek, rewrap_dek_simple};
@@ -61,9 +61,9 @@ pub use salt::{
 pub use types::{KeyAccessObject, KeyAlgorithm, KeyInfo, RewrapResult};
 
 // Re-export unwrap functions
-pub use unwrap::{custom_ecdh, ec_unwrap};
 #[cfg(feature = "rsa")]
 pub use unwrap::rsa_unwrap;
+pub use unwrap::{custom_ecdh, ec_unwrap};
 
 // Re-export underlying crypto libraries for advanced use cases
 pub use p256;

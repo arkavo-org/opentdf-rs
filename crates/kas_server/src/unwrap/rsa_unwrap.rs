@@ -57,9 +57,7 @@ mod tests {
         // Create a test DEK and wrap it
         let dek = b"test_data_encryption_key_32byte!";
         let padding = Oaep::new::<Sha1>();
-        let wrapped = rsa_public
-            .encrypt(&mut OsRng, padding, dek)
-            .unwrap();
+        let wrapped = rsa_public.encrypt(&mut OsRng, padding, dek).unwrap();
 
         // Session shared secret
         let session_secret = b"test_session_shared_secret__32b!";

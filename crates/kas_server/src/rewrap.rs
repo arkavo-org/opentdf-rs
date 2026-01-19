@@ -3,12 +3,12 @@
 //! Provides HKDF key derivation and AES-GCM encryption for rewrapping DEKs.
 
 use crate::error::KasServerError;
+use aes_gcm::Aes256Gcm;
 use aes_gcm::aead::generic_array::GenericArray;
 use aes_gcm::aead::{Aead, Key, KeyInit};
-use aes_gcm::Aes256Gcm;
 use hkdf::Hkdf;
-use rand::rngs::OsRng;
 use rand::RngCore;
+use rand::rngs::OsRng;
 use sha2::Sha256;
 
 /// NanoTDF-compatible rewrap operation

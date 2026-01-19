@@ -94,14 +94,8 @@ mod tests {
 
     #[test]
     fn test_detect_nanotdf_version() {
-        assert_eq!(
-            detect_nanotdf_version(b"L1L"),
-            Some(NanoTdfVersion::V12)
-        );
-        assert_eq!(
-            detect_nanotdf_version(b"L1M"),
-            Some(NanoTdfVersion::V13)
-        );
+        assert_eq!(detect_nanotdf_version(b"L1L"), Some(NanoTdfVersion::V12));
+        assert_eq!(detect_nanotdf_version(b"L1M"), Some(NanoTdfVersion::V13));
         assert_eq!(detect_nanotdf_version(b"XXL"), None);
         assert_eq!(detect_nanotdf_version(b"L1"), None);
         assert_eq!(detect_nanotdf_version(b"L1Z"), None);
