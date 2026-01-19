@@ -53,13 +53,11 @@ tower = "0.5"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs"] }
 clap = { version = "4", features = ["derive"] }
 hex = "0.4"
-# KAS crate for server-side crypto operations in mock_kas_server
-opentdf-kas = { path = "crates/kas", features = ["rsa"] }
+# KAS crate for server-side crypto operations in mock_kas_server (EC only, RSA uses aws-lc-rs)
+opentdf-kas = { path = "crates/kas" }
 # Additional crypto dependencies for mock_kas_server
 hkdf = "0.12"
 sha2 = "0.10"
-sha1 = "0.10"
-rsa = "0.9"
 
 [workspace]
 members = ["crates/protocol", "crates/crypto", "crates/kas", "crates/wasm"]

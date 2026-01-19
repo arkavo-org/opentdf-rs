@@ -3,8 +3,8 @@
 //! This lightweight HTTP server implements the KAS v2 protocol for testing
 //! cross-SDK compatibility between opentdf-rs and OpenTDFKit.
 //!
-//! This version uses the opentdf-kas crate for all cryptographic operations,
-//! providing a true integration test of the KAS library.
+//! Uses opentdf-kas crate for EC operations (NanoTDF/JSON/CBOR) and
+//! aws-lc-rs for RSA operations (Standard TDF) to avoid timing vulnerabilities.
 //!
 //! # Endpoints
 //!
@@ -21,6 +21,8 @@
 //!
 //! The server listens on port 9080 by default. Set `MOCK_KAS_PORT` to change.
 
+use aws_lc_rs::encoding::AsDer;
+use aws_lc_rs::signature::KeyPair;
 use axum::{
     Json, Router,
     extract::State,
@@ -29,7 +31,7 @@ use axum::{
     routing::{get, post},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use opentdf_kas::{KasEcKeypair, KasRsaKeypair, custom_ecdh, rewrap_dek_simple, rsa_unwrap};
+use opentdf_kas::{KasEcKeypair, custom_ecdh, rewrap_dek_simple};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -40,13 +42,15 @@ use std::sync::{Arc, RwLock};
 
 /// Shared server state containing keys and wrapped key store
 ///
-/// Uses opentdf-kas crate types for key management.
+/// Uses opentdf-kas crate for EC keys and aws-lc-rs for RSA keys (constant-time).
 #[derive(Clone)]
 struct AppState {
     /// EC keypair for NanoTDF/JSON/CBOR unwrapping (uses kas crate)
     ec_keypair: Arc<KasEcKeypair>,
-    /// RSA keypair for Standard TDF unwrapping (uses kas crate)
-    rsa_keypair: Arc<KasRsaKeypair>,
+    /// RSA private key for Standard TDF unwrapping (DER format, uses aws-lc-rs)
+    rsa_private_key_der: Vec<u8>,
+    /// RSA public key PEM for clients
+    rsa_public_key_pem: String,
     /// Store mapping policy_id -> symmetric key (for deterministic testing)
     #[allow(dead_code)]
     key_store: Arc<RwLock<HashMap<String, Vec<u8>>>>,
@@ -54,13 +58,26 @@ struct AppState {
 
 impl AppState {
     fn new() -> Self {
-        // Generate keypairs using the kas crate
+        // Generate EC keypair using kas crate
         let ec_keypair = KasEcKeypair::generate().expect("Failed to generate EC keypair");
-        let rsa_keypair = KasRsaKeypair::generate().expect("Failed to generate RSA keypair");
+
+        // Generate RSA-2048 keypair using aws-lc-rs (constant-time, FIPS validated)
+        let rsa_private = aws_lc_rs::rsa::KeyPair::generate(aws_lc_rs::rsa::KeySize::Rsa2048)
+            .expect("Failed to generate RSA key pair");
+
+        let private_key_der = rsa_private
+            .as_der()
+            .expect("Failed to export RSA private key")
+            .as_ref()
+            .to_vec();
+
+        let public_key_der = rsa_private.public_key().as_ref().to_vec();
+        let public_key_pem = pem::encode(&pem::Pem::new("PUBLIC KEY", public_key_der));
 
         Self {
             ec_keypair: Arc::new(ec_keypair),
-            rsa_keypair: Arc::new(rsa_keypair),
+            rsa_private_key_der: private_key_der,
+            rsa_public_key_pem: public_key_pem,
             key_store: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -72,7 +89,7 @@ impl AppState {
 
     /// Get RSA public key PEM
     fn rsa_public_key_pem(&self) -> &str {
-        self.rsa_keypair.public_key_pem()
+        &self.rsa_public_key_pem
     }
 
     /// Store a symmetric key for a policy ID
@@ -458,16 +475,34 @@ fn derive_symmetric_key(policy_id: &str) -> Vec<u8> {
 
 /// Unwrap an RSA-wrapped key and re-wrap for the client
 ///
-/// Uses opentdf-kas crate for RSA unwrapping and rewrapping.
+/// Uses aws-lc-rs for RSA decryption (constant-time, FIPS validated) and
+/// opentdf-kas crate for ECDH and rewrapping.
 fn unwrap_rsa_wrapped_key(
     state: &AppState,
     wrapped_key_b64: &str,
     client_public_key_pem: &str,
 ) -> Result<(String, String), String> {
+    use aws_lc_rs::rsa::{OAEP_SHA1_MGF1SHA1, OaepPrivateDecryptingKey, PrivateDecryptingKey};
+
     // Decode the wrapped key
     let wrapped_key = BASE64
         .decode(wrapped_key_b64)
         .map_err(|e| format!("Failed to decode wrapped key: {}", e))?;
+
+    // Load the KAS private key using aws-lc-rs
+    let private_key = PrivateDecryptingKey::from_pkcs8(&state.rsa_private_key_der)
+        .map_err(|e| format!("Failed to load KAS private key: {:?}", e))?;
+
+    let oaep_key = OaepPrivateDecryptingKey::new(private_key)
+        .map_err(|e| format!("Failed to create OAEP key: {:?}", e))?;
+
+    // Decrypt the wrapped key using constant-time RSA-OAEP
+    let mut plaintext = vec![0u8; oaep_key.min_output_size()];
+    let decrypted = oaep_key
+        .decrypt(&OAEP_SHA1_MGF1SHA1, &wrapped_key, &mut plaintext, None)
+        .map_err(|e| format!("RSA decryption failed: {:?}", e))?;
+
+    let symmetric_key = decrypted.to_vec();
 
     // Try to parse client's public key as EC first
     match parse_ec_public_key(client_public_key_pem) {
@@ -480,13 +515,16 @@ fn unwrap_rsa_wrapped_key(
             let session_shared_secret = custom_ecdh(&session_private, &client_public)
                 .map_err(|e| format!("ECDH failed: {}", e))?;
 
-            // Use kas crate's rsa_unwrap which handles RSA-OAEP decryption + rewrapping
-            let wrapped_for_client = rsa_unwrap(
-                &wrapped_key,
-                state.rsa_keypair.private_key(),
-                &session_shared_secret,
-            )
-            .map_err(|e| format!("RSA unwrap failed: {}", e))?;
+            // Use kas crate's rewrap_dek_simple to wrap the DEK for the client
+            let (rewrap_nonce, wrapped_dek) =
+                rewrap_dek_simple(&symmetric_key, &session_shared_secret)
+                    .map_err(|e| format!("Rewrap failed: {}", e))?;
+
+            // Encode as base64 (nonce + wrapped_dek)
+            let mut combined = Vec::with_capacity(rewrap_nonce.len() + wrapped_dek.len());
+            combined.extend_from_slice(&rewrap_nonce);
+            combined.extend_from_slice(&wrapped_dek);
+            let wrapped_for_client = BASE64.encode(&combined);
 
             use p256::pkcs8::EncodePublicKey;
             let session_public_pem = session_public
@@ -497,17 +535,6 @@ fn unwrap_rsa_wrapped_key(
         }
         Err(_) => {
             // Fall back to RSA wrapping (no session key needed)
-            // First unwrap with RSA using kas crate
-            use rsa::Oaep;
-            use sha1::Sha1;
-
-            let padding = Oaep::new::<Sha1>();
-            let symmetric_key = state
-                .rsa_keypair
-                .private_key()
-                .decrypt(padding, &wrapped_key)
-                .map_err(|e| format!("RSA decryption failed: {}", e))?;
-
             parse_rsa_public_key_and_wrap(&symmetric_key, client_public_key_pem)
         }
     }
