@@ -1,12 +1,12 @@
 //! Integration tests for KAS (Key Access Service) protocol
 //!
 //! These tests require a running KAS server. Set the following environment variables:
-//! - KAS_URL: URL of the KAS server (default: http://10.0.0.138:8080/kas)
+//! - KAS_URL: URL of the KAS server (e.g., `https://kas.example.com`)
 //! - KAS_OAUTH_TOKEN: OAuth bearer token for authentication
 //!
 //! Example:
 //! ```bash
-//! export KAS_URL="http://10.0.0.138:8080/kas"
+//! export KAS_URL="https://kas.example.com"
 //! export KAS_OAUTH_TOKEN="your-token-here"
 //! cargo test --features kas --test kas_integration -- --ignored
 //! ```

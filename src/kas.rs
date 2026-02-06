@@ -33,14 +33,14 @@
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let client = KasClient::new(
-//!     "http://kas.example.com",
+//!     "https://kas.example.com",
 //!     "oauth_token_here",
 //! )?;
 //!
 //! // Create a test manifest
 //! let manifest = opentdf::TdfManifest::new(
 //!     "0.payload".to_string(),
-//!     "http://kas.example.com".to_string()
+//!     "https://kas.example.com".to_string()
 //! );
 //!
 //! // Unwrap a key from a TDF manifest (JWT signing handled internally)
@@ -188,8 +188,15 @@ impl KasClient {
     ///
     /// # Arguments
     ///
-    /// * `base_url` - Base URL of the KAS service (e.g., "http://kas.example.com")
+    /// * `base_url` - Base URL of the KAS service (e.g., `"https://kas.example.com"`)
     /// * `oauth_token` - OAuth bearer token for authentication
+    ///
+    /// # Security
+    ///
+    /// The URL is validated for security:
+    /// - **HTTPS required**: HTTP is only allowed for `localhost`/`127.0.0.1`/`::1` (development use)
+    /// - **SSRF protection**: Private and link-local IP addresses are rejected
+    /// - **Scheme validation**: Only `http` and `https` schemes are accepted
     ///
     /// # Note
     ///
@@ -200,6 +207,57 @@ impl KasClient {
         base_url: impl Into<String>,
         oauth_token: impl Into<String>,
     ) -> Result<Self, KasError> {
+        let base_url: String = base_url.into();
+
+        // Parse and validate KAS URL
+        let parsed = url::Url::parse(&base_url)
+            .map_err(|e| KasError::InvalidUrl(format!("Failed to parse URL: {e}")))?;
+
+        // Enforce HTTPS (allow HTTP only for loopback/localhost for development)
+        match parsed.scheme() {
+            "https" => {}
+            "http" => {
+                let is_loopback = match parsed.host() {
+                    Some(url::Host::Domain("localhost")) => true,
+                    Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+                    Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+                    _ => false,
+                };
+                if !is_loopback {
+                    return Err(KasError::InvalidUrl(
+                        "KAS URL must use HTTPS (HTTP only allowed for localhost)".to_string(),
+                    ));
+                }
+            }
+            scheme => {
+                return Err(KasError::InvalidUrl(format!(
+                    "Unsupported URL scheme '{scheme}', must be https"
+                )));
+            }
+        }
+
+        // Block requests to private/link-local IP ranges (SSRF protection)
+        if let Some(host) = parsed.host() {
+            match host {
+                url::Host::Ipv4(ip) => {
+                    if ip.is_private() || ip.is_link_local() {
+                        return Err(KasError::InvalidUrl(
+                            "KAS URL must not target private or link-local IP addresses"
+                                .to_string(),
+                        ));
+                    }
+                }
+                url::Host::Ipv6(_) => {
+                    // IPv6 loopback (::1) is already handled by the HTTP/HTTPS check above.
+                    // Rust stable doesn't expose is_unicast_link_local() for Ipv6Addr,
+                    // but the HTTPS requirement blocks most SSRF vectors for non-loopback IPv6.
+                }
+                url::Host::Domain(_) => {
+                    // Domain names are allowed — HTTPS + TLS certificate validates identity.
+                }
+            }
+        }
+
         let http_client = Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
@@ -218,7 +276,7 @@ impl KasClient {
 
         Ok(Self {
             http_client,
-            base_url: base_url.into(),
+            base_url,
             oauth_token: oauth_token.into(),
             signing_key,
         })
@@ -806,5 +864,92 @@ mod tests {
 
         let json = serde_json::to_string(&policy).expect("Failed to serialize");
         assert!(json.contains("test-policy"));
+    }
+
+    #[cfg(feature = "kas-client")]
+    mod url_validation_tests {
+        use super::*;
+
+        /// Helper to extract the error from a KasClient::new result
+        fn expect_err(result: Result<KasClient, KasError>) -> KasError {
+            match result {
+                Err(e) => e,
+                Ok(_) => panic!("Expected error, got Ok"),
+            }
+        }
+
+        #[test]
+        fn test_kas_rejects_http_url() {
+            let err = expect_err(KasClient::new("http://evil.com", "token"));
+            assert!(
+                matches!(err, KasError::InvalidUrl(_)),
+                "Expected InvalidUrl, got: {err}"
+            );
+            assert!(err.to_string().contains("HTTPS"));
+        }
+
+        #[test]
+        fn test_kas_accepts_https_url() {
+            let result = KasClient::new("https://kas.example.com", "token");
+            assert!(result.is_ok(), "HTTPS URL should be accepted");
+        }
+
+        #[test]
+        fn test_kas_allows_http_localhost() {
+            let result = KasClient::new("http://127.0.0.1:8080", "token");
+            assert!(
+                result.is_ok(),
+                "HTTP localhost (127.0.0.1) should be allowed"
+            );
+
+            let result = KasClient::new("http://localhost:8080", "token");
+            assert!(result.is_ok(), "HTTP localhost should be allowed");
+
+            let result = KasClient::new("http://[::1]:8080", "token");
+            assert!(result.is_ok(), "HTTP IPv6 loopback should be allowed");
+        }
+
+        #[test]
+        fn test_kas_rejects_private_ip() {
+            let err = expect_err(KasClient::new("https://10.0.0.1", "token"));
+            assert!(
+                matches!(err, KasError::InvalidUrl(_)),
+                "Expected InvalidUrl for private IP, got: {err}"
+            );
+
+            assert!(
+                KasClient::new("https://172.16.0.1", "token").is_err(),
+                "172.16.x.x should be rejected"
+            );
+            assert!(
+                KasClient::new("https://192.168.1.1", "token").is_err(),
+                "192.168.x.x should be rejected"
+            );
+        }
+
+        #[test]
+        fn test_kas_rejects_metadata_ip() {
+            let err = expect_err(KasClient::new("http://169.254.169.254", "token"));
+            assert!(
+                matches!(err, KasError::InvalidUrl(_)),
+                "Expected InvalidUrl for metadata IP, got: {err}"
+            );
+        }
+
+        #[test]
+        fn test_kas_rejects_invalid_scheme() {
+            let err = expect_err(KasClient::new("ftp://kas.example.com", "token"));
+            assert!(
+                matches!(err, KasError::InvalidUrl(_)),
+                "Expected InvalidUrl for ftp scheme, got: {err}"
+            );
+            assert!(err.to_string().contains("ftp"));
+        }
+
+        #[test]
+        fn test_kas_rejects_invalid_url() {
+            let err = expect_err(KasClient::new("not-a-url", "token"));
+            assert!(matches!(err, KasError::InvalidUrl(_)));
+        }
     }
 }
