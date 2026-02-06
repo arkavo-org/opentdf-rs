@@ -31,7 +31,7 @@ aes-gcm.workspace = true
 # KAS client dependencies (simplified, crypto moved to opentdf-crypto)
 reqwest = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
-jsonwebtoken = { version = "9", optional = true }
+jsonwebtoken = { version = "10", optional = true, features = ["aws_lc_rs"] }
 rand = { workspace = true, optional = true }
 # RSA operations use aws-lc-rs (constant-time, FIPS validated)
 aws-lc-rs = { version = "1.15", optional = true }
