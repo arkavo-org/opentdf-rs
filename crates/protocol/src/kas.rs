@@ -56,6 +56,9 @@ pub enum KasError {
 
     #[error("Invalid KAS configuration: {reason}")]
     ConfigError { reason: String },
+
+    #[error("Invalid KAS URL: {0}")]
+    InvalidUrl(String),
 }
 
 impl KasError {
@@ -80,6 +83,9 @@ impl KasError {
                 Some("Check network connectivity or increase timeout value")
             }
             KasError::InvalidResponse { .. } => Some("Verify KAS server version compatibility"),
+            KasError::InvalidUrl(_) => {
+                Some("Use an HTTPS URL for the KAS endpoint (HTTP allowed only for localhost)")
+            }
             _ => None,
         }
     }
@@ -100,6 +106,7 @@ impl KasError {
             KasError::RequestError { .. } => "REQUEST_ERROR",
             KasError::Timeout { .. } => "TIMEOUT",
             KasError::ConfigError { .. } => "CONFIG_ERROR",
+            KasError::InvalidUrl(_) => "INVALID_URL",
         }
     }
 }

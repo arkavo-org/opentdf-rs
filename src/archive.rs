@@ -47,7 +47,7 @@ impl<'a> TdfEntry<'a> {
     /// ```no_run
     /// # use opentdf::{TdfArchive, kas::KasClient};
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let kas_client = KasClient::new("http://kas.example.com", "token")?;
+    /// let kas_client = KasClient::new("https://kas.example.com", "token")?;
     /// let mut archive = TdfArchive::open("example.tdf")?;
     /// let entry = archive.by_index()?;
     /// let plaintext = entry.decrypt_with_kas(&kas_client).await?;
@@ -306,7 +306,7 @@ impl TdfArchive<File> {
     /// ```no_run
     /// # use opentdf::{TdfArchive, kas::KasClient};
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let kas_client = KasClient::new("http://10.0.0.138:8080/kas", "token")?;
+    /// let kas_client = KasClient::new("https://kas.example.com", "token")?;
     /// let plaintext = TdfArchive::open_and_decrypt("example.tdf", &kas_client).await?;
     /// # Ok(())
     /// # }

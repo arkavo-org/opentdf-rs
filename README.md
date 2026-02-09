@@ -330,7 +330,7 @@ use opentdf::{TdfArchive, kas::KasClient};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create KAS client
     let kas_client = KasClient::new(
-        "http://kas.example.com/kas",
+        "https://kas.example.com/kas",
         "your-oauth-token-here"
     )?;
 
@@ -356,7 +356,7 @@ use opentdf::{TdfArchive, kas::KasClient};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create KAS client
     let kas_client = KasClient::new(
-        "http://kas.example.com/kas",
+        "https://kas.example.com/kas",
         "your-oauth-token-here"
     )?;
 

@@ -63,7 +63,7 @@ mod kas_mock_tests {
 
     #[tokio::test]
     async fn test_kas_client_creation() {
-        let client = KasClient::new("http://mock-kas.example.com", "mock-token");
+        let client = KasClient::new("https://kas.example.com", "mock-token");
         assert!(client.is_ok(), "KAS client creation should succeed");
     }
 
@@ -215,7 +215,7 @@ mod kas_mock_tests {
     #[tokio::test]
     async fn test_kas_network_timeout() {
         // Mock server that never responds (simulates timeout)
-        let kas_url = "http://192.0.2.1:9999"; // TEST-NET address, should timeout
+        let kas_url = "https://192.0.2.1:9999"; // TEST-NET address, should timeout
         let client = KasClient::new(kas_url, "token").unwrap();
 
         let manifest = create_test_manifest_with_policy(kas_url.to_string());

@@ -15,8 +15,8 @@ readme = "README.md"
 
 [dependencies]
 # New modular crates
-opentdf-protocol = { path = "crates/protocol", version = "0.11.0" }
-opentdf-crypto = { path = "crates/crypto", version = "0.11.0", default-features = false }
+opentdf-protocol = { path = "crates/protocol", version = "0.11.1" }
+opentdf-crypto = { path = "crates/crypto", version = "0.11.1", default-features = false }
 
 # Core dependencies (using workspace versions)
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
@@ -36,6 +36,8 @@ rand = { workspace = true, optional = true }
 # RSA operations use aws-lc-rs (constant-time, FIPS validated)
 aws-lc-rs = { version = "1.15", optional = true }
 pem = { version = "3.0", optional = true }
+# URL parsing and validation for KAS endpoint security
+url = { version = "2", optional = true }
 
 # CBOR encoding for TDF-CBOR format (optional)
 ciborium = { version = "0.2", optional = true }
@@ -63,7 +65,7 @@ sha2 = "0.10"
 members = ["crates/protocol", "crates/crypto", "crates/kas", "crates/wasm"]
 
 [workspace.package]
-version = "0.11.0"
+version = "0.11.1"
 
 [workspace.dependencies]
 # Core serialization
@@ -116,7 +118,7 @@ kas-client = ["_kas-client-base", "dep:aws-lc-rs", "dep:pem", "opentdf-crypto/aw
 kas-client-rustcrypto = ["_kas-client-base", "opentdf-crypto/rustcrypto-provider"]
 
 # Internal: shared KAS client dependencies (do not use directly)
-_kas-client-base = ["dep:reqwest", "dep:tokio", "dep:jsonwebtoken", "dep:rand", "opentdf-crypto/kem-rsa", "opentdf-crypto/kem-ec", "rustls-tls"]
+_kas-client-base = ["dep:reqwest", "dep:tokio", "dep:jsonwebtoken", "dep:rand", "dep:url", "opentdf-crypto/kem-rsa", "opentdf-crypto/kem-ec", "rustls-tls"]
 
 # TLS backend selection for reqwest
 rustls-tls = ["reqwest?/rustls-tls"]
