@@ -15,23 +15,30 @@ use sha2::Sha256;
 ///
 /// Derives the actual DEK from ECDH shared secret, then wraps it for transport.
 ///
+/// The DEK salt and session salt are separate because they serve different purposes:
+/// - `dek_salt`: Version-dependent salt for deriving the DEK (matches NanoTDF header version)
+/// - `session_salt`: Always v1.2 salt (SHA256("L1L")) for the session key, since the session
+///   key exchange is a transport-layer concern independent of the NanoTDF format version.
+///   The Go reference KAS and all SDK clients hardcode v1.2 for session key derivation.
+///
 /// # Steps
-/// 1. Derive DEK from dek_shared_secret using HKDF with salt
-/// 2. Derive wrapping key from session_shared_secret using HKDF with salt
+/// 1. Derive DEK from dek_shared_secret using HKDF with dek_salt
+/// 2. Derive wrapping key from session_shared_secret using HKDF with session_salt
 /// 3. Encrypt derived DEK with AES-256-GCM using wrapping key
 pub fn rewrap_dek(
     dek_shared_secret: &[u8],
     session_shared_secret: &[u8],
-    salt: &[u8],
+    dek_salt: &[u8],
+    session_salt: &[u8],
     info: &[u8],
 ) -> Result<(Vec<u8>, Vec<u8>), KasServerError> {
     // Derive the actual DEK from the TDF ECDH shared secret
-    let dek_hkdf = Hkdf::<Sha256>::new(Some(salt), dek_shared_secret);
+    let dek_hkdf = Hkdf::<Sha256>::new(Some(dek_salt), dek_shared_secret);
     let mut dek = [0u8; 32];
     dek_hkdf.expand(info, &mut dek)?;
 
-    // Derive the wrapping key from the session shared secret
-    let session_hkdf = Hkdf::<Sha256>::new(Some(salt), session_shared_secret);
+    // Derive the wrapping key from the session shared secret (always v1.2 salt)
+    let session_hkdf = Hkdf::<Sha256>::new(Some(session_salt), session_shared_secret);
     let mut wrapping_key = [0u8; 32];
     session_hkdf.expand(info, &mut wrapping_key)?;
 
@@ -91,14 +98,31 @@ mod tests {
     fn test_rewrap_dek() {
         let dek_secret = b"test_dek_shared_secret__32bytes!";
         let session_secret = b"test_session_shared_secret__32b!";
-        let salt = compute_nanotdf_salt(NanoTdfVersion::V12);
+        let dek_salt = compute_nanotdf_salt(NanoTdfVersion::V12);
+        let session_salt = compute_nanotdf_salt(NanoTdfVersion::V12);
 
-        let result = rewrap_dek(dek_secret, session_secret, &salt, b"");
+        let result = rewrap_dek(dek_secret, session_secret, &dek_salt, &session_salt, b"");
         assert!(result.is_ok());
 
         let (nonce, wrapped) = result.unwrap();
         assert_eq!(nonce.len(), 12);
         // Wrapped should be 32-byte DEK + 16-byte tag = 48 bytes
+        assert_eq!(wrapped.len(), 48);
+    }
+
+    #[test]
+    fn test_rewrap_dek_split_salts() {
+        let dek_secret = b"test_dek_shared_secret__32bytes!";
+        let session_secret = b"test_session_shared_secret__32b!";
+        // DEK uses v1.3 salt, session always uses v1.2 (matches Go reference KAS)
+        let dek_salt = compute_nanotdf_salt(NanoTdfVersion::V13);
+        let session_salt = compute_nanotdf_salt(NanoTdfVersion::V12);
+
+        let result = rewrap_dek(dek_secret, session_secret, &dek_salt, &session_salt, b"");
+        assert!(result.is_ok());
+
+        let (nonce, wrapped) = result.unwrap();
+        assert_eq!(nonce.len(), 12);
         assert_eq!(wrapped.len(), 48);
     }
 

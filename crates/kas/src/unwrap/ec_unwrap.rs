@@ -54,17 +54,23 @@ pub fn ec_unwrap(
     // Perform ECDH to get DEK shared secret
     let dek_shared_secret = custom_ecdh(kas_private_key, &ephemeral_public_key)?;
 
-    // Detect NanoTDF version and compute appropriate salt
-    let salt = match detect_nanotdf_version(header_bytes) {
+    // Detect NanoTDF version and compute DEK salt (version-dependent)
+    let dek_salt = match detect_nanotdf_version(header_bytes) {
         Some(version) => compute_nanotdf_salt(version),
         None => compute_nanotdf_salt(NanoTdfVersion::V12), // Default to v1.2
     };
+
+    // Session salt is always v1.2 — the session key exchange is a transport-layer
+    // concern, not a TDF-format concern. The Go reference KAS and all SDK clients
+    // (including OpenTDFKit) hardcode v1.2 salt for session key derivation.
+    let session_salt = compute_nanotdf_salt(NanoTdfVersion::V12);
 
     // Rewrap DEK using NanoTDF-compatible HKDF (empty info per spec)
     let (nonce, wrapped_dek) = rewrap_dek(
         &dek_shared_secret,
         session_shared_secret,
-        &salt,
+        &dek_salt,
+        &session_salt,
         b"", // Empty info per NanoTDF spec
     )?;
 
