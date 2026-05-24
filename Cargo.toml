@@ -167,3 +167,7 @@ required-features = ["kas-client", "cbor"]
 [[bench]]
 name = "memory_builder"
 harness = false
+
+[[bench]]
+name = "pdp_check"
+harness = false
