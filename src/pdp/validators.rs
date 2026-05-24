@@ -9,11 +9,16 @@ pub(crate) fn validate_attribute(attr: &Attribute) -> Result<(), PdpError> {
             "attribute FQN is empty".into(),
         ));
     }
+    // A value FQN must be a child of the definition FQN under `/value/`.
+    // `starts_with(attr.fqn)` alone is insufficient because it would accept
+    // sibling names that share a prefix — e.g. attr `https://x/attr/foo`
+    // would otherwise admit value `https://x/attr/foobar/value/x`.
+    let expected_prefix = format!("{}/value/", attr.fqn);
     for v in &attr.values {
-        if !v.fqn.starts_with(&attr.fqn) {
+        if !v.fqn.starts_with(&expected_prefix) {
             return Err(PdpError::InvalidAttributeDefinition(format!(
-                "value FQN {} must be of definition FQN {}",
-                v.fqn, attr.fqn
+                "value FQN {} must be a child of definition FQN {} (expected prefix {})",
+                v.fqn, attr.fqn, expected_prefix
             )));
         }
     }

@@ -54,11 +54,22 @@ pub struct AccessPdp {
 impl AccessPdp {
     /// Build a PDP from the set of attribute definitions. May be empty
     /// (the resulting PDP denies every request — no known value FQNs).
+    ///
+    /// Attribute and value FQNs are normalized to ASCII lowercase at index
+    /// time. `check()` lowercases its inputs to match, so subject-mapping
+    /// authors and entitlement-token producers can pass FQNs in any case.
     pub fn new(attributes: Vec<Attribute>, _opts: PdpOptions) -> Result<Self, PdpError> {
         let mut attributes_by_def_fqn = HashMap::new();
         let mut parent_def_by_value_fqn = HashMap::new();
 
-        for attr in attributes {
+        for mut attr in attributes {
+            // Normalize before validation so the structural checks
+            // (notably the value-FQN prefix check) operate on a single
+            // canonical form.
+            attr.fqn = attr.fqn.to_ascii_lowercase();
+            for v in &mut attr.values {
+                v.fqn = v.fqn.to_ascii_lowercase();
+            }
             validate_attribute(&attr)?;
             for v in &attr.values {
                 parent_def_by_value_fqn.insert(v.fqn.clone(), attr.fqn.clone());

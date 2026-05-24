@@ -498,3 +498,88 @@ fn deny_surfaces_failures_for_each_unsatisfied_value() {
         AccessDecision::Allow => panic!("expected deny"),
     }
 }
+
+// --- Regression tests for the PR-#78 review findings ---
+
+// A caller may construct an Attribute directly (not via
+// FullyQualifiedAttribute::fqn(), which always lowercases). The PDP must
+// still match when the resource/entitlement FQNs use a different case,
+// otherwise hierarchy_rule lookups fail and a Deny is incorrectly returned.
+#[test]
+fn caller_constructed_mixed_case_attribute_still_matches() {
+    // Definition + values built with deliberately mixed-case FQNs.
+    let attr = Attribute {
+        fqn: "https://Mixed.Example/attr/Clearance".into(),
+        rule: AttributeRule::Hierarchy,
+        values: vec![
+            Value {
+                fqn: "https://Mixed.Example/attr/Clearance/value/TopSecret".into(),
+                value: "topsecret".into(),
+                ..Default::default()
+            },
+            Value {
+                fqn: "https://Mixed.Example/attr/Clearance/value/Secret".into(),
+                value: "secret".into(),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let pdp = AccessPdp::new(vec![attr], PdpOptions::default()).unwrap();
+
+    // Entitled to TopSecret (lower-case keyed); resource demands Secret.
+    // Without case normalization at index time the HIERARCHY lookup misses.
+    let e = ents(&[(
+        "https://mixed.example/attr/clearance/value/topsecret",
+        &["read"],
+    )]);
+    let res = pdp
+        .check(
+            &e,
+            &read(),
+            &["https://Mixed.Example/attr/Clearance/value/Secret".to_string()],
+        )
+        .unwrap();
+    assert_eq!(res, AccessDecision::Allow);
+}
+
+// validate_attribute used to use starts_with(attr.fqn), which would
+// erroneously admit a value whose name shared a prefix with the
+// definition. The boundary check now requires the "/value/" segment.
+#[test]
+fn validator_rejects_sibling_prefix_overlap() {
+    // attr fqn: ".../attr/foo"; bogus value uses ".../attr/foobar/..." —
+    // it starts with the attr fqn but is NOT a child of it.
+    let attr = Attribute {
+        fqn: "https://example.com/attr/foo".into(),
+        rule: AttributeRule::AnyOf,
+        values: vec![Value {
+            fqn: "https://example.com/attr/foobar/value/x".into(),
+            value: "x".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let err = AccessPdp::new(vec![attr], PdpOptions::default()).unwrap_err();
+    assert!(
+        matches!(err, PdpError::InvalidAttributeDefinition(_)),
+        "expected InvalidAttributeDefinition, got {err:?}"
+    );
+}
+
+// The valid case: a value FQN that IS a child of the definition still
+// passes after the stricter boundary check.
+#[test]
+fn validator_accepts_proper_child_value_fqn() {
+    let attr = Attribute {
+        fqn: "https://example.com/attr/foo".into(),
+        rule: AttributeRule::AnyOf,
+        values: vec![Value {
+            fqn: "https://example.com/attr/foo/value/x".into(),
+            value: "x".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let _ = AccessPdp::new(vec![attr], PdpOptions::default()).unwrap();
+}
