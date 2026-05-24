@@ -60,6 +60,9 @@ opentdf-kas = { path = "crates/kas" }
 # Additional crypto dependencies for mock_kas_server
 hkdf = "0.12"
 sha2 = "0.10"
+# Required for pep_check example (CWT consumption: COSE_Sign1 verify + CBOR claims)
+coset = "0.3"
+ciborium = "0.2"
 
 [workspace]
 members = ["crates/protocol", "crates/crypto", "crates/kas", "crates/wasm"]
