@@ -1,86 +1,76 @@
 //! Local Access Policy Decision Point.
 //!
-//! This module is a Rust port of the OpenTDF platform's internal access PDP
-//! (`service/internal/access/v2`), narrowed to a focused **ALLOW / DENY** API.
-//! There is no `GetDecision` or `GetEntitlements` surface here — the engine
-//! answers a single, scoped question:
+//! Brings the OpenTDF Authorization Service's decision logic in-process so a
+//! PEP can answer ALLOW / DENY in microseconds without round-tripping to the
+//! Authorization Service on every request.
 //!
-//! > *Given this entity, may it perform this action on a resource described by
-//! > these attribute value FQNs?*
+//! The PDP holds **attribute definitions only**. Identity-to-attribute
+//! resolution (subject mappings) belongs on the platform's entitlement
+//! service, which is the only component that needs to see those mappings.
+//! At request time the PEP extracts entitlements from its access token —
+//! typically the `authorization_details` claim returned by the platform's
+//! token-exchange endpoint — and passes them to [`AccessPdp::check`] along
+//! with the requested action and the resource's attribute tags.
 //!
-//! This lets a Policy Enforcement Point evaluate access locally for resources
-//! that are tagged with policy attributes but not stored as TDFs.
+//! The PDP runs the attribute-definition rule locally:
+//! [`AttributeRule::AllOf`], [`AttributeRule::AnyOf`], or
+//! [`AttributeRule::Hierarchy`].
 //!
 //! # Example
 //!
 //! ```
+//! use std::collections::HashMap;
 //! use opentdf::pdp::{
-//!     AccessPdp, Action, Attribute, AttributeRule, Condition, ConditionBooleanOperator,
-//!     ConditionGroup, EntityRepresentation, PdpOptions, SubjectConditionSet, SubjectMapping,
-//!     SubjectMappingOperator, SubjectSet, Value,
+//!     AccessPdp, Action, Attribute, AttributeRule, PdpOptions, Value,
 //! };
-//! use serde_json::json;
 //!
-//! let secret_fqn = "https://demo.com/attr/clearance/value/secret".to_string();
-//! let attr = Attribute {
-//!     fqn: "https://demo.com/attr/clearance".to_string(),
+//! // Load policy once at startup (e.g. from a periodic refresh of the
+//! // platform's attribute service).
+//! let classification = Attribute {
+//!     fqn: "https://acme.com/attr/classification".into(),
 //!     rule: AttributeRule::Hierarchy,
 //!     values: vec![
-//!         Value { fqn: "https://demo.com/attr/clearance/value/topsecret".into(), value: "topsecret".into(), ..Default::default() },
-//!         Value { fqn: secret_fqn.clone(), value: "secret".into(), ..Default::default() },
-//!         Value { fqn: "https://demo.com/attr/clearance/value/public".into(), value: "public".into(), ..Default::default() },
+//!         Value { fqn: "https://acme.com/attr/classification/value/topsecret".into(),
+//!                 value: "topsecret".into(), ..Default::default() },
+//!         Value { fqn: "https://acme.com/attr/classification/value/secret".into(),
+//!                 value: "secret".into(), ..Default::default() },
+//!         Value { fqn: "https://acme.com/attr/classification/value/public".into(),
+//!                 value: "public".into(), ..Default::default() },
 //!     ],
 //!     ..Default::default()
 //! };
+//! let pdp = AccessPdp::new(vec![classification], PdpOptions::default()).unwrap();
 //!
-//! let mapping = SubjectMapping {
-//!     attribute_value: Value { fqn: secret_fqn.clone(), value: "secret".into(), ..Default::default() },
-//!     subject_condition_set: SubjectConditionSet {
-//!         subject_sets: vec![SubjectSet {
-//!             condition_groups: vec![ConditionGroup {
-//!                 boolean_operator: ConditionBooleanOperator::And,
-//!                 conditions: vec![Condition {
-//!                     subject_external_selector_value: ".properties.clearance".into(),
-//!                     subject_external_values: vec!["secret".into()],
-//!                     operator: SubjectMappingOperator::In,
-//!                 }],
-//!             }],
-//!         }],
-//!         ..Default::default()
-//!     },
-//!     actions: vec![Action::new("read")],
-//!     ..Default::default()
-//! };
-//!
-//! let pdp = AccessPdp::new(vec![attr], vec![mapping], PdpOptions::default()).unwrap();
-//!
-//! let entity = EntityRepresentation::with_properties(
-//!     "alice",
-//!     json!({"properties": {"clearance": "secret"}}),
+//! // Per request: build the entitlement map from the verified access token.
+//! // Here we hard-code one for the doc; real PEPs extract this from claims.
+//! let mut entitlements: HashMap<String, Vec<String>> = HashMap::new();
+//! entitlements.insert(
+//!     "https://acme.com/attr/classification/value/topsecret".into(),
+//!     vec!["read".into()],
 //! );
 //!
-//! let decision = pdp
-//!     .check(&entity, &Action::new("read"), &[secret_fqn])
-//!     .unwrap();
+//! // The HIERARCHY rule lets a TOPSECRET entitlement satisfy a SECRET
+//! // resource requirement — and the PDP figures that out locally.
+//! let decision = pdp.check(
+//!     &entitlements,
+//!     &Action::new("read"),
+//!     &["https://acme.com/attr/classification/value/secret".to_string()],
+//! ).unwrap();
 //! assert!(decision.is_allow());
 //! ```
 
 mod engine;
-mod flatten;
 mod identifier;
-mod subject_mapping;
 mod types;
 mod validators;
 
 #[cfg(test)]
 mod tests;
 
-pub use engine::{AccessPdp, PdpError, PdpOptions};
+pub use engine::{AccessPdp, Entitlements, PdpError, PdpOptions};
 pub use identifier::{
     FullyQualifiedAttribute, FullyQualifiedRegisteredResourceValue, IdentifierError,
 };
 pub use types::{
-    AccessDecision, Action, Attribute, AttributeRule, Condition, ConditionBooleanOperator,
-    ConditionGroup, EntitlementFailure, EntityRepresentation, Namespace, SubjectConditionSet,
-    SubjectMapping, SubjectMappingOperator, SubjectSet, Value,
+    AccessDecision, Action, Attribute, AttributeRule, EntitlementFailure, Namespace, Value,
 };

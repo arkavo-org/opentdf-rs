@@ -1,10 +1,7 @@
-//! Validation helpers used when indexing the in-memory policy and at check time.
-//!
-//! Mirrors `service/internal/access/v2/validators.go`, trimmed to the subset
-//! used by the focused ALLOW/DENY API.
+//! Validation helpers used when indexing the in-memory policy.
 
 use super::PdpError;
-use super::types::{Attribute, AttributeRule, SubjectMapping};
+use super::types::{Attribute, AttributeRule};
 
 pub(crate) fn validate_attribute(attr: &Attribute) -> Result<(), PdpError> {
     if attr.fqn.is_empty() {
@@ -25,15 +22,6 @@ pub(crate) fn validate_attribute(attr: &Attribute) -> Result<(), PdpError> {
             "attribute rule is unspecified for {}",
             attr.fqn
         )));
-    }
-    Ok(())
-}
-
-pub(crate) fn validate_subject_mapping(sm: &SubjectMapping) -> Result<(), PdpError> {
-    if sm.attribute_value.fqn.is_empty() {
-        return Err(PdpError::InvalidSubjectMapping(
-            "subject mapping's attribute value FQN is empty".into(),
-        ));
     }
     Ok(())
 }
