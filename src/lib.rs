@@ -45,6 +45,7 @@ mod archive;
 mod error;
 pub mod fqn;
 pub mod manifest;
+pub mod pdp;
 mod policy;
 mod tdf;
 
