@@ -303,8 +303,18 @@ fn serialize_cbor(v: &CborValue) -> Result<Vec<u8>, Box<dyn std::error::Error>> 
     Ok(out)
 }
 
+/// Byte length of an X9.62 P-256 coordinate.
+const P256_COORD_LEN: usize = 32;
+
 /// Pull X/Y out of an EC2 COSE_Key on P-256, build a SEC1 uncompressed
 /// point, and parse as a p256 VerifyingKey.
+///
+/// COSE_Key coordinates can legitimately arrive shorter than the curve's
+/// natural byte length when their leading bytes are zero (CBOR / big-int
+/// representations strip these). SEC1 uncompressed points require fixed
+/// 32-byte coordinates for P-256, so left-pad each to length before
+/// concatenating; reject anything that's too long (a sign the input isn't
+/// a P-256 point).
 fn ec2_to_p256(k: &CoseKey) -> Option<VerifyingKey> {
     let mut x: Option<Vec<u8>> = None;
     let mut y: Option<Vec<u8>> = None;
@@ -324,11 +334,25 @@ fn ec2_to_p256(k: &CoseKey) -> Option<VerifyingKey> {
             _ => {}
         }
     }
-    let (x, y) = (x?, y?);
-    let mut sec1 = vec![0x04];
-    sec1.extend(x);
-    sec1.extend(y);
+    let x = pad_p256_coord(&x?)?;
+    let y = pad_p256_coord(&y?)?;
+    let mut sec1 = Vec::with_capacity(1 + 2 * P256_COORD_LEN);
+    sec1.push(0x04);
+    sec1.extend_from_slice(&x);
+    sec1.extend_from_slice(&y);
     VerifyingKey::from_sec1_bytes(&sec1).ok()
+}
+
+/// Left-pad an X9.62 coordinate to [`P256_COORD_LEN`] bytes. Returns
+/// `None` if the input is already longer than the curve coordinate
+/// length, which would indicate the COSE key is not on P-256.
+fn pad_p256_coord(b: &[u8]) -> Option<[u8; P256_COORD_LEN]> {
+    if b.len() > P256_COORD_LEN {
+        return None;
+    }
+    let mut out = [0u8; P256_COORD_LEN];
+    out[P256_COORD_LEN - b.len()..].copy_from_slice(b);
+    Some(out)
 }
 
 fn parse_authorization_details(payload: &[u8]) -> Result<Vec<Grant>, Box<dyn std::error::Error>> {
@@ -588,5 +612,30 @@ mod tests {
         assert_eq!(grants.len(), 1);
         assert_eq!(grants[0].grant_type, "opentdf_attribute");
         assert_eq!(grants[0].actions, vec!["read"]);
+    }
+
+    // Regression for the gitar-bot finding on PR #78: ec2_to_p256 used to
+    // concatenate X/Y unpadded, so a coordinate with a leading zero byte
+    // (legitimate; CBOR / big-int strips it) produced a 64-byte SEC1
+    // string instead of 65 and from_sec1_bytes rejected it.
+    #[test]
+    fn pad_p256_coord_left_pads_short_input() {
+        let padded = pad_p256_coord(&[0x42]).unwrap();
+        assert_eq!(padded.len(), P256_COORD_LEN);
+        assert_eq!(padded[P256_COORD_LEN - 1], 0x42);
+        assert!(padded[..P256_COORD_LEN - 1].iter().all(|b| *b == 0));
+    }
+
+    #[test]
+    fn pad_p256_coord_passes_through_full_length() {
+        let input = [0xab; P256_COORD_LEN];
+        let padded = pad_p256_coord(&input).unwrap();
+        assert_eq!(padded, input);
+    }
+
+    #[test]
+    fn pad_p256_coord_rejects_over_length() {
+        // 33 bytes — would indicate a key that isn't on P-256.
+        assert!(pad_p256_coord(&[0u8; P256_COORD_LEN + 1]).is_none());
     }
 }
