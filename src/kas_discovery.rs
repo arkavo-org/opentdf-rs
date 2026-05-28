@@ -163,6 +163,45 @@ pub fn parse_connect_error(body: &str) -> Option<ConnectError> {
     Some(parsed)
 }
 
+/// Fetch the platform's `/.well-known/opentdf-configuration` document.
+///
+/// `platform_url` should be the platform's base URL (e.g.,
+/// `"https://platform.arkavo.net"`). A trailing slash is tolerated.
+pub async fn fetch_well_known(
+    platform_url: &str,
+    http_client: &reqwest::Client,
+) -> Result<OpentdfConfiguration, KasError> {
+    let base = platform_url.trim_end_matches('/');
+    let url = format!("{}/.well-known/opentdf-configuration", base);
+
+    let response = http_client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| KasError::RequestError {
+            method: "GET".to_string(),
+            url: url.clone(),
+            reason: e.to_string(),
+        })?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(KasError::HttpError {
+            status: status.as_u16(),
+            message: format!("GET {} -> {}: {}", url, status, body),
+        });
+    }
+
+    response
+        .json::<OpentdfConfiguration>()
+        .await
+        .map_err(|e| KasError::InvalidResponse {
+            reason: format!("Failed to parse well-known JSON: {}", e),
+            expected: Some("OpentdfConfiguration".to_string()),
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -350,5 +389,61 @@ mod tests {
         assert!(parse_connect_error("not json").is_none());
         assert!(parse_connect_error("").is_none());
         assert!(parse_connect_error(r#"{"unrelated":"shape"}"#).is_none());
+    }
+
+    use mockito::Server;
+
+    #[tokio::test]
+    async fn fetch_well_known_returns_parsed_config() {
+        let mut server = Server::new_async().await;
+        let _m = server
+            .mock("GET", "/.well-known/opentdf-configuration")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(PLATFORM_WELL_KNOWN)
+            .create_async()
+            .await;
+
+        let http = reqwest::Client::new();
+        let cfg = fetch_well_known(&server.url(), &http).await.unwrap();
+        assert!(cfg.kas.is_some());
+        assert_eq!(
+            cfg.platform_issuer.as_deref(),
+            Some("https://identity.arkavo.net")
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_well_known_404_returns_http_error() {
+        let mut server = Server::new_async().await;
+        let _m = server
+            .mock("GET", "/.well-known/opentdf-configuration")
+            .with_status(404)
+            .with_body("not found")
+            .create_async()
+            .await;
+
+        let http = reqwest::Client::new();
+        let err = fetch_well_known(&server.url(), &http).await.unwrap_err();
+        match err {
+            opentdf_protocol::KasError::HttpError { status, .. } => assert_eq!(status, 404),
+            other => panic!("expected HttpError(404), got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_well_known_handles_trailing_slash() {
+        let mut server = Server::new_async().await;
+        let _m = server
+            .mock("GET", "/.well-known/opentdf-configuration")
+            .with_status(200)
+            .with_body(PLATFORM_WELL_KNOWN)
+            .create_async()
+            .await;
+
+        let http = reqwest::Client::new();
+        let url_with_slash = format!("{}/", server.url());
+        let cfg = fetch_well_known(&url_with_slash, &http).await.unwrap();
+        assert!(cfg.kas.is_some());
     }
 }
