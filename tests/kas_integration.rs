@@ -169,6 +169,7 @@ mod kas_tests {
         // and we'd use KAS to unwrap it for decryption
     }
 
+    #[allow(deprecated)]
     #[tokio::test]
     #[ignore] // Requires KAS server
     async fn test_fetch_kas_ec_public_key() {

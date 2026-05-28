@@ -47,7 +47,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Step 1: Fetch KAS public key
     println!("1. Fetching KAS public key...");
     let http_client = reqwest::Client::new();
-    let kas_key_response = opentdf::kas_key::fetch_kas_public_key(&kas_url, &http_client).await?;
+    // Strip trailing /kas if present — Connect endpoints are at the platform root
+    let kas_root = kas_url
+        .trim_end_matches('/')
+        .strip_suffix("/kas")
+        .unwrap_or(kas_url.trim_end_matches('/'));
+    let kas_pk_url = format!("{}/kas.AccessService/PublicKey", kas_root);
+    let kas_key_response =
+        opentdf::kas_key::fetch_kas_public_key_connect(&kas_pk_url, &http_client).await?;
     println!("   ✓ Fetched key ID: {}", kas_key_response.kid);
     println!();
 
