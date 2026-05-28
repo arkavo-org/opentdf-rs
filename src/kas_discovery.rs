@@ -6,6 +6,7 @@
 
 #![cfg(feature = "kas-client")]
 
+use opentdf_protocol::KasError;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -41,6 +42,54 @@ pub struct IdpConfig {
     pub response_types_supported: Vec<String>,
     #[serde(default)]
     pub subject_types_supported: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KasTransport {
+    /// ConnectRPC endpoints at /kas.AccessService/*
+    Connect,
+    /// Legacy REST gateway at /kas/v2/*
+    LegacyRest,
+}
+
+#[derive(Debug, Clone)]
+pub struct KasEndpoints {
+    pub rewrap_url: String,
+    pub public_key_url: String,
+    pub transport: KasTransport,
+}
+
+impl KasEndpoints {
+    /// Resolve KAS endpoints from a configuration document, preferring
+    /// ConnectRPC URLs and falling back to legacy REST when only REST is
+    /// advertised.
+    pub fn from_config(cfg: &OpentdfConfiguration) -> Result<Self, KasError> {
+        let kas = cfg.kas.as_ref().ok_or_else(|| KasError::ConfigError {
+            reason: "well-known configuration is missing a 'kas' block".to_string(),
+        })?;
+
+        if let (Some(rewrap), Some(public_key)) =
+            (&kas.connect_rewrap_url, &kas.connect_public_key_url)
+        {
+            return Ok(KasEndpoints {
+                rewrap_url: rewrap.clone(),
+                public_key_url: public_key.clone(),
+                transport: KasTransport::Connect,
+            });
+        }
+
+        if let (Some(rewrap), Some(public_key)) = (&kas.rewrap_url, &kas.public_key_url) {
+            return Ok(KasEndpoints {
+                rewrap_url: rewrap.clone(),
+                public_key_url: public_key.clone(),
+                transport: KasTransport::LegacyRest,
+            });
+        }
+
+        Err(KasError::ConfigError {
+            reason: "well-known kas block exposes neither Connect nor REST URLs".to_string(),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -114,5 +163,66 @@ mod tests {
             Some("https://k.example.com/kas/v2/rewrap")
         );
         assert!(cfg.idp.is_none());
+    }
+
+    #[test]
+    fn from_config_picks_connect_when_present() {
+        let cfg: OpentdfConfiguration = serde_json::from_str(PLATFORM_WELL_KNOWN).unwrap();
+        let endpoints = KasEndpoints::from_config(&cfg).unwrap();
+        assert_eq!(
+            endpoints.rewrap_url,
+            "https://platform.arkavo.net/kas.AccessService/Rewrap"
+        );
+        assert_eq!(
+            endpoints.public_key_url,
+            "https://platform.arkavo.net/kas.AccessService/PublicKey"
+        );
+        assert_eq!(endpoints.transport, KasTransport::Connect);
+    }
+
+    #[test]
+    fn from_config_falls_back_to_rest_when_connect_absent() {
+        let json = r#"{
+            "kas": {
+                "uri": "https://k.example.com",
+                "algorithms": [],
+                "rewrap_url": "https://k.example.com/kas/v2/rewrap",
+                "public_key_url": "https://k.example.com/kas/v2/kas_public_key"
+            }
+        }"#;
+        let cfg: OpentdfConfiguration = serde_json::from_str(json).unwrap();
+        let endpoints = KasEndpoints::from_config(&cfg).unwrap();
+        assert_eq!(endpoints.rewrap_url, "https://k.example.com/kas/v2/rewrap");
+        assert_eq!(
+            endpoints.public_key_url,
+            "https://k.example.com/kas/v2/kas_public_key"
+        );
+        assert_eq!(endpoints.transport, KasTransport::LegacyRest);
+    }
+
+    #[test]
+    fn from_config_errors_when_kas_block_missing() {
+        let json = r#"{ "platform_issuer": "https://example.com" }"#;
+        let cfg: OpentdfConfiguration = serde_json::from_str(json).unwrap();
+        let err = KasEndpoints::from_config(&cfg).unwrap_err();
+        match err {
+            opentdf_protocol::KasError::ConfigError { reason } => {
+                assert!(reason.contains("kas"));
+            }
+            other => panic!("expected ConfigError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_config_errors_when_urls_missing() {
+        let json = r#"{
+            "kas": { "uri": "https://k.example.com", "algorithms": [] }
+        }"#;
+        let cfg: OpentdfConfiguration = serde_json::from_str(json).unwrap();
+        let err = KasEndpoints::from_config(&cfg).unwrap_err();
+        assert!(matches!(
+            err,
+            opentdf_protocol::KasError::ConfigError { .. }
+        ));
     }
 }
