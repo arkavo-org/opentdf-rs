@@ -33,6 +33,11 @@
 
 - KAS rewrap now POSTs to `/kas.AccessService/Rewrap` (ConnectRPC) instead of `/kas/v2/rewrap` (legacy REST)
 - Connect error envelope (`{code, message}`) parsed into `KasError` reason strings
+- KAS URL validation moved into `KasEndpoints::from_config`, which now validates **both** the resolved rewrap and public-key URLs (exposed as `kas_discovery::validate_kas_url`). This closes an SSRF gap where a remotely-fetched well-known document could otherwise redirect the bearer-carrying rewrap request at an internal target.
+
+### Security
+
+- SSRF URL validation now rejects IPv6 unique-local (`fc00::/7`) and link-local (`fe80::/10`) addresses, and folds IPv4-mapped IPv6 literals (e.g. `::ffff:169.254.169.254`) back to IPv4 so they can't bypass the metadata/private-range checks.
 
 ### Deprecated
 

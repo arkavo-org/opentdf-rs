@@ -260,12 +260,19 @@ async fn connect_rewrap_fails_with_fake_bearer_returns_401() -> Result<(), Box<d
             println!("✓ Connect rewrap returned AccessDenied: {reason}");
         }
         KasError::HttpError { status, message } => {
-            // Acceptable: a generic HTTP error proves we hit Connect, not REST.
-            println!("✓ Connect rewrap returned HTTP {status}: {message}");
+            // A 404 would mean the Connect rewrap path does not exist on the
+            // platform — that would NOT prove Connect plumbing, so reject it
+            // explicitly. Any other 4xx/5xx means the Connect endpoint received
+            // and rejected our (deliberately unauthenticated) request.
+            assert_ne!(
+                *status, 404,
+                "got HTTP 404 — Connect rewrap path missing, plumbing NOT proven: {message}"
+            );
             assert!(
                 *status >= 400 && *status < 600,
                 "expected 4xx/5xx, got {status}"
             );
+            println!("✓ Connect rewrap returned HTTP {status}: {message}");
         }
         other => panic!("unexpected error variant: {other:?}"),
     }

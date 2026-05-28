@@ -201,9 +201,10 @@ impl KasClient {
     ///
     /// # Security
     ///
-    /// The resolved KAS rewrap URL is validated:
+    /// Both resolved KAS URLs (rewrap and public-key) are validated during
+    /// endpoint resolution (see [`crate::kas_discovery::validate_kas_url`]):
     /// - **HTTPS required**: HTTP is only allowed for `localhost`/`127.0.0.1`/`::1` (development use)
-    /// - **SSRF protection**: Private and link-local IP addresses are rejected
+    /// - **SSRF protection**: Private and link-local IP addresses are rejected (IPv4 and IPv6, including IPv4-mapped literals)
     /// - **Scheme validation**: Only `http` and `https` schemes are accepted
     ///
     /// # Note
@@ -216,10 +217,9 @@ impl KasClient {
         config: &crate::kas_discovery::OpentdfConfiguration,
         oauth_token: impl Into<String>,
     ) -> Result<Self, KasError> {
+        // `from_config` validates both the rewrap and public-key URLs for
+        // HTTPS / scheme / SSRF constraints before returning.
         let endpoints = crate::kas_discovery::KasEndpoints::from_config(config)?;
-
-        // Validate the rewrap URL — the public_key_url will be validated when first used.
-        Self::validate_kas_url(&endpoints.rewrap_url)?;
 
         let http_client = Client::builder()
             .timeout(std::time::Duration::from_secs(30))
@@ -254,50 +254,6 @@ impl KasClient {
         })
     }
 
-    /// Validate a KAS URL for HTTPS / SSRF / scheme constraints.
-    fn validate_kas_url(url_str: &str) -> Result<(), KasError> {
-        let parsed = url::Url::parse(url_str)
-            .map_err(|e| KasError::InvalidUrl(format!("Failed to parse URL: {e}")))?;
-
-        match parsed.scheme() {
-            "https" => {}
-            "http" => {
-                let is_loopback = match parsed.host() {
-                    Some(url::Host::Domain("localhost")) => true,
-                    Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
-                    Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
-                    _ => false,
-                };
-                if !is_loopback {
-                    return Err(KasError::InvalidUrl(
-                        "KAS URL must use HTTPS (HTTP only allowed for localhost)".to_string(),
-                    ));
-                }
-            }
-            scheme => {
-                return Err(KasError::InvalidUrl(format!(
-                    "Unsupported URL scheme '{scheme}', must be https"
-                )));
-            }
-        }
-
-        if let Some(host) = parsed.host() {
-            match host {
-                url::Host::Ipv4(ip) => {
-                    if ip.is_private() || ip.is_link_local() {
-                        return Err(KasError::InvalidUrl(
-                            "KAS URL must not target private or link-local IP addresses"
-                                .to_string(),
-                        ));
-                    }
-                }
-                url::Host::Ipv6(_) | url::Host::Domain(_) => {}
-            }
-        }
-
-        Ok(())
-    }
-
     /// Internal helper for sending signed rewrap requests to KAS via ConnectRPC
     ///
     /// Handles HTTP POST to /kas.AccessService/Rewrap, parses Connect error
@@ -314,9 +270,10 @@ impl KasClient {
             .json(signed_request)
             .send()
             .await
-            .map_err(|e| KasError::HttpError {
-                status: 0,
-                message: format!("HTTP request failed: {}", e),
+            .map_err(|e| KasError::RequestError {
+                method: "POST".to_string(),
+                url: self.endpoints.rewrap_url.clone(),
+                reason: e.to_string(),
             })?;
 
         let status = response.status();

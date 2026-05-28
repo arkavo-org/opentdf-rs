@@ -106,32 +106,113 @@ impl KasEndpoints {
     /// Resolve KAS endpoints from a configuration document, preferring
     /// ConnectRPC URLs and falling back to legacy REST when only REST is
     /// advertised.
+    ///
+    /// Both resolved URLs are validated for HTTPS / scheme / SSRF constraints
+    /// (see [`validate_kas_url`]). This matters because the URLs may originate
+    /// from a remotely-fetched well-known document — a hostile document must
+    /// not be able to redirect the rewrap request (which carries the OAuth
+    /// bearer) at an internal target.
     pub fn from_config(cfg: &OpentdfConfiguration) -> Result<Self, KasError> {
         let kas = cfg.kas.as_ref().ok_or_else(|| KasError::ConfigError {
             reason: "well-known configuration is missing a 'kas' block".to_string(),
         })?;
 
-        if let (Some(rewrap), Some(public_key)) =
+        let endpoints = if let (Some(rewrap), Some(public_key)) =
             (&kas.connect_rewrap_url, &kas.connect_public_key_url)
         {
-            return Ok(KasEndpoints {
+            KasEndpoints {
                 rewrap_url: rewrap.clone(),
                 public_key_url: public_key.clone(),
                 transport: KasTransport::Connect,
-            });
-        }
-
-        if let (Some(rewrap), Some(public_key)) = (&kas.rewrap_url, &kas.public_key_url) {
-            return Ok(KasEndpoints {
+            }
+        } else if let (Some(rewrap), Some(public_key)) = (&kas.rewrap_url, &kas.public_key_url) {
+            KasEndpoints {
                 rewrap_url: rewrap.clone(),
                 public_key_url: public_key.clone(),
                 transport: KasTransport::LegacyRest,
+            }
+        } else {
+            return Err(KasError::ConfigError {
+                reason: "well-known kas block exposes neither Connect nor REST URLs".to_string(),
             });
-        }
+        };
 
-        Err(KasError::ConfigError {
-            reason: "well-known kas block exposes neither Connect nor REST URLs".to_string(),
-        })
+        validate_kas_url(&endpoints.rewrap_url)?;
+        validate_kas_url(&endpoints.public_key_url)?;
+
+        Ok(endpoints)
+    }
+}
+
+/// Validate a KAS URL for HTTPS / SSRF / scheme constraints.
+///
+/// - **Scheme**: only `http` and `https` are accepted.
+/// - **HTTPS required**: plain `http` is allowed only for loopback hosts
+///   (`localhost`, `127.0.0.0/8`, `::1`) for local development.
+/// - **SSRF protection**: private and link-local addresses are rejected,
+///   covering IPv4 (`10/8`, `172.16/12`, `192.168/16`, `169.254/16`), IPv6
+///   unique-local (`fc00::/7`) and link-local (`fe80::/10`), and IPv4-mapped
+///   IPv6 literals (e.g. `::ffff:169.254.169.254`), which are folded back to
+///   their IPv4 form before the check.
+pub fn validate_kas_url(url_str: &str) -> Result<(), KasError> {
+    use std::net::IpAddr;
+
+    let parsed = url::Url::parse(url_str)
+        .map_err(|e| KasError::InvalidUrl(format!("Failed to parse URL: {e}")))?;
+
+    match parsed.scheme() {
+        "https" => {}
+        "http" => {
+            let is_loopback = match parsed.host() {
+                Some(url::Host::Domain("localhost")) => true,
+                Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+                Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+                _ => false,
+            };
+            if !is_loopback {
+                return Err(KasError::InvalidUrl(
+                    "KAS URL must use HTTPS (HTTP only allowed for localhost)".to_string(),
+                ));
+            }
+        }
+        scheme => {
+            return Err(KasError::InvalidUrl(format!(
+                "Unsupported URL scheme '{scheme}', must be https"
+            )));
+        }
+    }
+
+    // Fold any IPv4-mapped IPv6 literal back to IPv4 so `::ffff:169.254.169.254`
+    // can't bypass the IPv4 metadata/private-range checks.
+    let ip = match parsed.host() {
+        Some(url::Host::Ipv4(v4)) => Some(IpAddr::V4(v4)),
+        Some(url::Host::Ipv6(v6)) => Some(IpAddr::V6(v6).to_canonical()),
+        _ => None,
+    };
+
+    if let Some(ip) = ip
+        && is_blocked_ip(&ip)
+    {
+        return Err(KasError::InvalidUrl(
+            "KAS URL must not target private or link-local IP addresses".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+/// True if `ip` is in a private or link-local range that must never be a KAS
+/// target (SSRF guard). Loopback is intentionally *not* blocked here — the
+/// scheme check above already gates loopback to HTTP-only dev use.
+fn is_blocked_ip(ip: &std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(v4) => v4.is_private() || v4.is_link_local(),
+        IpAddr::V6(v6) => {
+            let first = v6.segments()[0];
+            // Unique-local fc00::/7 or unicast link-local fe80::/10.
+            (first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80
+        }
     }
 }
 
@@ -167,6 +248,11 @@ pub fn parse_connect_error(body: &str) -> Option<ConnectError> {
 ///
 /// `platform_url` should be the platform's base URL (e.g.,
 /// `"https://platform.arkavo.net"`). A trailing slash is tolerated.
+///
+/// The request is issued on the caller-provided `http_client` and inherits its
+/// configuration. Because this function applies no timeout of its own, the
+/// caller should build the client with a `.timeout(..)` so discovery cannot
+/// hang indefinitely against an unresponsive endpoint.
 pub async fn fetch_well_known(
     platform_url: &str,
     http_client: &reqwest::Client,
@@ -374,6 +460,88 @@ mod tests {
             "https://kas.example.com/kas/v2/kas_public_key"
         );
         assert_eq!(endpoints.transport, KasTransport::LegacyRest);
+    }
+
+    #[test]
+    fn validate_kas_url_accepts_https_and_loopback_http() {
+        assert!(validate_kas_url("https://kas.example.com/kas.AccessService/Rewrap").is_ok());
+        assert!(validate_kas_url("http://localhost:8080/x").is_ok());
+        assert!(validate_kas_url("http://127.0.0.1:8080/x").is_ok());
+        assert!(validate_kas_url("http://[::1]:8080/x").is_ok());
+    }
+
+    #[test]
+    fn validate_kas_url_rejects_non_loopback_http_and_bad_scheme() {
+        assert!(matches!(
+            validate_kas_url("http://evil.com/x"),
+            Err(KasError::InvalidUrl(_))
+        ));
+        assert!(matches!(
+            validate_kas_url("ftp://kas.example.com/x"),
+            Err(KasError::InvalidUrl(_))
+        ));
+    }
+
+    #[test]
+    fn validate_kas_url_rejects_ipv4_private_and_link_local() {
+        for url in [
+            "https://10.0.0.1/x",
+            "https://172.16.0.1/x",
+            "https://192.168.1.1/x",
+            "https://169.254.169.254/x",
+        ] {
+            assert!(
+                matches!(validate_kas_url(url), Err(KasError::InvalidUrl(_))),
+                "{url} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_kas_url_rejects_ipv6_ula_and_link_local() {
+        for url in [
+            "https://[fd00::1]/x", // unique-local fc00::/7
+            "https://[fc00::1]/x", // unique-local fc00::/7
+            "https://[fe80::1]/x", // link-local fe80::/10
+        ] {
+            assert!(
+                matches!(validate_kas_url(url), Err(KasError::InvalidUrl(_))),
+                "{url} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_kas_url_rejects_ipv4_mapped_metadata_address() {
+        // ::ffff:169.254.169.254 must fold back to IPv4 and be rejected,
+        // not slip through as an unchecked IPv6 literal.
+        assert!(matches!(
+            validate_kas_url("https://[::ffff:169.254.169.254]/x"),
+            Err(KasError::InvalidUrl(_))
+        ));
+        assert!(matches!(
+            validate_kas_url("https://[::ffff:10.0.0.1]/x"),
+            Err(KasError::InvalidUrl(_))
+        ));
+    }
+
+    #[test]
+    fn from_config_rejects_hostile_connect_url() {
+        // A well-known document that points the Connect rewrap URL at an
+        // internal address must be rejected at resolution time.
+        let json = r#"{
+            "kas": {
+                "uri": "https://platform.example.com",
+                "algorithms": [],
+                "connect_rewrap_url": "https://169.254.169.254/kas.AccessService/Rewrap",
+                "connect_public_key_url": "https://platform.example.com/kas.AccessService/PublicKey"
+            }
+        }"#;
+        let cfg: OpentdfConfiguration = serde_json::from_str(json).unwrap();
+        assert!(matches!(
+            KasEndpoints::from_config(&cfg),
+            Err(KasError::InvalidUrl(_))
+        ));
     }
 
     #[test]
