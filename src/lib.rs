@@ -53,6 +53,9 @@ mod tdf;
 pub mod kas;
 
 #[cfg(feature = "kas-client")]
+pub mod kas_discovery;
+
+#[cfg(feature = "kas-client")]
 pub mod kas_key;
 
 // JSON-RPC integration (ZTDF-JSON format)
