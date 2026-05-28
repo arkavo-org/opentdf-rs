@@ -135,6 +135,34 @@ impl KasEndpoints {
     }
 }
 
+/// Error envelope returned by Connect unary-JSON RPCs on non-2xx responses.
+///
+/// Codes are defined by the Connect protocol spec
+/// (canceled, unknown, invalid_argument, deadline_exceeded, not_found,
+/// already_exists, permission_denied, resource_exhausted, failed_precondition,
+/// aborted, out_of_range, unimplemented, internal, unavailable, data_loss,
+/// unauthenticated).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConnectError {
+    pub code: String,
+    pub message: String,
+}
+
+/// Attempt to parse a Connect error envelope from a response body.
+/// Returns `None` for empty bodies, non-JSON bodies, or JSON that doesn't
+/// match the Connect error shape.
+pub fn parse_connect_error(body: &str) -> Option<ConnectError> {
+    if body.is_empty() {
+        return None;
+    }
+    let parsed: ConnectError = serde_json::from_str(body).ok()?;
+    // Reject objects that happen to deserialize but lack meaningful content
+    if parsed.code.is_empty() {
+        return None;
+    }
+    Some(parsed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,5 +335,20 @@ mod tests {
             "https://kas.example.com/kas/v2/kas_public_key"
         );
         assert_eq!(endpoints.transport, KasTransport::LegacyRest);
+    }
+
+    #[test]
+    fn parse_connect_error_with_valid_body() {
+        let body = r#"{"code":"unauthenticated","message":"missing bearer token"}"#;
+        let err = parse_connect_error(body).unwrap();
+        assert_eq!(err.code, "unauthenticated");
+        assert_eq!(err.message, "missing bearer token");
+    }
+
+    #[test]
+    fn parse_connect_error_with_garbage_returns_none() {
+        assert!(parse_connect_error("not json").is_none());
+        assert!(parse_connect_error("").is_none());
+        assert!(parse_connect_error(r#"{"unrelated":"shape"}"#).is_none());
     }
 }
