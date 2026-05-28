@@ -52,6 +52,49 @@ pub enum KasTransport {
     LegacyRest,
 }
 
+impl OpentdfConfiguration {
+    /// Synthesize a configuration document pointing at a single KAS base URL
+    /// using ConnectRPC paths. Use this when you can't or don't want to fetch
+    /// `/.well-known/opentdf-configuration` (e.g., tests, deployments that
+    /// don't expose the well-known endpoint).
+    pub fn for_kas_connect(base_url: impl Into<String>) -> Self {
+        let base = base_url.into();
+        let base = base.trim_end_matches('/').to_string();
+        Self {
+            kas: Some(KasConfig {
+                uri: base.clone(),
+                algorithms: vec![],
+                public_key_url: None,
+                rewrap_url: None,
+                connect_public_key_url: Some(format!("{}/kas.AccessService/PublicKey", base)),
+                connect_rewrap_url: Some(format!("{}/kas.AccessService/Rewrap", base)),
+            }),
+            idp: None,
+            platform_issuer: None,
+        }
+    }
+
+    /// Synthesize a configuration document pointing at a single KAS base URL
+    /// using legacy REST paths. Escape hatch for deployments that haven't
+    /// migrated to ConnectRPC.
+    pub fn for_kas_legacy_rest(base_url: impl Into<String>) -> Self {
+        let base = base_url.into();
+        let base = base.trim_end_matches('/').to_string();
+        Self {
+            kas: Some(KasConfig {
+                uri: base.clone(),
+                algorithms: vec![],
+                public_key_url: Some(format!("{}/kas/v2/kas_public_key", base)),
+                rewrap_url: Some(format!("{}/kas/v2/rewrap", base)),
+                connect_public_key_url: None,
+                connect_rewrap_url: None,
+            }),
+            idp: None,
+            platform_issuer: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct KasEndpoints {
     pub rewrap_url: String,
@@ -224,5 +267,45 @@ mod tests {
             err,
             opentdf_protocol::KasError::ConfigError { .. }
         ));
+    }
+
+    #[test]
+    fn for_kas_connect_constructs_expected_urls() {
+        let cfg = OpentdfConfiguration::for_kas_connect("https://kas.example.com");
+        let endpoints = KasEndpoints::from_config(&cfg).unwrap();
+        assert_eq!(
+            endpoints.rewrap_url,
+            "https://kas.example.com/kas.AccessService/Rewrap"
+        );
+        assert_eq!(
+            endpoints.public_key_url,
+            "https://kas.example.com/kas.AccessService/PublicKey"
+        );
+        assert_eq!(endpoints.transport, KasTransport::Connect);
+    }
+
+    #[test]
+    fn for_kas_connect_handles_trailing_slash() {
+        let cfg = OpentdfConfiguration::for_kas_connect("https://kas.example.com/");
+        let endpoints = KasEndpoints::from_config(&cfg).unwrap();
+        assert_eq!(
+            endpoints.rewrap_url,
+            "https://kas.example.com/kas.AccessService/Rewrap"
+        );
+    }
+
+    #[test]
+    fn for_kas_legacy_rest_constructs_expected_urls() {
+        let cfg = OpentdfConfiguration::for_kas_legacy_rest("https://kas.example.com");
+        let endpoints = KasEndpoints::from_config(&cfg).unwrap();
+        assert_eq!(
+            endpoints.rewrap_url,
+            "https://kas.example.com/kas/v2/rewrap"
+        );
+        assert_eq!(
+            endpoints.public_key_url,
+            "https://kas.example.com/kas/v2/kas_public_key"
+        );
+        assert_eq!(endpoints.transport, KasTransport::LegacyRest);
     }
 }
