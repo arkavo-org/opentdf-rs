@@ -37,7 +37,7 @@
 
 ### Security
 
-- SSRF URL validation now rejects IPv6 unique-local (`fc00::/7`) and link-local (`fe80::/10`) addresses, and folds IPv4-mapped IPv6 literals (e.g. `::ffff:169.254.169.254`) back to IPv4 so they can't bypass the metadata/private-range checks.
+- SSRF URL validation now rejects IPv6 unique-local (`fc00::/7`) and link-local (`fe80::/10`) addresses, unspecified addresses (`0.0.0.0`, `::`), and folds IPv4-mapped IPv6 literals (e.g. `::ffff:169.254.169.254`) back to IPv4 so they can't bypass the metadata/private-range checks.
 
 ### Deprecated
 

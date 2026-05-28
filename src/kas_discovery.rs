@@ -149,11 +149,11 @@ impl KasEndpoints {
 /// - **Scheme**: only `http` and `https` are accepted.
 /// - **HTTPS required**: plain `http` is allowed only for loopback hosts
 ///   (`localhost`, `127.0.0.0/8`, `::1`) for local development.
-/// - **SSRF protection**: private and link-local addresses are rejected,
-///   covering IPv4 (`10/8`, `172.16/12`, `192.168/16`, `169.254/16`), IPv6
-///   unique-local (`fc00::/7`) and link-local (`fe80::/10`), and IPv4-mapped
-///   IPv6 literals (e.g. `::ffff:169.254.169.254`), which are folded back to
-///   their IPv4 form before the check.
+/// - **SSRF protection**: private, link-local, and unspecified addresses are
+///   rejected, covering IPv4 (`10/8`, `172.16/12`, `192.168/16`, `169.254/16`,
+///   `0.0.0.0`), IPv6 unique-local (`fc00::/7`), link-local (`fe80::/10`) and
+///   `::`, and IPv4-mapped IPv6 literals (e.g. `::ffff:169.254.169.254`), which
+///   are folded back to their IPv4 form before the check.
 pub fn validate_kas_url(url_str: &str) -> Result<(), KasError> {
     use std::net::IpAddr;
 
@@ -207,8 +207,14 @@ pub fn validate_kas_url(url_str: &str) -> Result<(), KasError> {
 fn is_blocked_ip(ip: &std::net::IpAddr) -> bool {
     use std::net::IpAddr;
     match ip {
-        IpAddr::V4(v4) => v4.is_private() || v4.is_link_local(),
+        // `0.0.0.0` (unspecified) routes to localhost on most systems, so block
+        // it alongside the private and link-local ranges.
+        IpAddr::V4(v4) => v4.is_private() || v4.is_link_local() || v4.is_unspecified(),
         IpAddr::V6(v6) => {
+            if v6.is_unspecified() {
+                // `::` behaves like `0.0.0.0`.
+                return true;
+            }
             let first = v6.segments()[0];
             // Unique-local fc00::/7 or unicast link-local fe80::/10.
             (first & 0xfe00) == 0xfc00 || (first & 0xffc0) == 0xfe80
@@ -509,6 +515,19 @@ mod tests {
                 "{url} should be rejected"
             );
         }
+    }
+
+    #[test]
+    fn validate_kas_url_rejects_unspecified_addresses() {
+        // 0.0.0.0 / :: route to localhost on most systems.
+        assert!(matches!(
+            validate_kas_url("https://0.0.0.0/x"),
+            Err(KasError::InvalidUrl(_))
+        ));
+        assert!(matches!(
+            validate_kas_url("https://[::]/x"),
+            Err(KasError::InvalidUrl(_))
+        ));
     }
 
     #[test]

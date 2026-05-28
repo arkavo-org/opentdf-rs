@@ -173,11 +173,6 @@ impl EphemeralKeyPair {
 #[cfg(feature = "kas-client")]
 pub struct KasClient {
     http_client: Client,
-    /// Backwards-compatible base URL field, derived from the resolved
-    /// `OpentdfConfiguration::kas.uri`. **Not used for routing** — internal
-    /// requests go through `endpoints.rewrap_url`. Retained as `pub` to avoid
-    /// breaking downstream callers that read this field directly.
-    pub base_url: String,
     endpoints: crate::kas_discovery::KasEndpoints,
     oauth_token: String,
     signing_key: PrivateDecryptingKey,
@@ -236,18 +231,8 @@ impl KasClient {
             }
         })?;
 
-        // Derive base_url from the kas block's `uri` if present, else from the
-        // rewrap URL host. Used only for backwards-compat field access; not
-        // used for routing (we use endpoints.rewrap_url).
-        let base_url = config
-            .kas
-            .as_ref()
-            .map(|k| k.uri.trim_end_matches('/').to_string())
-            .unwrap_or_default();
-
         Ok(Self {
             http_client,
-            base_url,
             endpoints,
             oauth_token: oauth_token.into(),
             signing_key,
