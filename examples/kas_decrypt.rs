@@ -9,7 +9,9 @@
 //! cargo run --example kas_decrypt --features kas -- /path/to/file.tdf
 //! ```
 
-use opentdf::{TdfArchive, kas::KasClient, manifest::TdfManifestExt};
+use opentdf::{
+    TdfArchive, kas::KasClient, kas_discovery::OpentdfConfiguration, manifest::TdfManifestExt,
+};
 use std::env;
 
 #[tokio::main]
@@ -40,7 +42,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create KAS client
     println!("1. Creating KAS client...");
-    let kas_client = match KasClient::new(&kas_url, &kas_token) {
+    let config = OpentdfConfiguration::for_kas_connect(&kas_url);
+    let kas_client = match KasClient::new(&config, &kas_token) {
         Ok(client) => {
             println!("   ✓ KAS client created");
             client

@@ -9,6 +9,7 @@ mod kas_mock_tests {
     use opentdf::{
         TdfManifest,
         kas::{KasClient, KeyType},
+        kas_discovery::OpentdfConfiguration,
         manifest::TdfManifestExt,
     };
 
@@ -63,7 +64,8 @@ mod kas_mock_tests {
 
     #[tokio::test]
     async fn test_kas_client_creation() {
-        let client = KasClient::new("https://kas.example.com", "mock-token");
+        let cfg = OpentdfConfiguration::for_kas_connect("https://kas.example.com");
+        let client = KasClient::new(&cfg, "mock-token");
         assert!(client.is_ok(), "KAS client creation should succeed");
     }
 
@@ -86,10 +88,10 @@ mod kas_mock_tests {
             .create();
 
         let kas_url = server.url();
-        let client = KasClient::new(&kas_url, "mock-token").unwrap();
+        let cfg = OpentdfConfiguration::for_kas_connect(&kas_url);
+        let client = KasClient::new(&cfg, "mock-token").unwrap();
 
         // Note: manifest URL should match what's in key_access[0].url
-        // The client will append /kas.AccessService/Rewrap to its base_url
         let manifest = create_test_manifest_with_policy(kas_url.clone());
 
         // This will fail at unwrap_key stage but validates request format
@@ -114,7 +116,8 @@ mod kas_mock_tests {
             .create();
 
         let kas_url = server.url();
-        let client = KasClient::new(&kas_url, "invalid-token").unwrap();
+        let cfg = OpentdfConfiguration::for_kas_connect(&kas_url);
+        let client = KasClient::new(&cfg, "invalid-token").unwrap();
 
         let manifest = create_test_manifest_with_policy(kas_url.clone());
 
@@ -143,7 +146,8 @@ mod kas_mock_tests {
             .create();
 
         let kas_url = server.url();
-        let client = KasClient::new(&kas_url, "bad-token").unwrap();
+        let cfg = OpentdfConfiguration::for_kas_connect(&kas_url);
+        let client = KasClient::new(&cfg, "bad-token").unwrap();
         let manifest = create_test_manifest_with_policy(kas_url.clone());
 
         let result = client.rewrap_standard_tdf(&manifest).await;
@@ -168,7 +172,8 @@ mod kas_mock_tests {
             .create();
 
         let kas_url = server.url();
-        let client = KasClient::new(&kas_url, "valid-token").unwrap();
+        let cfg = OpentdfConfiguration::for_kas_connect(&kas_url);
+        let client = KasClient::new(&cfg, "valid-token").unwrap();
 
         let manifest = create_test_manifest_with_policy(kas_url.clone());
 
@@ -195,7 +200,8 @@ mod kas_mock_tests {
             .create();
 
         let kas_url = server.url();
-        let client = KasClient::new(&kas_url, "valid-token").unwrap();
+        let cfg = OpentdfConfiguration::for_kas_connect(&kas_url);
+        let client = KasClient::new(&cfg, "valid-token").unwrap();
 
         let manifest = create_test_manifest_with_policy(kas_url.clone());
 
@@ -222,7 +228,8 @@ mod kas_mock_tests {
             .create();
 
         let kas_url = server.url();
-        let client = KasClient::new(&kas_url, "valid-token").unwrap();
+        let cfg = OpentdfConfiguration::for_kas_connect(&kas_url);
+        let client = KasClient::new(&cfg, "valid-token").unwrap();
 
         let manifest = create_test_manifest_with_policy(kas_url.clone());
 
@@ -241,7 +248,8 @@ mod kas_mock_tests {
     async fn test_kas_network_timeout() {
         // Mock server that never responds (simulates timeout)
         let kas_url = "https://192.0.2.1:9999"; // TEST-NET address, should timeout
-        let client = KasClient::new(kas_url, "token").unwrap();
+        let cfg = OpentdfConfiguration::for_kas_connect(kas_url);
+        let client = KasClient::new(&cfg, "token").unwrap();
 
         let manifest = create_test_manifest_with_policy(kas_url.to_string());
 
@@ -318,7 +326,8 @@ mod kas_mock_tests {
             .create();
 
         let kas_url = server.url();
-        let client = KasClient::new(&kas_url, "test-token").unwrap();
+        let cfg = OpentdfConfiguration::for_kas_connect(&kas_url);
+        let client = KasClient::new(&cfg, "test-token").unwrap();
 
         let manifest = create_test_manifest_with_policy(kas_url.clone());
 

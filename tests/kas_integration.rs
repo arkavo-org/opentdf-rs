@@ -62,8 +62,8 @@ mod kas_tests {
         println!("Testing KAS rewrap against: {}", kas_url);
 
         // Create KAS client
-        let _kas_client =
-            KasClient::new(&kas_url, &oauth_token).expect("Failed to create KAS client");
+        let cfg = opentdf::kas_discovery::OpentdfConfiguration::for_kas_connect(&kas_url);
+        let _kas_client = KasClient::new(&cfg, &oauth_token).expect("Failed to create KAS client");
 
         // Create a simple TDF for testing
         let plaintext = b"Hello from KAS integration test!";
@@ -115,8 +115,8 @@ mod kas_tests {
 
         println!("Testing decryption of: {}", test_tdf_path);
 
-        let kas_client =
-            KasClient::new(&kas_url, &oauth_token).expect("Failed to create KAS client");
+        let cfg = opentdf::kas_discovery::OpentdfConfiguration::for_kas_connect(&kas_url);
+        let kas_client = KasClient::new(&cfg, &oauth_token).expect("Failed to create KAS client");
 
         // Open and decrypt the TDF
         match TdfArchive::open_and_decrypt(test_tdf_path, &kas_client).await {

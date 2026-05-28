@@ -146,7 +146,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nFull token length: {} characters", signed_token.len());
 
     println!("\n=== Usage in KAS Client ===");
-    println!("let kas_client = KasClient::new(kas_url, oauth_token)?;");
+    println!("let config = OpentdfConfiguration::for_kas_connect(kas_url);");
+    println!("let kas_client = KasClient::new(&config, oauth_token)?;");
     println!("let payload_key = kas_client.rewrap_standard_tdf(&manifest, &signed_token).await?;");
 
     Ok(())

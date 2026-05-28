@@ -87,7 +87,10 @@ impl Tdf {
     /// ```no_run
     /// # use opentdf::{Tdf, kas::KasClient};
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let kas_client = KasClient::new("https://kas.example.com", "token")?;
+    /// let config = opentdf::kas_discovery::OpentdfConfiguration::for_kas_connect(
+    ///     "https://kas.example.com",
+    /// );
+    /// let kas_client = KasClient::new(&config, "token")?;
     /// let tdf_data = std::fs::read("encrypted.tdf")?;
     /// let plaintext = Tdf::decrypt(tdf_data)
     ///     .kas_client(kas_client)
@@ -110,7 +113,10 @@ impl Tdf {
     /// ```no_run
     /// # use opentdf::{Tdf, kas::KasClient};
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let kas_client = KasClient::new("https://kas.example.com", "token")?;
+    /// let config = opentdf::kas_discovery::OpentdfConfiguration::for_kas_connect(
+    ///     "https://kas.example.com",
+    /// );
+    /// let kas_client = KasClient::new(&config, "token")?;
     /// let plaintext = Tdf::decrypt_file("encrypted.tdf")
     ///     .kas_client(kas_client)
     ///     .to_bytes()
