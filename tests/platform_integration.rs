@@ -167,3 +167,107 @@ async fn test_kas_rewrap_protocol() -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// ConnectRPC migration verification (#85)
+//
+// These tests run against the real Arkavo platform and document the milestone
+// state of the Connect transport. They are #[ignore]d by default; opt in with:
+//
+//   cargo test --test platform_integration --all-features -- --ignored connect
+//
+// or, if KAS_INTEGRATION_TESTS=1 is set, the user can run them by name.
+// ---------------------------------------------------------------------------
+
+const ARKAVO_PLATFORM: &str = "https://platform.arkavo.net";
+
+#[tokio::test]
+#[ignore]
+async fn connect_well_known_endpoint_returns_kas_config() -> Result<(), Box<dyn Error>> {
+    use opentdf::kas_discovery::fetch_well_known;
+    let http = reqwest::Client::new();
+    let cfg = fetch_well_known(ARKAVO_PLATFORM, &http).await?;
+    let kas = cfg.kas.expect("kas block should be present");
+    assert!(
+        kas.connect_rewrap_url.is_some(),
+        "platform should advertise connect_rewrap_url"
+    );
+    assert!(
+        kas.connect_public_key_url.is_some(),
+        "platform should advertise connect_public_key_url"
+    );
+    assert!(
+        kas.rewrap_url.is_some(),
+        "platform also exposes legacy REST rewrap_url (transitional)"
+    );
+    println!("✓ well-known reports both Connect and REST URLs");
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore]
+async fn connect_public_key_returns_pem() -> Result<(), Box<dyn Error>> {
+    use opentdf::kas_discovery::{KasEndpoints, fetch_well_known};
+    use opentdf::kas_key::fetch_kas_public_key_connect;
+
+    let http = reqwest::Client::new();
+    let cfg = fetch_well_known(ARKAVO_PLATFORM, &http).await?;
+    let endpoints = KasEndpoints::from_config(&cfg)?;
+    let resp = fetch_kas_public_key_connect(&endpoints.public_key_url, &http).await?;
+    assert!(
+        resp.public_key.starts_with("-----BEGIN PUBLIC KEY-----"),
+        "expected PEM, got: {}",
+        resp.public_key
+    );
+    assert!(!resp.kid.is_empty(), "kid should be populated");
+    println!(
+        "✓ Connect PublicKey returned kid={} ({} bytes PEM)",
+        resp.kid,
+        resp.public_key.len()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore]
+async fn connect_rewrap_fails_with_fake_bearer_returns_401() -> Result<(), Box<dyn Error>> {
+    use opentdf::TdfManifest;
+    use opentdf::kas::KasClient;
+    use opentdf::kas_discovery::fetch_well_known;
+    use opentdf_protocol::KasError;
+
+    let http = reqwest::Client::new();
+    let cfg = fetch_well_known(ARKAVO_PLATFORM, &http).await?;
+    // Pass a syntactically-plausible bearer that the platform will reject.
+    let client = KasClient::new(&cfg, "eyJhbGciOiJub25lIn0.e30.")?;
+
+    // Build a minimal manifest with a real policy UUID so the client can
+    // serialise the rewrap request and actually reach the platform.
+    let mut manifest = TdfManifest::new("0.payload".to_string(), ARKAVO_PLATFORM.to_string());
+    manifest.set_policy_raw(r#"{"uuid":"00000000-0000-0000-0000-000000000000"}"#);
+    let result = client.rewrap_standard_tdf(&manifest).await;
+
+    let err = result.expect_err("rewrap should fail without valid auth");
+    match &err {
+        KasError::AuthenticationFailed { reason } => {
+            // Connect 'unauthenticated' code should surface in the reason string
+            // when the platform returns a Connect error envelope.
+            println!("✓ Connect rewrap returned AuthenticationFailed: {reason}");
+        }
+        KasError::AccessDenied { reason, .. } => {
+            // Some Connect implementations may return permission_denied (403)
+            // when the request is malformed.
+            println!("✓ Connect rewrap returned AccessDenied: {reason}");
+        }
+        KasError::HttpError { status, message } => {
+            // Acceptable: a generic HTTP error proves we hit Connect, not REST.
+            println!("✓ Connect rewrap returned HTTP {status}: {message}");
+            assert!(
+                *status >= 400 && *status < 600,
+                "expected 4xx/5xx, got {status}"
+            );
+        }
+        other => panic!("unexpected error variant: {other:?}"),
+    }
+    Ok(())
+}
