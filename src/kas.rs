@@ -9,7 +9,7 @@
 //! 1. Generate ephemeral RSA-2048 key pair
 //! 2. Build unsigned rewrap request with manifest data
 //! 3. Accept pre-signed JWT token (ES256) - see `examples/jwt_helper.rs`
-//! 4. POST to KAS `/v2/rewrap` endpoint
+//! 4. POST to KAS `/kas.AccessService/Rewrap` (ConnectRPC) endpoint
 //! 5. Receive RSA-encrypted wrapped key
 //! 6. Unwrap key using RSA-OAEP (SHA-1 default, SHA-256 available)
 //!
@@ -17,7 +17,7 @@
 //! 1. Generate ephemeral EC P-256 key pair
 //! 2. Build unsigned rewrap request with manifest data
 //! 3. Accept pre-signed JWT token (ES256) - see `examples/jwt_helper.rs`
-//! 4. POST to KAS `/v2/rewrap` endpoint
+//! 4. POST to KAS `/kas.AccessService/Rewrap` (ConnectRPC) endpoint
 //! 5. Receive wrapped key and session public key
 //! 6. Unwrap key using ECDH + HKDF + AES-GCM
 //!
@@ -282,14 +282,15 @@ impl KasClient {
         })
     }
 
-    /// Internal helper for sending signed rewrap requests to KAS
+    /// Internal helper for sending signed rewrap requests to KAS via ConnectRPC
     ///
-    /// Handles HTTP POST, error mapping for 401/403, and JSON response parsing.
+    /// Handles HTTP POST to /kas.AccessService/Rewrap, parses Connect error
+    /// envelopes for richer error messages, and deserializes the response.
     async fn send_rewrap_request(
         &self,
         signed_request: &SignedRewrapRequest,
     ) -> Result<RewrapResponse, KasError> {
-        let rewrap_endpoint = format!("{}/kas/v2/rewrap", self.base_url);
+        let rewrap_endpoint = format!("{}/kas.AccessService/Rewrap", self.base_url);
 
         let response = self
             .http_client
@@ -307,17 +308,25 @@ impl KasClient {
         let status = response.status();
         if !status.is_success() {
             let error_body = response.text().await.unwrap_or_default();
+            let detail = crate::kas_discovery::parse_connect_error(&error_body)
+                .map(|e| format!("{}: {}", e.code, e.message))
+                .unwrap_or_else(|| {
+                    if error_body.is_empty() {
+                        format!("HTTP {}", status)
+                    } else {
+                        error_body.clone()
+                    }
+                });
+
             return Err(match status.as_u16() {
-                401 => KasError::AuthenticationFailed {
-                    reason: "Invalid or missing OAuth token".to_string(),
-                },
+                401 => KasError::AuthenticationFailed { reason: detail },
                 403 => KasError::AccessDenied {
                     resource: "KAS endpoint".to_string(),
-                    reason: error_body,
+                    reason: detail,
                 },
                 _ => KasError::HttpError {
                     status: status.as_u16(),
-                    message: format!("HTTP {}: {}", status, error_body),
+                    message: detail,
                 },
             });
         }
@@ -337,7 +346,7 @@ impl KasClient {
     /// 1. Generate RSA-2048 ephemeral key pair (Standard TDF uses RSA)
     /// 2. Build unsigned rewrap request
     /// 3. Sign request with internal signing key to create JWT (RS256)
-    /// 4. POST to KAS /v2/rewrap endpoint with signed JWT
+    /// 4. POST to KAS /kas.AccessService/Rewrap (ConnectRPC) endpoint with signed JWT
     /// 5. Unwrap the returned key using RSA-OAEP
     ///
     /// # Arguments
