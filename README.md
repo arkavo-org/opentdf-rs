@@ -318,21 +318,38 @@ The KAS client is enabled by default:
 
 ```toml
 [dependencies]
-opentdf = "0.7"
+opentdf = "0.13"
+```
+
+#### Creating a KAS Client (v0.13+)
+
+`KasClient::new` accepts an `&OpentdfConfiguration` rather than a raw URL string.
+
+```rust
+use opentdf::kas::KasClient;
+use opentdf::kas_discovery::{fetch_well_known, OpentdfConfiguration};
+
+// Discovery (recommended): reads /.well-known/opentdf-configuration from the platform
+let http = reqwest::Client::new();
+let cfg = fetch_well_known("https://platform.arkavo.net", &http).await?;
+let kas = KasClient::new(&cfg, oauth_token)?;
+
+// Direct (skip discovery): build config from a known KAS URL
+let cfg = OpentdfConfiguration::for_kas_connect("https://kas.example.com");
+let kas = KasClient::new(&cfg, oauth_token)?;
 ```
 
 #### Decrypt TDF with KAS
 
 ```rust
 use opentdf::{TdfArchive, kas::KasClient};
+use opentdf::kas_discovery::OpentdfConfiguration;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create KAS client
-    let kas_client = KasClient::new(
-        "https://kas.example.com/kas",
-        "your-oauth-token-here"
-    )?;
+    // Create KAS client (ConnectRPC transport)
+    let cfg = OpentdfConfiguration::for_kas_connect("https://kas.example.com");
+    let kas_client = KasClient::new(&cfg, "your-oauth-token-here")?;
 
     // Open and decrypt TDF in one call
     let plaintext = TdfArchive::open_and_decrypt(
@@ -351,14 +368,13 @@ For more control over the decryption process:
 
 ```rust
 use opentdf::{TdfArchive, kas::KasClient};
+use opentdf::kas_discovery::OpentdfConfiguration;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create KAS client
-    let kas_client = KasClient::new(
-        "https://kas.example.com/kas",
-        "your-oauth-token-here"
-    )?;
+    // Create KAS client (ConnectRPC transport)
+    let cfg = OpentdfConfiguration::for_kas_connect("https://kas.example.com");
+    let kas_client = KasClient::new(&cfg, "your-oauth-token-here")?;
 
     // Open TDF archive
     let mut archive = TdfArchive::open("encrypted-file.tdf")?;
