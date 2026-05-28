@@ -92,6 +92,21 @@ impl AppState {
         &self.rsa_public_key_pem
     }
 
+    /// Return (pem, kid) for a given algorithm string.
+    ///
+    /// Accepts the same algorithm tokens as the legacy GET handler:
+    /// - `"ec"`, `"ec:secp256r1"`, etc. → EC P-256 key
+    /// - anything else (including `""` or `"rsa:2048"`) → RSA-2048 key
+    fn public_keys_for(&self, algorithm: &str) -> (String, String) {
+        if algorithm.starts_with("ec:") || algorithm == "ec" {
+            let pem = self.ec_public_key_pem().to_string();
+            (pem, "ec-1".to_string())
+        } else {
+            let pem = self.rsa_public_key_pem().to_string();
+            (pem, "rsa-1".to_string())
+        }
+    }
+
     /// Store a symmetric key for a policy ID
     #[allow(dead_code)]
     fn store_key(&self, policy_id: &str, key: Vec<u8>) {
@@ -269,6 +284,33 @@ async fn get_public_key_with_algorithm(
     };
 
     Json(PublicKeyResponse { public_key })
+}
+
+/// Request body for ConnectRPC PublicKey endpoint
+#[derive(Deserialize, Default)]
+struct PublicKeyConnectRequest {
+    #[serde(default)]
+    algorithm: Option<String>,
+}
+
+/// Get KAS public key (ConnectRPC POST style)
+///
+/// Accepts an optional JSON body `{"algorithm":"ec:secp256r1"}`.
+/// Defaults to RSA-2048 when no algorithm is specified.
+async fn get_public_key_connect(
+    State(state): State<AppState>,
+    body: Option<Json<PublicKeyConnectRequest>>,
+) -> impl IntoResponse {
+    let algorithm = body
+        .and_then(|Json(req)| req.algorithm)
+        .unwrap_or_else(|| "rsa:2048".to_string());
+
+    let (pem, kid) = state.public_keys_for(&algorithm);
+
+    Json(serde_json::json!({
+        "publicKey": pem,
+        "kid": kid,
+    }))
 }
 
 /// Rewrap key endpoint
@@ -697,10 +739,12 @@ async fn main() {
     println!("EC public key: {}", ec_key_path.display());
     println!();
     println!("Endpoints:");
-    println!("  GET  /health                  - Health check");
-    println!("  GET  /kas/v2/kas_public_key   - Get KAS public key");
-    println!("  POST /kas/v2/rewrap           - Rewrap key");
-    println!("  POST /token                   - Get OAuth token");
+    println!("  GET  /health                          - Health check");
+    println!("  GET  /kas/v2/kas_public_key           - Get KAS public key (REST)");
+    println!("  POST /kas/v2/rewrap                   - Rewrap key (REST)");
+    println!("  POST /token                           - Get OAuth token");
+    println!("  POST /kas.AccessService/PublicKey     - Get KAS public key (ConnectRPC)");
+    println!("  POST /kas.AccessService/Rewrap        - Rewrap key (ConnectRPC)");
     println!();
 
     let app = Router::new()
@@ -708,6 +752,8 @@ async fn main() {
         .route("/kas/v2/kas_public_key", get(get_public_key_with_algorithm))
         .route("/kas/v2/rewrap", post(rewrap))
         .route("/token", post(token))
+        .route("/kas.AccessService/PublicKey", post(get_public_key_connect))
+        .route("/kas.AccessService/Rewrap", post(rewrap))
         .with_state(state);
 
     let addr = format!("0.0.0.0:{}", port);
