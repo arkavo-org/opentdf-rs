@@ -201,6 +201,8 @@ impl KasClient {
     /// - **HTTPS required**: HTTP is only allowed for `localhost`/`127.0.0.1`/`::1` (development use)
     /// - **SSRF protection**: Private and link-local IP addresses are rejected (IPv4 and IPv6, including IPv4-mapped literals)
     /// - **Scheme validation**: Only `http` and `https` schemes are accepted
+    /// - **No redirects**: The rewrap HTTP client follows no redirects, so a 3xx
+    ///   cannot re-issue the bearer-carrying request to an unvalidated host
     ///
     /// # Note
     ///
@@ -216,8 +218,14 @@ impl KasClient {
         // HTTPS / scheme / SSRF constraints before returning.
         let endpoints = crate::kas_discovery::KasEndpoints::from_config(config)?;
 
+        // Disable redirect following. The KAS rewrap endpoint is an RPC target
+        // that should never redirect; allowing redirects would let a 3xx from a
+        // validated host re-issue the bearer-carrying request to an unvalidated
+        // one (e.g. an internal address), since `validate_kas_url` only runs on
+        // the initial URL, not per-hop.
         let http_client = Client::builder()
             .timeout(std::time::Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| KasError::HttpError {
                 status: 0,

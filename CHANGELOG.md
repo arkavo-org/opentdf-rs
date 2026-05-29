@@ -38,6 +38,7 @@
 ### Security
 
 - SSRF URL validation now rejects IPv6 unique-local (`fc00::/7`) and link-local (`fe80::/10`) addresses, unspecified addresses (`0.0.0.0`, `::`), and folds IPv4-mapped IPv6 literals (e.g. `::ffff:169.254.169.254`) back to IPv4 so they can't bypass the metadata/private-range checks.
+- The KAS rewrap HTTP client now follows no redirects (`redirect::Policy::none()`), so a 3xx from a validated host cannot re-issue the bearer-carrying rewrap request to an unvalidated target (URL validation only runs on the initial URL, not per redirect hop).
 
 ### Deprecated
 
