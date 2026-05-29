@@ -9,7 +9,7 @@
 //! 1. Generate ephemeral RSA-2048 key pair
 //! 2. Build unsigned rewrap request with manifest data
 //! 3. Accept pre-signed JWT token (ES256) - see `examples/jwt_helper.rs`
-//! 4. POST to KAS `/v2/rewrap` endpoint
+//! 4. POST to KAS `/kas.AccessService/Rewrap` (ConnectRPC) endpoint
 //! 5. Receive RSA-encrypted wrapped key
 //! 6. Unwrap key using RSA-OAEP (SHA-1 default, SHA-256 available)
 //!
@@ -17,7 +17,7 @@
 //! 1. Generate ephemeral EC P-256 key pair
 //! 2. Build unsigned rewrap request with manifest data
 //! 3. Accept pre-signed JWT token (ES256) - see `examples/jwt_helper.rs`
-//! 4. POST to KAS `/v2/rewrap` endpoint
+//! 4. POST to KAS `/kas.AccessService/Rewrap` (ConnectRPC) endpoint
 //! 5. Receive wrapped key and session public key
 //! 6. Unwrap key using ECDH + HKDF + AES-GCM
 //!
@@ -30,20 +30,17 @@
 //!
 //! ```no_run
 //! use opentdf::kas::KasClient;
+//! use opentdf::kas_discovery::OpentdfConfiguration;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let client = KasClient::new(
-//!     "https://kas.example.com",
-//!     "oauth_token_here",
-//! )?;
+//! let config = OpentdfConfiguration::for_kas_connect("https://kas.example.com");
+//! let client = KasClient::new(&config, "oauth_token_here")?;
 //!
-//! // Create a test manifest
 //! let manifest = opentdf::TdfManifest::new(
 //!     "0.payload".to_string(),
 //!     "https://kas.example.com".to_string()
 //! );
 //!
-//! // Unwrap a key from a TDF manifest (JWT signing handled internally)
 //! let payload_key = client.rewrap_standard_tdf(&manifest).await?;
 //! # Ok(())
 //! # }
@@ -176,97 +173,65 @@ impl EphemeralKeyPair {
 #[cfg(feature = "kas-client")]
 pub struct KasClient {
     http_client: Client,
-    base_url: String,
+    endpoints: crate::kas_discovery::KasEndpoints,
     oauth_token: String,
-    /// aws-lc-rs RSA private key for JWT signing
     signing_key: PrivateDecryptingKey,
 }
 
 #[cfg(feature = "kas-client")]
 impl KasClient {
-    /// Create a new KAS client
+    /// Create a new KAS client from a resolved configuration document.
     ///
     /// # Arguments
     ///
-    /// * `base_url` - Base URL of the KAS service (e.g., `"https://kas.example.com"`)
-    /// * `oauth_token` - OAuth bearer token for authentication
+    /// * `config` - A pre-resolved `OpentdfConfiguration`. Obtain via
+    ///   `fetch_well_known(...)` for discovery-driven setups, or build
+    ///   directly with `OpentdfConfiguration::for_kas_connect(base_url)`
+    ///   when the platform doesn't expose `/.well-known/opentdf-configuration`.
+    ///   `OpentdfConfiguration::for_kas_legacy_rest(base_url)` is the escape
+    ///   hatch for pre-ConnectRPC deployments.
+    /// * `oauth_token` - Bearer token sent in the `Authorization` header.
+    ///   Opaque passthrough: pass a JWT or a base64url-encoded CWT — the
+    ///   server decides how to validate.
     ///
     /// # Security
     ///
-    /// The URL is validated for security:
+    /// Both resolved KAS URLs (rewrap and public-key) are validated during
+    /// endpoint resolution (see [`crate::kas_discovery::validate_kas_url`]):
     /// - **HTTPS required**: HTTP is only allowed for `localhost`/`127.0.0.1`/`::1` (development use)
-    /// - **SSRF protection**: Private and link-local IP addresses are rejected
+    /// - **SSRF protection**: Private and link-local IP addresses are rejected (IPv4 and IPv6, including IPv4-mapped literals)
     /// - **Scheme validation**: Only `http` and `https` schemes are accepted
+    /// - **No redirects**: The rewrap HTTP client follows no redirects, so a 3xx
+    ///   cannot re-issue the bearer-carrying request to an unvalidated host
     ///
     /// # Note
     ///
-    /// This client generates an ephemeral RSA-2048 key pair for signing JWT rewrap requests.
-    /// The JWT signature is verified by KAS when DPoP is enabled, otherwise it's parsed without verification.
-    /// Uses aws-lc-rs for constant-time RSA operations (FIPS validated).
+    /// This client generates an ephemeral RSA-2048 key pair for signing the
+    /// inner JWT rewrap request envelope. That is separate from the access
+    /// token — the inner JWT is the rewrap-request signature; the `oauth_token`
+    /// is the platform-issued access token.
     pub fn new(
-        base_url: impl Into<String>,
+        config: &crate::kas_discovery::OpentdfConfiguration,
         oauth_token: impl Into<String>,
     ) -> Result<Self, KasError> {
-        let base_url: String = base_url.into();
+        // `from_config` validates both the rewrap and public-key URLs for
+        // HTTPS / scheme / SSRF constraints before returning.
+        let endpoints = crate::kas_discovery::KasEndpoints::from_config(config)?;
 
-        // Parse and validate KAS URL
-        let parsed = url::Url::parse(&base_url)
-            .map_err(|e| KasError::InvalidUrl(format!("Failed to parse URL: {e}")))?;
-
-        // Enforce HTTPS (allow HTTP only for loopback/localhost for development)
-        match parsed.scheme() {
-            "https" => {}
-            "http" => {
-                let is_loopback = match parsed.host() {
-                    Some(url::Host::Domain("localhost")) => true,
-                    Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
-                    Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
-                    _ => false,
-                };
-                if !is_loopback {
-                    return Err(KasError::InvalidUrl(
-                        "KAS URL must use HTTPS (HTTP only allowed for localhost)".to_string(),
-                    ));
-                }
-            }
-            scheme => {
-                return Err(KasError::InvalidUrl(format!(
-                    "Unsupported URL scheme '{scheme}', must be https"
-                )));
-            }
-        }
-
-        // Block requests to private/link-local IP ranges (SSRF protection)
-        if let Some(host) = parsed.host() {
-            match host {
-                url::Host::Ipv4(ip) => {
-                    if ip.is_private() || ip.is_link_local() {
-                        return Err(KasError::InvalidUrl(
-                            "KAS URL must not target private or link-local IP addresses"
-                                .to_string(),
-                        ));
-                    }
-                }
-                url::Host::Ipv6(_) => {
-                    // IPv6 loopback (::1) is already handled by the HTTP/HTTPS check above.
-                    // Rust stable doesn't expose is_unicast_link_local() for Ipv6Addr,
-                    // but the HTTPS requirement blocks most SSRF vectors for non-loopback IPv6.
-                }
-                url::Host::Domain(_) => {
-                    // Domain names are allowed — HTTPS + TLS certificate validates identity.
-                }
-            }
-        }
-
+        // Disable redirect following. The KAS rewrap endpoint is an RPC target
+        // that should never redirect; allowing redirects would let a 3xx from a
+        // validated host re-issue the bearer-carrying request to an unvalidated
+        // one (e.g. an internal address), since `validate_kas_url` only runs on
+        // the initial URL, not per-hop.
         let http_client = Client::builder()
             .timeout(std::time::Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| KasError::HttpError {
                 status: 0,
                 message: format!("Failed to build HTTP client: {}", e),
             })?;
 
-        // Generate RSA-2048 key pair for JWT signing (DPoP key) using aws-lc-rs
         let signing_key = PrivateDecryptingKey::generate(KeySize::Rsa2048).map_err(|e| {
             KasError::CryptoError {
                 operation: "generate_signing_key".to_string(),
@@ -276,48 +241,56 @@ impl KasClient {
 
         Ok(Self {
             http_client,
-            base_url,
+            endpoints,
             oauth_token: oauth_token.into(),
             signing_key,
         })
     }
 
-    /// Internal helper for sending signed rewrap requests to KAS
+    /// Internal helper for sending signed rewrap requests to KAS via ConnectRPC
     ///
-    /// Handles HTTP POST, error mapping for 401/403, and JSON response parsing.
+    /// Handles HTTP POST to /kas.AccessService/Rewrap, parses Connect error
+    /// envelopes for richer error messages, and deserializes the response.
     async fn send_rewrap_request(
         &self,
         signed_request: &SignedRewrapRequest,
     ) -> Result<RewrapResponse, KasError> {
-        let rewrap_endpoint = format!("{}/kas/v2/rewrap", self.base_url);
-
         let response = self
             .http_client
-            .post(&rewrap_endpoint)
+            .post(&self.endpoints.rewrap_url)
             .header("Authorization", format!("Bearer {}", self.oauth_token))
             .header("Content-Type", "application/json")
             .json(signed_request)
             .send()
             .await
-            .map_err(|e| KasError::HttpError {
-                status: 0,
-                message: format!("HTTP request failed: {}", e),
+            .map_err(|e| KasError::RequestError {
+                method: "POST".to_string(),
+                url: self.endpoints.rewrap_url.clone(),
+                reason: e.to_string(),
             })?;
 
         let status = response.status();
         if !status.is_success() {
             let error_body = response.text().await.unwrap_or_default();
+            let detail = crate::kas_discovery::parse_connect_error(&error_body)
+                .map(|e| format!("{}: {}", e.code, e.message))
+                .unwrap_or_else(|| {
+                    if error_body.is_empty() {
+                        format!("HTTP {}", status)
+                    } else {
+                        error_body.clone()
+                    }
+                });
+
             return Err(match status.as_u16() {
-                401 => KasError::AuthenticationFailed {
-                    reason: "Invalid or missing OAuth token".to_string(),
-                },
+                401 => KasError::AuthenticationFailed { reason: detail },
                 403 => KasError::AccessDenied {
                     resource: "KAS endpoint".to_string(),
-                    reason: error_body,
+                    reason: detail,
                 },
                 _ => KasError::HttpError {
                     status: status.as_u16(),
-                    message: format!("HTTP {}: {}", status, error_body),
+                    message: detail,
                 },
             });
         }
@@ -337,7 +310,7 @@ impl KasClient {
     /// 1. Generate RSA-2048 ephemeral key pair (Standard TDF uses RSA)
     /// 2. Build unsigned rewrap request
     /// 3. Sign request with internal signing key to create JWT (RS256)
-    /// 4. POST to KAS /v2/rewrap endpoint with signed JWT
+    /// 4. POST to KAS /kas.AccessService/Rewrap (ConnectRPC) endpoint with signed JWT
     /// 5. Unwrap the returned key using RSA-OAEP
     ///
     /// # Arguments
@@ -869,87 +842,74 @@ mod tests {
     #[cfg(feature = "kas-client")]
     mod url_validation_tests {
         use super::*;
+        use crate::kas_discovery::OpentdfConfiguration;
 
-        /// Helper to extract the error from a KasClient::new result
-        fn expect_err(result: Result<KasClient, KasError>) -> KasError {
-            match result {
+        /// Helper: construct via for_kas_connect and capture the error.
+        fn expect_err(url: &str) -> KasError {
+            let cfg = OpentdfConfiguration::for_kas_connect(url);
+            match KasClient::new(&cfg, "token") {
                 Err(e) => e,
-                Ok(_) => panic!("Expected error, got Ok"),
+                Ok(_) => panic!("Expected error for {url}, got Ok"),
             }
         }
 
         #[test]
         fn test_kas_rejects_http_url() {
-            let err = expect_err(KasClient::new("http://evil.com", "token"));
-            assert!(
-                matches!(err, KasError::InvalidUrl(_)),
-                "Expected InvalidUrl, got: {err}"
-            );
+            let err = expect_err("http://evil.com");
+            assert!(matches!(err, KasError::InvalidUrl(_)), "got: {err}");
             assert!(err.to_string().contains("HTTPS"));
         }
 
         #[test]
         fn test_kas_accepts_https_url() {
-            let result = KasClient::new("https://kas.example.com", "token");
-            assert!(result.is_ok(), "HTTPS URL should be accepted");
+            let cfg = OpentdfConfiguration::for_kas_connect("https://kas.example.com");
+            assert!(KasClient::new(&cfg, "token").is_ok());
         }
 
         #[test]
         fn test_kas_allows_http_localhost() {
-            let result = KasClient::new("http://127.0.0.1:8080", "token");
-            assert!(
-                result.is_ok(),
-                "HTTP localhost (127.0.0.1) should be allowed"
-            );
-
-            let result = KasClient::new("http://localhost:8080", "token");
-            assert!(result.is_ok(), "HTTP localhost should be allowed");
-
-            let result = KasClient::new("http://[::1]:8080", "token");
-            assert!(result.is_ok(), "HTTP IPv6 loopback should be allowed");
+            for base in [
+                "http://127.0.0.1:8080",
+                "http://localhost:8080",
+                "http://[::1]:8080",
+            ] {
+                let cfg = OpentdfConfiguration::for_kas_connect(base);
+                assert!(
+                    KasClient::new(&cfg, "token").is_ok(),
+                    "HTTP loopback {base} should be allowed"
+                );
+            }
         }
 
         #[test]
         fn test_kas_rejects_private_ip() {
-            let err = expect_err(KasClient::new("https://10.0.0.1", "token"));
-            assert!(
-                matches!(err, KasError::InvalidUrl(_)),
-                "Expected InvalidUrl for private IP, got: {err}"
-            );
-
-            assert!(
-                KasClient::new("https://172.16.0.1", "token").is_err(),
-                "172.16.x.x should be rejected"
-            );
-            assert!(
-                KasClient::new("https://192.168.1.1", "token").is_err(),
-                "192.168.x.x should be rejected"
-            );
+            for base in [
+                "https://10.0.0.1",
+                "https://172.16.0.1",
+                "https://192.168.1.1",
+            ] {
+                let err = expect_err(base);
+                assert!(matches!(err, KasError::InvalidUrl(_)), "{base}: {err}");
+            }
         }
 
         #[test]
         fn test_kas_rejects_metadata_ip() {
-            let err = expect_err(KasClient::new("http://169.254.169.254", "token"));
-            assert!(
-                matches!(err, KasError::InvalidUrl(_)),
-                "Expected InvalidUrl for metadata IP, got: {err}"
-            );
+            let err = expect_err("http://169.254.169.254");
+            assert!(matches!(err, KasError::InvalidUrl(_)), "got: {err}");
         }
 
         #[test]
         fn test_kas_rejects_invalid_scheme() {
-            let err = expect_err(KasClient::new("ftp://kas.example.com", "token"));
-            assert!(
-                matches!(err, KasError::InvalidUrl(_)),
-                "Expected InvalidUrl for ftp scheme, got: {err}"
-            );
+            let err = expect_err("ftp://kas.example.com");
+            assert!(matches!(err, KasError::InvalidUrl(_)), "got: {err}");
             assert!(err.to_string().contains("ftp"));
         }
 
         #[test]
         fn test_kas_rejects_invalid_url() {
-            let err = expect_err(KasClient::new("not-a-url", "token"));
-            assert!(matches!(err, KasError::InvalidUrl(_)));
+            let err = expect_err("not-a-url");
+            assert!(matches!(err, KasError::InvalidUrl(_)), "got: {err}");
         }
     }
 }

@@ -9,6 +9,7 @@ mod kas_mock_tests {
     use opentdf::{
         TdfManifest,
         kas::{KasClient, KeyType},
+        kas_discovery::OpentdfConfiguration,
         manifest::TdfManifestExt,
     };
 
@@ -63,7 +64,8 @@ mod kas_mock_tests {
 
     #[tokio::test]
     async fn test_kas_client_creation() {
-        let client = KasClient::new("https://kas.example.com", "mock-token");
+        let cfg = OpentdfConfiguration::for_kas_connect("https://kas.example.com");
+        let client = KasClient::new(&cfg, "mock-token");
         assert!(client.is_ok(), "KAS client creation should succeed");
     }
 
@@ -73,7 +75,7 @@ mod kas_mock_tests {
 
         // Create a mock endpoint that validates the request format
         let mock = server
-            .mock("POST", "/kas/v2/rewrap")
+            .mock("POST", "/kas.AccessService/Rewrap")
             .match_header("Authorization", "Bearer mock-token")
             .match_header("Content-Type", "application/json")
             .match_body(mockito::Matcher::Regex(r#".*"signedRequestToken":"eyJ.*"#.to_string()))
@@ -86,10 +88,10 @@ mod kas_mock_tests {
             .create();
 
         let kas_url = server.url();
-        let client = KasClient::new(&kas_url, "mock-token").unwrap();
+        let cfg = OpentdfConfiguration::for_kas_connect(&kas_url);
+        let client = KasClient::new(&cfg, "mock-token").unwrap();
 
         // Note: manifest URL should match what's in key_access[0].url
-        // The client will append /kas/v2/rewrap to its base_url
         let manifest = create_test_manifest_with_policy(kas_url.clone());
 
         // This will fail at unwrap_key stage but validates request format
@@ -107,14 +109,15 @@ mod kas_mock_tests {
         let mut server = Server::new_async().await;
 
         let _mock = server
-            .mock("POST", "/kas/v2/rewrap")
+            .mock("POST", "/kas.AccessService/Rewrap")
             .with_status(401)
             .with_header("content-type", "application/json")
             .with_body(r#"{"error": "Unauthorized"}"#)
             .create();
 
         let kas_url = server.url();
-        let client = KasClient::new(&kas_url, "invalid-token").unwrap();
+        let cfg = OpentdfConfiguration::for_kas_connect(&kas_url);
+        let client = KasClient::new(&cfg, "invalid-token").unwrap();
 
         let manifest = create_test_manifest_with_policy(kas_url.clone());
 
@@ -132,18 +135,45 @@ mod kas_mock_tests {
     }
 
     #[tokio::test]
+    async fn test_kas_connect_401_envelope_surfaced_in_error() {
+        let mut server = Server::new_async().await;
+
+        let _mock = server
+            .mock("POST", "/kas.AccessService/Rewrap")
+            .with_status(401)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"code":"unauthenticated","message":"missing bearer token"}"#)
+            .create();
+
+        let kas_url = server.url();
+        let cfg = OpentdfConfiguration::for_kas_connect(&kas_url);
+        let client = KasClient::new(&cfg, "bad-token").unwrap();
+        let manifest = create_test_manifest_with_policy(kas_url.clone());
+
+        let result = client.rewrap_standard_tdf(&manifest).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unauthenticated") || msg.contains("missing bearer token"),
+            "expected Connect error code/message in error string, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
     async fn test_kas_access_denied() {
         let mut server = Server::new_async().await;
 
         let _mock = server
-            .mock("POST", "/kas/v2/rewrap")
+            .mock("POST", "/kas.AccessService/Rewrap")
             .with_status(403)
             .with_header("content-type", "application/json")
             .with_body(r#"{"error": "Access denied: insufficient permissions"}"#)
             .create();
 
         let kas_url = server.url();
-        let client = KasClient::new(&kas_url, "valid-token").unwrap();
+        let cfg = OpentdfConfiguration::for_kas_connect(&kas_url);
+        let client = KasClient::new(&cfg, "valid-token").unwrap();
 
         let manifest = create_test_manifest_with_policy(kas_url.clone());
 
@@ -163,14 +193,15 @@ mod kas_mock_tests {
         let mut server = Server::new_async().await;
 
         let _mock = server
-            .mock("POST", "/kas/v2/rewrap")
+            .mock("POST", "/kas.AccessService/Rewrap")
             .with_status(500)
             .with_header("content-type", "application/json")
             .with_body(r#"{"error": "Internal server error"}"#)
             .create();
 
         let kas_url = server.url();
-        let client = KasClient::new(&kas_url, "valid-token").unwrap();
+        let cfg = OpentdfConfiguration::for_kas_connect(&kas_url);
+        let client = KasClient::new(&cfg, "valid-token").unwrap();
 
         let manifest = create_test_manifest_with_policy(kas_url.clone());
 
@@ -190,14 +221,15 @@ mod kas_mock_tests {
         let mut server = Server::new_async().await;
 
         let _mock = server
-            .mock("POST", "/kas/v2/rewrap")
+            .mock("POST", "/kas.AccessService/Rewrap")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"{"invalid": "response"}"#)
             .create();
 
         let kas_url = server.url();
-        let client = KasClient::new(&kas_url, "valid-token").unwrap();
+        let cfg = OpentdfConfiguration::for_kas_connect(&kas_url);
+        let client = KasClient::new(&cfg, "valid-token").unwrap();
 
         let manifest = create_test_manifest_with_policy(kas_url.clone());
 
@@ -216,7 +248,8 @@ mod kas_mock_tests {
     async fn test_kas_network_timeout() {
         // Mock server that never responds (simulates timeout)
         let kas_url = "https://192.0.2.1:9999"; // TEST-NET address, should timeout
-        let client = KasClient::new(kas_url, "token").unwrap();
+        let cfg = OpentdfConfiguration::for_kas_connect(kas_url);
+        let client = KasClient::new(&cfg, "token").unwrap();
 
         let manifest = create_test_manifest_with_policy(kas_url.to_string());
 
@@ -281,7 +314,7 @@ mod kas_mock_tests {
         let mut server = Server::new_async().await;
 
         let _mock = server
-            .mock("POST", "/kas/v2/rewrap")
+            .mock("POST", "/kas.AccessService/Rewrap")
             .match_header("Authorization", "Bearer test-token")
             .match_body(mockito::Matcher::Regex(
                 r#""signedRequestToken":"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+""#
@@ -293,7 +326,8 @@ mod kas_mock_tests {
             .create();
 
         let kas_url = server.url();
-        let client = KasClient::new(&kas_url, "test-token").unwrap();
+        let cfg = OpentdfConfiguration::for_kas_connect(&kas_url);
+        let client = KasClient::new(&cfg, "test-token").unwrap();
 
         let manifest = create_test_manifest_with_policy(kas_url.clone());
 

@@ -53,6 +53,9 @@ mod tdf;
 pub mod kas;
 
 #[cfg(feature = "kas-client")]
+pub mod kas_discovery;
+
+#[cfg(feature = "kas-client")]
 pub mod kas_key;
 
 // JSON-RPC integration (ZTDF-JSON format)
@@ -120,9 +123,11 @@ pub use fqn::{AttributeFqn, FqnValidationRules, NamespaceRegistry};
 pub use kas::{KasClient, KeyType};
 
 #[cfg(feature = "kas-client")]
+#[allow(deprecated)]
 pub use kas_key::{
     KasEcPublicKeyResponse, KasKeyError, KasPublicKeyResponse, fetch_kas_ec_public_key,
-    fetch_kas_public_key, validate_ec_public_key_pem, validate_rsa_public_key_pem,
+    fetch_kas_ec_public_key_connect, fetch_kas_public_key, fetch_kas_public_key_connect,
+    validate_ec_public_key_pem, validate_rsa_public_key_pem,
 };
 
 #[cfg(feature = "kas-client")]

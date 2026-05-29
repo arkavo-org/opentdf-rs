@@ -69,6 +69,10 @@ pub struct KasEcPublicKeyResponse {
 /// # Returns
 ///
 /// The PEM-encoded RSA public key as a String
+#[deprecated(
+    since = "0.13.0",
+    note = "Legacy /kas/v2/* REST endpoint. Use fetch_kas_public_key_connect with a URL resolved from OpentdfConfiguration or fetch_well_known()."
+)]
 #[cfg(feature = "kas-client")]
 pub async fn fetch_kas_public_key(
     kas_url: &str,
@@ -99,6 +103,36 @@ pub async fn fetch_kas_public_key(
     // Parse the JSON response
     let key_response: KasPublicKeyResponse = response.json().await?;
 
+    Ok(key_response)
+}
+
+/// Fetch the KAS public key via ConnectRPC.
+///
+/// Unlike `fetch_kas_public_key`, this expects a pre-resolved URL (typically
+/// from `KasEndpoints::public_key_url`) and POSTs an empty JSON body — the
+/// Connect protocol requires a request body even for empty message types.
+#[cfg(feature = "kas-client")]
+pub async fn fetch_kas_public_key_connect(
+    public_key_url: &str,
+    http_client: &Client,
+) -> Result<KasPublicKeyResponse, KasKeyError> {
+    let response = http_client
+        .post(public_key_url)
+        .header("Content-Type", "application/json")
+        .body("{}")
+        .send()
+        .await?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let error_body = response.text().await.unwrap_or_default();
+        return Err(KasKeyError::HttpError(format!(
+            "POST {} -> HTTP {}: {}",
+            public_key_url, status, error_body
+        )));
+    }
+
+    let key_response: KasPublicKeyResponse = response.json().await?;
     Ok(key_response)
 }
 
@@ -153,6 +187,10 @@ pub fn validate_rsa_public_key_pem(pem: &str) -> Result<String, KasKeyError> {
 /// # Ok(())
 /// # }
 /// ```
+#[deprecated(
+    since = "0.13.0",
+    note = "Legacy /kas/v2/* REST endpoint. Use fetch_kas_ec_public_key_connect with a URL resolved from OpentdfConfiguration or fetch_well_known()."
+)]
 #[cfg(feature = "kas-client")]
 pub async fn fetch_kas_ec_public_key(
     kas_url: &str,
@@ -186,6 +224,35 @@ pub async fn fetch_kas_ec_public_key(
     // Validate the key is actually an EC key
     validate_ec_public_key_pem(&key_response.public_key)?;
 
+    Ok(key_response)
+}
+
+/// Fetch the KAS EC public key via ConnectRPC.
+///
+/// Unlike `fetch_kas_ec_public_key`, this expects a pre-resolved URL.
+#[cfg(feature = "kas-client")]
+pub async fn fetch_kas_ec_public_key_connect(
+    public_key_url: &str,
+    http_client: &Client,
+) -> Result<KasEcPublicKeyResponse, KasKeyError> {
+    let response = http_client
+        .post(public_key_url)
+        .header("Content-Type", "application/json")
+        .body("{}")
+        .send()
+        .await?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let error_body = response.text().await.unwrap_or_default();
+        return Err(KasKeyError::HttpError(format!(
+            "POST {} -> HTTP {}: {}",
+            public_key_url, status, error_body
+        )));
+    }
+
+    let key_response: KasEcPublicKeyResponse = response.json().await?;
+    validate_ec_public_key_pem(&key_response.public_key)?;
     Ok(key_response)
 }
 
@@ -331,6 +398,43 @@ PvJX+E+ceUD7JIZc87FvaA5OqwFUFXqJfYNU4ZE7d6ovRja8JwnErHa+7pEk6KkN
                 .starts_with("-----BEGIN PUBLIC KEY-----")
         );
         assert_eq!(response.kid, "ec:secp256r1");
+    }
+
+    #[cfg(feature = "kas-client")]
+    #[tokio::test]
+    async fn test_fetch_kas_public_key_connect_against_mock() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("POST", "/kas.AccessService/PublicKey")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"publicKey":"-----BEGIN PUBLIC KEY-----\ntestkey\n-----END PUBLIC KEY-----\n","kid":"r1"}"#)
+            .create_async()
+            .await;
+
+        let url = format!("{}/kas.AccessService/PublicKey", server.url());
+        let http = reqwest::Client::new();
+        let resp = fetch_kas_public_key_connect(&url, &http).await.unwrap();
+        assert!(resp.public_key.starts_with("-----BEGIN PUBLIC KEY-----"));
+        assert_eq!(resp.kid, "r1");
+    }
+
+    #[cfg(feature = "kas-client")]
+    #[tokio::test]
+    async fn test_fetch_kas_ec_public_key_connect_against_mock() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("POST", "/kas.AccessService/PublicKey")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"publicKey":"-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE/shJbT/RbVUkgV+/5m+KPblr5ZXH\nHU+2K5VytEsGQJJ0fxiksZXDC7twCPAXZgE3LOvORGqbQriKe/nM4iqIuA==\n-----END PUBLIC KEY-----\n","kid":"ec:secp256r1"}"#)
+            .create_async()
+            .await;
+
+        let url = format!("{}/kas.AccessService/PublicKey", server.url());
+        let http = reqwest::Client::new();
+        let resp = fetch_kas_ec_public_key_connect(&url, &http).await.unwrap();
+        assert_eq!(resp.kid, "ec:secp256r1");
     }
 
     #[cfg(feature = "kas-client")]

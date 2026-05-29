@@ -305,7 +305,7 @@ The KAS protocol allows:
 1. Client generates ephemeral EC key pair (P-256)
 2. Client builds rewrap request with TDF manifest
 3. Client signs request with JWT (ES256)
-4. Client POSTs to KAS /v2/rewrap endpoint
+4. Client POSTs to KAS /kas.AccessService/Rewrap (ConnectRPC) endpoint
 5. KAS validates policy and user attributes
 6. KAS returns wrapped key + session public key
 7. Client unwraps key: ECDH → HKDF → AES-GCM decrypt
@@ -318,21 +318,38 @@ The KAS client is enabled by default:
 
 ```toml
 [dependencies]
-opentdf = "0.7"
+opentdf = "0.13"
+```
+
+#### Creating a KAS Client (v0.13+)
+
+`KasClient::new` accepts an `&OpentdfConfiguration` rather than a raw URL string.
+
+```rust
+use opentdf::kas::KasClient;
+use opentdf::kas_discovery::{fetch_well_known, OpentdfConfiguration};
+
+// Discovery (recommended): reads /.well-known/opentdf-configuration from the platform
+let http = reqwest::Client::new();
+let cfg = fetch_well_known("https://platform.arkavo.net", &http).await?;
+let kas = KasClient::new(&cfg, oauth_token)?;
+
+// Direct (skip discovery): build config from a known KAS URL
+let cfg = OpentdfConfiguration::for_kas_connect("https://kas.example.com");
+let kas = KasClient::new(&cfg, oauth_token)?;
 ```
 
 #### Decrypt TDF with KAS
 
 ```rust
 use opentdf::{TdfArchive, kas::KasClient};
+use opentdf::kas_discovery::OpentdfConfiguration;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create KAS client
-    let kas_client = KasClient::new(
-        "https://kas.example.com/kas",
-        "your-oauth-token-here"
-    )?;
+    // Create KAS client (ConnectRPC transport)
+    let cfg = OpentdfConfiguration::for_kas_connect("https://kas.example.com");
+    let kas_client = KasClient::new(&cfg, "your-oauth-token-here")?;
 
     // Open and decrypt TDF in one call
     let plaintext = TdfArchive::open_and_decrypt(
@@ -351,14 +368,13 @@ For more control over the decryption process:
 
 ```rust
 use opentdf::{TdfArchive, kas::KasClient};
+use opentdf::kas_discovery::OpentdfConfiguration;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create KAS client
-    let kas_client = KasClient::new(
-        "https://kas.example.com/kas",
-        "your-oauth-token-here"
-    )?;
+    // Create KAS client (ConnectRPC transport)
+    let cfg = OpentdfConfiguration::for_kas_connect("https://kas.example.com");
+    let kas_client = KasClient::new(&cfg, "your-oauth-token-here")?;
 
     // Open TDF archive
     let mut archive = TdfArchive::open("encrypted-file.tdf")?;
@@ -397,14 +413,14 @@ use opentdf::kas::{KasClient, KasError};
 
 match kas_client.rewrap_standard_tdf(&manifest).await {
     Ok(key) => println!("Successfully unwrapped key"),
-    Err(KasError::AccessDenied(reason)) => {
-        eprintln!("Access denied: {}", reason);
+    Err(KasError::AccessDenied { resource, reason }) => {
+        eprintln!("Access denied for {resource}: {reason}");
     }
-    Err(KasError::AuthenticationFailed) => {
-        eprintln!("Invalid OAuth token");
+    Err(KasError::AuthenticationFailed { reason }) => {
+        eprintln!("Auth failed: {reason}");
     }
-    Err(KasError::HttpError(msg)) => {
-        eprintln!("HTTP error: {}", msg);
+    Err(KasError::HttpError { status, message }) => {
+        eprintln!("HTTP {status}: {message}");
     }
     Err(e) => {
         eprintln!("KAS error: {}", e);
@@ -593,7 +609,7 @@ Add to your Cargo.toml:
 
 ```toml
 [dependencies]
-opentdf = "0.7"
+opentdf = "0.13"
 ```
 
 ### Feature Flags
@@ -621,16 +637,16 @@ opentdf = "0.7"
 
 ```toml
 # Recommended: Secure defaults (aws-lc-rs + rustls)
-opentdf = "0.7"
+opentdf = "0.13"
 
 # Pure Rust: No C compiler needed (accepts timing vulnerability)
-opentdf = { version = "0.7", default-features = false, features = ["kas-client-rustcrypto"] }
+opentdf = { version = "0.13", default-features = false, features = ["kas-client-rustcrypto"] }
 
 # Native TLS: Use system TLS (OpenSSL on Linux, SecureTransport on macOS)
-opentdf = { version = "0.7", default-features = false, features = ["kas-client", "native-tls"] }
+opentdf = { version = "0.13", default-features = false, features = ["kas-client", "native-tls"] }
 
 # Minimal: Core TDF operations only (no KAS client, no async)
-opentdf = { version = "0.7", default-features = false }
+opentdf = { version = "0.13", default-features = false }
 ```
 
 #### WASM Note
@@ -656,14 +672,14 @@ Version 0.7.0 brings critical security improvements and better feature organizat
 opentdf = { version = "0.6", features = ["kas"] }
 
 # After (v0.7.0) - "kas" still works but is deprecated
-opentdf = "0.7"  # kas-client is now the default
+opentdf = "0.13"  # kas-client is now the default
 ```
 
 **Pure Rust Builds**:
 ```toml
 # Before (v0.6.x) - not available
 # After (v0.7.0) - explicit pure Rust option
-opentdf = { version = "0.7", default-features = false, features = ["kas-client-rustcrypto"] }
+opentdf = { version = "0.13", default-features = false, features = ["kas-client-rustcrypto"] }
 ```
 
 ## What's New in v0.5.0
