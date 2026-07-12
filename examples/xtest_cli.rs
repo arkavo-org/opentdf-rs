@@ -115,12 +115,9 @@ impl Config {
         });
 
         let token_endpoint = std::env::var("TOKENENDPOINT").ok().or_else(|| {
-            std::env::var("KCFULLURL").ok().map(|kc| {
-                format!(
-                    "{}/protocol/openid-connect/token",
-                    kc.trim_end_matches('/')
-                )
-            })
+            std::env::var("KCFULLURL")
+                .ok()
+                .map(|kc| format!("{}/protocol/openid-connect/token", kc.trim_end_matches('/')))
         });
 
         Self {
@@ -269,7 +266,9 @@ async fn encrypt(
 
     // Encrypt based on format
     let (encrypted, symmetric_key) = match format {
-        TdfFormat::Zip => encrypt_zip(&plaintext, &config, &policy, kas_public_key.as_deref()).await?,
+        TdfFormat::Zip => {
+            encrypt_zip(&plaintext, &config, &policy, kas_public_key.as_deref()).await?
+        }
         TdfFormat::Json => {
             let kas_key =
                 kas_public_key.ok_or("TDF_KAS_PUBLIC_KEY_PATH required for JSON format")?;
@@ -908,9 +907,9 @@ fn supports(feature: &str) -> Result<bool, ()> {
         | "ns_grants"
         | "obligations" => Ok(false),
 
-        // Legacy custom names: do not falsely advertise kas-rewrap as a free-form string
-        // that confuses probes — map to unsupported so harness relies on official names.
-        "kas-rewrap" | "kas_rewrap" => Ok(true), // Stage-1 rewrap path is live
+        // Non-catalog aliases used by local tooling. Stage-1 rewrap is live, so these
+        // report supported; official harness probes should still use feature_type names.
+        "kas-rewrap" | "kas_rewrap" => Ok(true),
         "nano" | "nanotdf" => Ok(false),
 
         _ => Err(()),

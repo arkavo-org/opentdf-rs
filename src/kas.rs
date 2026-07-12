@@ -733,7 +733,14 @@ impl KasClient {
                 Ok(plaintext_slice.to_vec())
             }
             EphemeralKeyPair::EC { private_key, .. } => {
-                // EC/ECDH unwrap for NanoTDF
+                // EC/ECDH unwrap for NanoTDF — sessionPublicKey is required.
+                // (RSA/Standard TDF may pass empty string; EC must not.)
+                if session_public_key_pem.trim().is_empty() {
+                    return Err(KasError::InvalidResponse {
+                        reason: "Missing session public key in response".to_string(),
+                        expected: Some("sessionPublicKey".to_string()),
+                    });
+                }
                 // Parse session public key from PEM
                 let session_public_key = PublicKey::from_public_key_pem(session_public_key_pem)
                     .map_err(|e| KasError::CryptoError {
