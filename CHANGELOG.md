@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.14.0] — 2026-07-12
+
+### Added
+
+- **Stage-1 community xtest KAS path** for `examples/xtest_cli` ([#87](https://github.com/arkavo-org/opentdf-rs/pull/87)):
+  - Encrypt ZIP/Base TDF via Connect PublicKey + RSA-OAEP wrap (`kid`)
+  - Decrypt via client-credentials OAuth + `KasClient::rewrap_standard_tdf`
+  - Env contract: `CLIENTID` / `CLIENTSECRET` / `PLATFORMURL` / `KASURL` / `TOKENENDPOINT`
+  - Honest `supports` map: `hexless`, `connectrpc`, `kas-rewrap`; exit `2` for unknown features
+  - Manifest `schemaVersion` / `tdf_spec_version` **4.3.0** (go@latest hexless Stage-1)
+
+### Fixed
+
+- Standard TDF **RSA rewrap** no longer requires `sessionPublicKey` (EC-only field); RSA path returns the DEK encrypted to the client RSA key ([#87](https://github.com/arkavo-org/opentdf-rs/pull/87))
+
+### Notes
+
+- This is the first release that passes community Stage-1 (`rust` ↔ `go@latest`, Base TDF) in [arkavo-org/opentdf-tests](https://github.com/arkavo-org/opentdf-tests).
+- GitHub “latest” before this release was **0.13.0**, which lacked Stage-1 `supports hexless` / KAS CLI wiring.
+
 ## [0.13.0] — 2026-05-28
 
 ### Breaking changes
