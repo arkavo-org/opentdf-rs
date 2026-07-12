@@ -337,10 +337,12 @@ async fn encrypt_zip(
     // RSA-OAEP wrap payload key with KAS public key (go default ztdf)
     let wrapped_key = wrap_key_with_rsa_oaep(tdf_encryption.payload_key(), &public_key_pem)?;
 
-    // Build manifest
+    // Build manifest — schemaVersion 4.3.0 matches go@main hexless default
     let mut manifest = TdfManifest::new("0.payload".to_string(), kas_url.to_string());
+    manifest.schema_version = Some("4.3.0".to_string());
     manifest.encryption_information.method.algorithm = "AES-256-GCM".to_string();
     manifest.encryption_information.method.iv = String::new();
+    manifest.payload.tdf_spec_version = Some("4.3.0".to_string());
 
     // Set policy
     manifest.set_policy(policy)?;

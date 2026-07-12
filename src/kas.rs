@@ -665,15 +665,10 @@ impl KasClient {
 
         let wrapped_key = BASE64.decode(wrapped_key_b64)?;
 
-        // Get session public key
-        let session_public_key = response
-            .session_public_key
-            .as_ref()
-            .ok_or_else(|| KasError::InvalidResponse {
-                reason: "Missing session public key in response".to_string(),
-                expected: Some("sessionPublicKey".to_string()),
-            })?
-            .clone();
+        // Session public key is required for EC rewrap (NanoTDF) but optional for
+        // Standard TDF RSA rewrap: KAS returns the DEK encrypted to the client's
+        // RSA public key with no ECDH session material.
+        let session_public_key = response.session_public_key.clone().unwrap_or_default();
 
         Ok((wrapped_key, session_public_key))
     }
