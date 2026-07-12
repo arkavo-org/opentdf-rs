@@ -88,7 +88,13 @@ enum Commands {
 
 #[derive(Debug)]
 struct Config {
+    /// KAS identity URL written into the TDF keyAccess (usually …/kas).
     kas_url: String,
+    /// Platform base URL for Connect endpoints (… without /kas).
+    platform_url: String,
+    client_id: Option<String>,
+    client_secret: Option<String>,
+    token_endpoint: Option<String>,
     kas_public_key_path: Option<PathBuf>,
     symmetric_key_path: Option<PathBuf>,
     output_symmetric_key_path: Option<PathBuf>,
@@ -96,9 +102,33 @@ struct Config {
 
 impl Config {
     fn from_env() -> Self {
+        let kas_url = std::env::var("KASURL")
+            .or_else(|_| std::env::var("TDF_KAS_URL"))
+            .unwrap_or_else(|_| "http://localhost:8080/kas".to_string());
+
+        let platform_url = std::env::var("PLATFORMURL").unwrap_or_else(|_| {
+            kas_url
+                .trim_end_matches('/')
+                .strip_suffix("/kas")
+                .unwrap_or(kas_url.trim_end_matches('/'))
+                .to_string()
+        });
+
+        let token_endpoint = std::env::var("TOKENENDPOINT").ok().or_else(|| {
+            std::env::var("KCFULLURL").ok().map(|kc| {
+                format!(
+                    "{}/protocol/openid-connect/token",
+                    kc.trim_end_matches('/')
+                )
+            })
+        });
+
         Self {
-            kas_url: std::env::var("TDF_KAS_URL")
-                .unwrap_or_else(|_| "http://localhost:9080/kas".to_string()),
+            kas_url,
+            platform_url,
+            client_id: std::env::var("CLIENTID").ok(),
+            client_secret: std::env::var("CLIENTSECRET").ok(),
+            token_endpoint,
             kas_public_key_path: std::env::var("TDF_KAS_PUBLIC_KEY_PATH")
                 .ok()
                 .map(PathBuf::from),
@@ -110,6 +140,54 @@ impl Config {
                 .map(PathBuf::from),
         }
     }
+
+    fn platform_root(&self) -> String {
+        self.platform_url
+            .trim_end_matches('/')
+            .strip_suffix("/kas")
+            .unwrap_or(self.platform_url.trim_end_matches('/'))
+            .to_string()
+    }
+}
+
+/// Client-credentials OAuth token for KAS.
+async fn fetch_access_token(config: &Config) -> Result<String, Box<dyn std::error::Error>> {
+    let client_id = config
+        .client_id
+        .as_deref()
+        .ok_or("CLIENTID required for KAS interop")?;
+    let client_secret = config
+        .client_secret
+        .as_deref()
+        .ok_or("CLIENTSECRET required for KAS interop")?;
+    let token_url = config
+        .token_endpoint
+        .clone()
+        .unwrap_or_else(|| format!("{}/token", config.platform_root()));
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&token_url)
+        .form(&[
+            ("grant_type", "client_credentials"),
+            ("client_id", client_id),
+            ("client_secret", client_secret),
+        ])
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "token request failed HTTP {} at {}",
+            resp.status(),
+            token_url
+        )
+        .into());
+    }
+    let body: serde_json::Value = resp.json().await?;
+    body.get("access_token")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "no access_token in token response".into())
 }
 
 // ============================================================================
@@ -165,7 +243,7 @@ impl TdfFormat {
 // Encryption
 // ============================================================================
 
-fn encrypt(
+async fn encrypt(
     input: &PathBuf,
     output: &PathBuf,
     format: TdfFormat,
@@ -176,7 +254,7 @@ fn encrypt(
     let plaintext = std::fs::read(input)?;
     println!("Read {} bytes from {}", plaintext.len(), input.display());
 
-    // Load KAS public key if provided
+    // Load KAS public key if provided (offline override)
     let kas_public_key = match &config.kas_public_key_path {
         Some(path) => {
             let pem = std::fs::read_to_string(path)?;
@@ -191,7 +269,7 @@ fn encrypt(
 
     // Encrypt based on format
     let (encrypted, symmetric_key) = match format {
-        TdfFormat::Zip => encrypt_zip(&plaintext, &config.kas_url, &policy)?,
+        TdfFormat::Zip => encrypt_zip(&plaintext, &config, &policy, kas_public_key.as_deref()).await?,
         TdfFormat::Json => {
             let kas_key =
                 kas_public_key.ok_or("TDF_KAS_PUBLIC_KEY_PATH required for JSON format")?;
@@ -218,16 +296,35 @@ fn encrypt(
     Ok(())
 }
 
-fn encrypt_zip(
+/// Stage-1 ztdf encrypt: Connect PublicKey + RSA-OAEP wrap + ZIP archive.
+async fn encrypt_zip(
     plaintext: &[u8],
-    kas_url: &str,
+    config: &Config,
     policy: &opentdf::Policy,
+    offline_pem: Option<&str>,
 ) -> Result<(Vec<u8>, Vec<u8>), Box<dyn std::error::Error>> {
     use opentdf::TdfArchiveMemoryBuilder;
     use opentdf::manifest::{
         IntegrityInformationExt, KeyAccessExt, Segment, TdfManifest, TdfManifestExt,
     };
+    use opentdf::wrap_key_with_rsa_oaep;
     use opentdf_crypto::TdfEncryption;
+
+    let kas_url = &config.kas_url;
+
+    // Fetch or use offline KAS RSA public key
+    let (public_key_pem, kid): (String, Option<String>) = if let Some(pem) = offline_pem {
+        (pem.to_string(), None)
+    } else {
+        let http_client = reqwest::Client::new();
+        let root = config.platform_root();
+        let kas_pk_url = format!("{}/kas.AccessService/PublicKey", root);
+        println!("Fetching KAS public key from {}", kas_pk_url);
+        let kas_key_response =
+            opentdf::kas_key::fetch_kas_public_key_connect(&kas_pk_url, &http_client).await?;
+        println!("  kid={}", kas_key_response.kid);
+        (kas_key_response.public_key, Some(kas_key_response.kid))
+    };
 
     // Create encryption with random key
     let tdf_encryption = TdfEncryption::new()?;
@@ -236,6 +333,9 @@ fn encrypt_zip(
     // Encrypt with segments
     let segment_size = 2 * 1024 * 1024; // 2MB segments
     let segmented = tdf_encryption.encrypt_with_segments(plaintext, segment_size)?;
+
+    // RSA-OAEP wrap payload key with KAS public key (go default ztdf)
+    let wrapped_key = wrap_key_with_rsa_oaep(tdf_encryption.payload_key(), &public_key_pem)?;
 
     // Build manifest
     let mut manifest = TdfManifest::new("0.payload".to_string(), kas_url.to_string());
@@ -249,6 +349,12 @@ fn encrypt_zip(
     let policy_json = policy.to_json()?;
     manifest.encryption_information.key_access[0]
         .generate_policy_binding_raw(&policy_json, tdf_encryption.payload_key())?;
+
+    // Set wrapped key + kid
+    manifest.encryption_information.key_access[0].wrapped_key = wrapped_key;
+    if let Some(kid) = kid {
+        manifest.encryption_information.key_access[0].kid = Some(kid);
+    }
 
     // Add segment information
     for seg_info in &segmented.segment_info {
@@ -533,7 +639,7 @@ fn encrypt_cbor(
 // Decryption
 // ============================================================================
 
-fn decrypt(
+async fn decrypt(
     input: &PathBuf,
     output: &PathBuf,
     format_hint: TdfFormat,
@@ -561,7 +667,7 @@ fn decrypt(
 
     // Decrypt based on format
     let plaintext = match format {
-        TdfFormat::Zip => decrypt_zip(&encrypted, symmetric_key.as_deref())?,
+        TdfFormat::Zip => decrypt_zip(&encrypted, &config, symmetric_key.as_deref()).await?,
         TdfFormat::Json => {
             let key = symmetric_key.ok_or("TDF_SYMMETRIC_KEY_PATH required for JSON decryption")?;
             decrypt_json(&encrypted, &key)?
@@ -579,8 +685,9 @@ fn decrypt(
     Ok(())
 }
 
-fn decrypt_zip(
+async fn decrypt_zip(
     encrypted: &[u8],
+    config: &Config,
     symmetric_key: Option<&[u8]>,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     use aes_gcm::{
@@ -589,13 +696,25 @@ fn decrypt_zip(
     };
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use opentdf::TdfArchive;
+    use opentdf::kas::KasClient;
+    use opentdf::kas_discovery::OpentdfConfiguration;
 
     let cursor = std::io::Cursor::new(encrypted.to_vec());
     let mut archive = TdfArchive::new(cursor)?;
     let entry = archive.by_index()?;
 
-    // For offline decryption, we need the symmetric key
-    let key = symmetric_key.ok_or("TDF_SYMMETRIC_KEY_PATH required for offline ZIP decryption")?;
+    // Stage-1: KAS rewrap when no offline symmetric key
+    if symmetric_key.is_none() {
+        println!("Decrypting via KAS rewrap (client_credentials)…");
+        let token = fetch_access_token(config).await?;
+        let root = config.platform_root();
+        let kas_cfg = OpentdfConfiguration::for_kas_connect(&root);
+        let kas_client = KasClient::new(&kas_cfg, &token)?;
+        let plaintext = entry.decrypt_with_kas(&kas_client).await?;
+        return Ok(plaintext);
+    }
+
+    let key = symmetric_key.unwrap();
 
     // Check if segmented (modern format) or legacy (single block)
     let segments = &entry
@@ -753,33 +872,46 @@ fn decrypt_cbor(
 // Feature Support Check
 // ============================================================================
 
-fn supports(feature: &str) -> bool {
+/// Official xtest `feature_type` support probe.
+/// Returns: Ok(true)=supported, Ok(false)=unsupported, Err=unknown (exit 2).
+fn supports(feature: &str) -> Result<bool, ()> {
     match feature.to_lowercase().as_str() {
-        // Core formats
-        "tdf" | "ztdf" | "zip" => true,
-        "json" | "tdf-json" => true,
-        "cbor" | "tdf-cbor" => true,
+        // Formats (local tooling; not official feature_type, but useful)
+        "tdf" | "ztdf" | "zip" | "json" | "cbor" => Ok(true),
 
-        // Encryption features
-        "aes-256-gcm" | "aes256gcm" => true,
-        "rsa-2048" | "rsa" => true,
-        "ec" | "ecdh" | "p256" => true,
+        // Stage-1 KAS path is implemented (RSA wrap + rewrap).
+        // Official feature names kept conservative:
+        "hexless" => Ok(true),
+        "connectrpc" => Ok(true),
 
-        // Policy features
-        "policy" | "abac" => true,
-        "hmac-policy-binding" => true,
+        // Official catalog — unsupported until proven
+        "assertions"
+        | "assertion_verification"
+        | "attribute_traversal"
+        | "audit_logging"
+        | "autoconfigure"
+        | "better-messages-2024"
+        | "bulk_rewrap"
+        | "dpop"
+        | "dpop_nonce_challenge"
+        | "ecwrap"
+        | "hexaflexible"
+        | "kasallowlist"
+        | "key_management"
+        | "mechanism-rsa-4096"
+        | "mechanism-ec-curves-384-521"
+        | "mechanism-xwing"
+        | "mechanism-secpmlkem"
+        | "mechanism-mlkem"
+        | "ns_grants"
+        | "obligations" => Ok(false),
 
-        // KAS features
-        "kas" | "kas-client" => true,
-        "kas-rewrap" => true,
+        // Legacy custom names: do not falsely advertise kas-rewrap as a free-form string
+        // that confuses probes — map to unsupported so harness relies on official names.
+        "kas-rewrap" | "kas_rewrap" => Ok(true), // Stage-1 rewrap path is live
+        "nano" | "nanotdf" => Ok(false),
 
-        // Not yet supported
-        "nano" | "nanotdf" => false, // Deferred - requires EC key wrapping in mock KAS
-        "streaming" => false,
-        "multi-segment" => false,
-        "assertions" => false,
-
-        _ => false,
+        _ => Err(()),
     }
 }
 
@@ -787,7 +919,8 @@ fn supports(feature: &str) -> bool {
 // Main
 // ============================================================================
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let cli = Cli::parse();
 
     let result = match cli.command {
@@ -803,7 +936,7 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            encrypt(&input, &output, fmt)
+            encrypt(&input, &output, fmt).await
         }
         Commands::Decrypt {
             input,
@@ -817,17 +950,22 @@ fn main() {
                     std::process::exit(1);
                 }
             };
-            decrypt(&input, &output, fmt)
+            decrypt(&input, &output, fmt).await
         }
-        Commands::Supports { feature } => {
-            if supports(&feature) {
+        Commands::Supports { feature } => match supports(&feature) {
+            Ok(true) => {
                 println!("Feature '{}' is supported", feature);
                 std::process::exit(0);
-            } else {
+            }
+            Ok(false) => {
                 println!("Feature '{}' is NOT supported", feature);
                 std::process::exit(1);
             }
-        }
+            Err(()) => {
+                eprintln!("Unknown feature: {}", feature);
+                std::process::exit(2);
+            }
+        },
     };
 
     if let Err(e) = result {
@@ -876,11 +1014,13 @@ mod tests {
 
     #[test]
     fn test_supports() {
-        assert!(supports("tdf"));
-        assert!(supports("json"));
-        assert!(supports("cbor"));
-        assert!(supports("kas"));
-        assert!(!supports("nano"));
-        assert!(!supports("unknown-feature"));
+        assert_eq!(supports("tdf"), Ok(true));
+        assert_eq!(supports("json"), Ok(true));
+        assert_eq!(supports("cbor"), Ok(true));
+        assert_eq!(supports("hexless"), Ok(true));
+        assert_eq!(supports("connectrpc"), Ok(true));
+        assert_eq!(supports("ecwrap"), Ok(false));
+        assert_eq!(supports("nano"), Ok(false));
+        assert_eq!(supports("unknown-feature"), Err(()));
     }
 }
