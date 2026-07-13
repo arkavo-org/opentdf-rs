@@ -212,6 +212,56 @@ mod tests {
     }
 
     #[test]
+    fn test_payload_omits_tdf_spec_version_by_default() {
+        // go platform Payload has no tdf_spec_version field; Python ManifestPayload
+        // is a strict dataclass without it. Emitting the field breaks rust→python.
+        let manifest = TdfManifest::new(
+            "0.payload".to_string(),
+            "http://kas.example.com:4000".to_string(),
+        );
+        assert!(manifest.payload.tdf_spec_version.is_none());
+
+        let value = serde_json::to_value(&manifest).unwrap();
+        let payload = value.get("payload").expect("payload object");
+        assert!(
+            payload.get("tdf_spec_version").is_none(),
+            "default encrypt path must not serialize payload.tdf_spec_version: {payload}"
+        );
+        // Root schemaVersion remains the peer-visible version signal.
+        assert_eq!(
+            value.get("schemaVersion").and_then(|v| v.as_str()),
+            Some("3.0.0")
+        );
+
+        // Still accept the field when reading peer manifests that include it.
+        let with_spec = r#"{
+            "payload": {
+                "type": "reference",
+                "url": "0.payload",
+                "protocol": "zip",
+                "isEncrypted": true,
+                "tdf_spec_version": "4.3.0"
+            },
+            "encryptionInformation": {
+                "type": "split",
+                "keyAccess": [],
+                "method": {"algorithm": "AES-256-GCM", "isStreamable": true, "iv": ""},
+                "integrityInformation": {
+                    "rootSignature": {"alg": "HS256", "sig": ""},
+                    "segmentHashAlg": "GMAC",
+                    "segments": [],
+                    "segmentSizeDefault": 0,
+                    "encryptedSegmentSizeDefault": 0
+                },
+                "policy": ""
+            },
+            "schemaVersion": "4.3.0"
+        }"#;
+        let read: TdfManifest = serde_json::from_str(with_spec).unwrap();
+        assert_eq!(read.payload.tdf_spec_version.as_deref(), Some("4.3.0"));
+    }
+
+    #[test]
     fn test_policy_raw_encoding() {
         let mut manifest = TdfManifest::new(
             "0.payload".to_string(),

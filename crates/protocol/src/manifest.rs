@@ -43,7 +43,10 @@ impl Default for Payload {
             protocol: "zip".to_string(),
             is_encrypted: true,
             mime_type: Some("application/octet-stream".to_string()),
-            tdf_spec_version: Some("3.0.0".to_string()),
+            // Match go/Swift: version lives on root `schemaVersion`, not payload.
+            // Emitting payload.tdf_spec_version breaks strict readers (e.g. otdf-python
+            // ManifestPayload, which has no such field).
+            tdf_spec_version: None,
         }
     }
 }
@@ -239,7 +242,8 @@ impl TdfManifest {
                 protocol: "zip".to_string(),
                 is_encrypted: true,
                 mime_type: Some("application/octet-stream".to_string()),
-                tdf_spec_version: Some("3.0.0".to_string()),
+                // Omit by default — go/Swift only set root schemaVersion.
+                tdf_spec_version: None,
             },
             encryption_information: EncryptionInformation {
                 encryption_type: "split".to_string(),
