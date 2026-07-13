@@ -33,17 +33,10 @@
 use crate::binary::{read_u24_be, write_u24_be};
 use std::io::{self, Read, Write};
 
-/// Maximum 24-bit collection item counter (2^24 - 1 = 16,777,215).
-///
-/// This is a **protocol bound** for the NanoTDF collection IV counter, not
-/// hard-coded key material or a fixed GCM nonce. Real item nonces use a
-/// monotonic counter in `1..=MAX_IV`; AES-GCM nonces are built as
-/// `[9 zero bytes][3-byte counter]`. CodeQL `hard-coded-cryptographic-value`
-/// on this constant is a false positive (CWE-321/CWE-1204 do not apply).
-pub const MAX_IV: u32 = (1 << 24) - 1;
+/// Maximum IV value (2^24 - 1 = 16,777,215)
+pub const MAX_IV: u32 = 0x00FF_FFFF;
 
-/// Reserved counter for policy encryption (must not be used for collection items).
-/// Spec-mandated sentinel, not an encryption key or secret.
+/// Reserved IV for policy encryption (must not be used for collection items)
 pub const RESERVED_POLICY_IV: u32 = 0;
 
 /// Default rotation threshold (conservative: 2^23 = 8,388,608)
