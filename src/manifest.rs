@@ -258,10 +258,7 @@ mod tests {
             "schemaVersion": "4.3.0"
         }"#;
         let read: TdfManifest = serde_json::from_str(with_spec).unwrap();
-        assert_eq!(
-            read.payload.tdf_spec_version.as_deref(),
-            Some("4.3.0")
-        );
+        assert_eq!(read.payload.tdf_spec_version.as_deref(), Some("4.3.0"));
     }
 
     #[test]
