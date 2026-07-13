@@ -1,0 +1,311 @@
+# Community cross-test: opentdf-rs (this repo) ↔ go peer via opentdf-tests.
+#
+# Pulls arkavo-org/opentdf-tests (default: main tip). Runs platform containers
+# and pytest for rust × go Base TDF Stage-1 only.
+#
+# Cross-repo: opentdf-tests community-xtest.yml exercises opentdf-rs the other
+# direction (floating release pin). This workflow wires the PR/commit under test.
+name: X-Test
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "crates/**"
+      - "examples/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "xtest/**"
+      - ".github/workflows/xtest.yml"
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tests-ref:
+        required: false
+        type: string
+        default: latest
+        description: >-
+          arkavo-org/opentdf-tests ref: 'latest' (tracks main branch tip),
+          branch, tag, or SHA.
+      platform-ref:
+        required: false
+        type: string
+        default: latest
+        description: "opentdf/platform ref: 'latest'/'lts', branch, tag, or SHA"
+      otdfctl-ref:
+        required: false
+        type: string
+        default: latest
+        description: "go/otdfctl peer ref: 'latest'/'lts', branch, tag, or SHA"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  resolve-refs:
+    name: Resolve floating pins
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      tests-ref: ${{ steps.resolve.outputs.tests-ref }}
+      platform-ref: ${{ steps.resolve.outputs.platform-ref }}
+      platform-tag: ${{ steps.resolve.outputs.platform-tag }}
+      go-ref: ${{ steps.resolve.outputs.go-ref }}
+      go-channel: ${{ steps.resolve.outputs.go-channel }}
+    env:
+      TESTS_REF_IN: ${{ inputs.tests-ref || 'latest' }}
+      PLATFORM_REF_IN: ${{ inputs.platform-ref || 'latest' }}
+      OTDFCTL_REF_IN: ${{ inputs.otdfctl-ref || 'latest' }}
+      GH_TOKEN: ${{ github.token }}
+      # Live main while community suite tracks Stage-1 rust ↔ go there.
+      TESTS_FALLBACK_REF: main
+    steps:
+      - name: Resolve pins
+        id: resolve
+        run: |
+          set -euo pipefail
+
+          resolve_tests() {
+            local input="$1"
+            if [[ "$input" != "latest" ]]; then
+              echo "$input"
+              return 0
+            fi
+            # Prefer the branch tip over a stale release so SDK PRs pick up
+            # infra fixes without a re-tag.
+            echo "Using live branch ${TESTS_FALLBACK_REF} for floating latest" >&2
+            echo "${TESTS_FALLBACK_REF}"
+          }
+
+          resolve_platform_latest() {
+            git ls-remote --tags --refs https://github.com/opentdf/platform.git \
+              | awk '{print $2}' | sed 's#refs/tags/##' \
+              | grep -E '^service/v[0-9]+\.[0-9]+\.[0-9]+$' \
+              | sort -t. -k1,1V -k2,2V -k3,3V \
+              | tail -1
+          }
+          resolve_otdfctl_latest() {
+            git ls-remote --tags --refs https://github.com/opentdf/platform.git \
+              | awk '{print $2}' | sed 's#refs/tags/##' \
+              | grep -E '^otdfctl/v[0-9]+\.[0-9]+\.[0-9]+$' \
+              | sort -t. -k1,1V -k2,2V -k3,3V \
+              | tail -1
+          }
+
+          TESTS_REF=$(resolve_tests "$TESTS_REF_IN")
+
+          if [[ "$PLATFORM_REF_IN" == "latest" || "$PLATFORM_REF_IN" == "lts" ]]; then
+            PLATFORM_REF=$(resolve_platform_latest)
+            PLATFORM_TAG=latest
+            [[ -n "$PLATFORM_REF" ]] || { echo "failed to resolve platform latest" >&2; exit 1; }
+          else
+            PLATFORM_REF="$PLATFORM_REF_IN"
+            PLATFORM_TAG="$PLATFORM_REF_IN"
+          fi
+
+          if [[ "$OTDFCTL_REF_IN" == "latest" || "$OTDFCTL_REF_IN" == "lts" ]]; then
+            GO_REF=$(resolve_otdfctl_latest)
+            GO_CHANNEL="${GO_REF#otdfctl/}"
+            [[ -n "$GO_REF" ]] || { echo "failed to resolve otdfctl latest" >&2; exit 1; }
+          else
+            GO_REF="$OTDFCTL_REF_IN"
+            GO_CHANNEL="$OTDFCTL_REF_IN"
+          fi
+
+          {
+            echo "tests-ref=${TESTS_REF}"
+            echo "platform-ref=${PLATFORM_REF}"
+            echo "platform-tag=${PLATFORM_TAG}"
+            echo "go-ref=${GO_REF}"
+            echo "go-channel=${GO_CHANNEL}"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Resolved pins"
+            echo ""
+            echo "| Component | Input | Resolved |"
+            echo "|---|---|---|"
+            echo "| opentdf-tests | \`${TESTS_REF_IN}\` | \`${TESTS_REF}\` |"
+            echo "| platform | \`${PLATFORM_REF_IN}\` | \`${PLATFORM_REF}\` |"
+            echo "| go/otdfctl | \`${OTDFCTL_REF_IN}\` | \`${GO_REF}\` (channel \`${GO_CHANNEL}\`) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "tests=${TESTS_REF} platform=${PLATFORM_REF} go=${GO_REF}"
+
+  community-rust:
+    name: "rust ↔ go"
+    needs: [resolve-refs]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: read
+    env:
+      TESTS_REF: ${{ needs.resolve-refs.outputs.tests-ref }}
+      PLATFORM_REF: ${{ needs.resolve-refs.outputs.platform-ref }}
+      PLATFORM_TAG: ${{ needs.resolve-refs.outputs.platform-tag }}
+      OTDFCTL_REF: ${{ needs.resolve-refs.outputs.go-ref }}
+      GO_CHANNEL: ${{ needs.resolve-refs.outputs.go-channel }}
+    steps:
+      - name: Checkout opentdf-rs
+        uses: actions/checkout@v4
+        with:
+          path: opentdf-rs
+          persist-credentials: false
+
+      - name: Checkout opentdf-tests
+        uses: actions/checkout@v4
+        with:
+          repository: arkavo-org/opentdf-tests
+          ref: ${{ env.TESTS_REF }}
+          path: otdftests
+          persist-credentials: false
+
+      - name: Wire this opentdf-rs into xtest sdk/rust
+        run: |
+          set -euo pipefail
+          mkdir -p otdftests/xtest/sdk/rust/src
+          # Use the PR/commit under test, not a released opentdf-rs pin.
+          rm -rf otdftests/xtest/sdk/rust/src/main
+          ln -s "$(pwd)/opentdf-rs" otdftests/xtest/sdk/rust/src/main
+          ls -la otdftests/xtest/sdk/rust/src/main/Cargo.toml
+          test -f otdftests/xtest/sdk/rust/src/main/examples/xtest_cli.rs
+
+      - name: Load extra keys
+        id: load-extra-keys
+        run: echo "EXTRA_KEYS=$(jq -c <otdftests/xtest/extra-keys.json)" >> "${GITHUB_OUTPUT}"
+
+      - name: Start platform
+        id: run-platform
+        uses: opentdf/platform/test/start-up-with-containers@11af44a5d4826ed281bf2e0e4e31d6ff6154b393
+        with:
+          platform-ref: ${{ env.PLATFORM_REF }}
+          ec-tdf-enabled: true
+          extra-keys: ${{ steps.load-extra-keys.outputs.EXTRA_KEYS }}
+          log-type: json
+          pqc-enabled: true
+
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Capture platform otdfctl location
+        id: platform-otdfctl
+        run: |-
+          if [ -d "$PLATFORM_DIR/otdfctl" ] && [ -f "$PLATFORM_DIR/otdfctl/go.mod" ]; then
+            echo "dir=$(pwd)/$PLATFORM_DIR/otdfctl" >> "$GITHUB_OUTPUT"
+            echo "sha=$(git -C "$PLATFORM_DIR" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          else
+            echo "dir=" >> "$GITHUB_OUTPUT"
+            echo "sha=" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          PLATFORM_DIR: ${{ steps.run-platform.outputs.platform-working-dir }}
+
+      - name: Resolve go peer
+        id: resolve-go
+        working-directory: otdftests
+        run: |-
+          INFO=$(uv run --project otdf-sdk-mgr otdf-sdk-mgr versions resolve go "${OTDFCTL_REF}")
+          echo "version-info=$INFO" >> "$GITHUB_OUTPUT"
+          echo "$INFO" | jq .
+
+      - name: Configure otdfctl (go)
+        id: configure-go
+        uses: ./otdftests/xtest/setup-cli-tool
+        with:
+          path: otdftests/xtest/sdk
+          sdk: go
+          version-info: ${{ steps.resolve-go.outputs.version-info }}
+          platform-otdfctl-dir: ${{ steps.platform-otdfctl.outputs.dir }}
+          platform-otdfctl-sha: ${{ steps.platform-otdfctl.outputs.sha }}
+
+      - name: Build go CLI (head builds only)
+        if: fromJson(steps.configure-go.outputs.heads)[0] != null
+        run: make
+        working-directory: otdftests/xtest/sdk/go
+
+      - name: Build rust CLI from this checkout
+        run: make VERSIONS=main
+        working-directory: otdftests/xtest/sdk/rust
+
+      - name: Probe rust supports
+        working-directory: otdftests/xtest
+        run: |-
+          set -e
+          ./sdk/rust/dist/main/cli.sh supports hexless
+          ./sdk/rust/dist/main/cli.sh supports connectrpc
+          ! ./sdk/rust/dist/main/cli.sh supports ecwrap || exit 1
+
+      - name: Platform version
+        working-directory: ${{ steps.run-platform.outputs.platform-working-dir }}
+        run: |-
+          if PLATFORM_VERSION=$(go run ./service version 2>&1); then
+            echo "PLATFORM_VERSION=$PLATFORM_VERSION" >> "$GITHUB_ENV"
+          else
+            echo "PLATFORM_VERSION=${PLATFORM_TAG}" >> "$GITHUB_ENV"
+          fi
+
+      - run: uv sync
+        working-directory: otdftests/xtest
+
+      - name: Run community xtest (rust × go, Base TDF)
+        working-directory: otdftests/xtest
+        env:
+          PLATFORM_DIR: "../../${{ steps.run-platform.outputs.platform-working-dir }}"
+          PLATFORM_LOG_FILE: "../../${{ steps.run-platform.outputs.platform-log-file }}"
+          PLATFORM_TAG: ${{ env.PLATFORM_TAG }}
+          SCHEMA_FILE: "manifest.schema.json"
+        run: |-
+          set -euo pipefail
+          mkdir -p test-results
+          GO_CH="${GO_CHANNEL}"
+          # go dist may be under tag (release install) or main (head). Prefer
+          # the channel from resolve-refs; fall back to whatever exists.
+          if [[ ! -x "sdk/go/dist/${GO_CH}/cli.sh" ]]; then
+            if [[ -x sdk/go/dist/main/cli.sh ]]; then
+              GO_CH=main
+            else
+              GO_CH=$(find sdk/go/dist -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | head -1)
+            fi
+          fi
+          echo "Using go channel: ${GO_CH}"
+          uv run pytest -n auto --dist loadscope \
+            --html=test-results/opentdf-rs-xtest.html \
+            --self-contained-html \
+            --junitxml=test-results/opentdf-rs-xtest.junit.xml \
+            --sdks-encrypt "rust@main go@${GO_CH}" \
+            --sdks-decrypt "rust@main go@${GO_CH}" \
+            --containers tdf \
+            --focus rust \
+            -m stage1 \
+            -ra -v \
+            test_tdfs.py \
+            | tee test-results/opentdf-rs-xtest.log
+
+      - name: Upload results
+        if: success() || failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ job.status == 'success' && '✅' || '❌' }} opentdf-rs-xtest
+          path: otdftests/xtest/test-results/**
+
+      - name: Upload platform logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: opentdf-rs-xtest-platform-logs
+          path: ${{ steps.run-platform.outputs.platform-log-file }}
+          if-no-files-found: ignore

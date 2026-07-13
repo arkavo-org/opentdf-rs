@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- Stop emitting `payload.tdf_spec_version` on encrypt (default + `xtest_cli`). Go and Swift only set root `schemaVersion`; otdf-python’s strict `ManifestPayload` rejects the unknown field and broke rust→python Stage-2. Field is still accepted on read.
+
+### Added
+
+- **X-Test** GitHub Actions workflow (`.github/workflows/xtest.yml`): rust ↔ go Stage-1 via `arkavo-org/opentdf-tests`, wiring the PR checkout into `xtest/sdk/rust` (same pattern as OpenTDFKit).
+
 ## [0.14.0] — 2026-07-12
 
 ### Added
