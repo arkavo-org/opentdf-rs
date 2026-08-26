@@ -18,6 +18,9 @@ jobs:
   build:
     name: build
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag_exists: ${{ steps.check_tag.outputs.exists }}
     permissions:
       contents: write
       packages: write
@@ -207,3 +210,12 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           cat opentdf-wasm-web.tar.gz.sha256 >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+
+  crates-io:
+    name: crates.io
+    needs: build
+    if: needs.build.outputs.tag_exists == 'false'
+    uses: ./.github/workflows/crates-io.yml
+    permissions:
+      contents: read
+      id-token: write

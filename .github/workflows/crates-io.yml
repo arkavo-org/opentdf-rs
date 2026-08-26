@@ -1,0 +1,68 @@
+# Publish workspace crates to crates.io via Trusted Publishing (OIDC).
+# No long-lived CARGO_REGISTRY_TOKEN. Bound on crates.io to this filename
+# plus the `crates-io` GitHub environment.
+#
+# Triggered by Release after a new version tag, or manually.
+name: crates.io
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: publish
+    runs-on: ubuntu-latest
+    environment: crates-io
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: setup-rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: auth
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          CARGO_TERM_COLOR: always
+        run: |
+          set -euo pipefail
+
+          publish_pkg() {
+            local pkg="$1"
+            local out status
+            set +e
+            out=$(cargo publish -p "$pkg" 2>&1)
+            status=$?
+            set -e
+            printf '%s\n' "$out"
+            if [[ "$status" -eq 0 ]]; then
+              echo "published $pkg"
+              return 0
+            fi
+            if printf '%s' "$out" | grep -qiE 'already exist'; then
+              echo "skip $pkg: already on crates.io"
+              return 0
+            fi
+            echo "failed to publish $pkg (exit $status)" >&2
+            return "$status"
+          }
+
+          # Dependency order: protocol, kas (independent), crypto, opentdf, wasm
+          publish_pkg opentdf-protocol
+          publish_pkg opentdf-kas
+          publish_pkg opentdf-crypto
+          publish_pkg opentdf
+          publish_pkg opentdf-wasm
