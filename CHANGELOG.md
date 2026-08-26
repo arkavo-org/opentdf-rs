@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Security
+
+- Raise the `aws-lc-rs` requirement from 1.15 to 1.18 (`aws-lc-sys` 0.37 → 0.44) so AWS-LC AES-CCM, X.509, CRL, and PKCS7 advisory fixes are required. `Cargo.lock` is not committed; current crates.io resolution also picks up patched `rustls-webpki` 0.103.15, `h2` 0.4.19, `quinn-proto` 0.11.17, `jsonwebtoken` 10.4.0, and `crossbeam-epoch` 0.9.20.
+
 ## [0.14.1] — 2026-07-13
 
 ### Fixed
