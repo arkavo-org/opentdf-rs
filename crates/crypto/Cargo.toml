@@ -51,7 +51,7 @@ spki = { version = "0.7", optional = true }
 # RSA backends (choose one)
 # aws-lc-rs: Constant-time RSA operations, FIPS validated (default for native)
 # Does NOT support wasm32 - use WebCrypto in browser environments
-aws-lc-rs = { version = "1.15", optional = true }
+aws-lc-rs = { version = "1.18", optional = true }
 # PEM parsing for aws-lc-rs (it only supports DER directly)
 pem = { version = "3.0", optional = true }
 
