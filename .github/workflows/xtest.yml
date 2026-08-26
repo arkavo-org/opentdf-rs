@@ -237,6 +237,18 @@ jobs:
         run: make
         working-directory: otdftests/xtest/sdk/go
 
+      # Tagged otdfctl releases can set BUILD_FROM_SOURCE without populating
+      # `heads`, so the step above is skipped and sdk/go/dist never appears.
+      - name: Build go CLI if dist missing
+        working-directory: otdftests/xtest
+        run: |
+          set -euo pipefail
+          if [[ ! -d sdk/go/dist ]] || ! find sdk/go/dist -name cli.sh -print -quit | grep -q .; then
+            echo "sdk/go/dist has no cli.sh; building go peer from source"
+            make -C sdk/go
+          fi
+          find sdk/go/dist -name cli.sh
+
       - name: Build rust CLI from this checkout
         run: make VERSIONS=main
         working-directory: otdftests/xtest/sdk/rust
@@ -277,9 +289,18 @@ jobs:
           if [[ ! -x "sdk/go/dist/${GO_CH}/cli.sh" ]]; then
             if [[ -x sdk/go/dist/main/cli.sh ]]; then
               GO_CH=main
+            elif [[ -d sdk/go/dist ]]; then
+              GO_CH=$(find sdk/go/dist -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | head -1 || true)
             else
-              GO_CH=$(find sdk/go/dist -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | head -1)
+              echo "::error::go CLI not installed under sdk/go/dist (channel ${GO_CHANNEL})" >&2
+              ls -la sdk/go || true
+              exit 1
             fi
+          fi
+          if [[ -z "${GO_CH}" || ! -x "sdk/go/dist/${GO_CH}/cli.sh" ]]; then
+            echo "::error::go CLI cli.sh missing for channel '${GO_CH}'" >&2
+            ls -laR sdk/go/dist || true
+            exit 1
           fi
           echo "Using go channel: ${GO_CH}"
           uv run pytest -n auto --dist loadscope \
