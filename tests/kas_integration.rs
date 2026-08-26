@@ -178,7 +178,7 @@ mod kas_tests {
 
         // Use environment variable or default to production server
         let kas_url =
-            std::env::var("KAS_URL").unwrap_or_else(|_| "https://100.arkavo.net".to_string());
+            std::env::var("KAS_URL").unwrap_or_else(|_| "https://platform.arkavo.net".to_string());
 
         println!("Fetching EC public key from {}...", kas_url);
 
