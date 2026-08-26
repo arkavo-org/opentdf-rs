@@ -6,6 +6,10 @@
 
 - crates.io Trusted Publishing from `arkavo-org/opentdf-rs` GitHub Actions (`.github/workflows/crates-io.yml`, environment `crates-io`), invoked after a new version tag in Release.
 
+### Changed
+
+- README install snippets and badges now point at crates.io `opentdf` 0.14.
+
 ## [0.14.2] — 2026-08-26
 
 ### Security
