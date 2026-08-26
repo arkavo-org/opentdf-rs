@@ -1,5 +1,8 @@
 # OpenTDF-RS
 
+[![crates.io](https://img.shields.io/crates/v/opentdf.svg)](https://crates.io/crates/opentdf)
+[![docs.rs](https://docs.rs/opentdf/badge.svg)](https://docs.rs/opentdf)
+
 A Rust implementation of the OpenTDF (Trusted Data Format) specification, providing data-centric security that travels with the data.
 
 ## Overview
@@ -318,7 +321,7 @@ The KAS client is enabled by default:
 
 ```toml
 [dependencies]
-opentdf = "0.13"
+opentdf = "0.14"
 ```
 
 #### Creating a KAS Client (v0.13+)
@@ -605,11 +608,11 @@ If adding new tools, remember to:
 
 ### Installation
 
-Add to your Cargo.toml:
+Add to your Cargo.toml ([crates.io](https://crates.io/crates/opentdf)):
 
 ```toml
 [dependencies]
-opentdf = "0.13"
+opentdf = "0.14"
 ```
 
 ### Feature Flags
@@ -637,16 +640,16 @@ opentdf = "0.13"
 
 ```toml
 # Recommended: Secure defaults (aws-lc-rs + rustls)
-opentdf = "0.13"
+opentdf = "0.14"
 
 # Pure Rust: No C compiler needed (accepts timing vulnerability)
-opentdf = { version = "0.13", default-features = false, features = ["kas-client-rustcrypto"] }
+opentdf = { version = "0.14", default-features = false, features = ["kas-client-rustcrypto"] }
 
 # Native TLS: Use system TLS (OpenSSL on Linux, SecureTransport on macOS)
-opentdf = { version = "0.13", default-features = false, features = ["kas-client", "native-tls"] }
+opentdf = { version = "0.14", default-features = false, features = ["kas-client", "native-tls"] }
 
 # Minimal: Core TDF operations only (no KAS client, no async)
-opentdf = { version = "0.13", default-features = false }
+opentdf = { version = "0.14", default-features = false }
 ```
 
 #### WASM Note
@@ -672,14 +675,14 @@ Version 0.7.0 brings critical security improvements and better feature organizat
 opentdf = { version = "0.6", features = ["kas"] }
 
 # After (v0.7.0) - "kas" still works but is deprecated
-opentdf = "0.13"  # kas-client is now the default
+opentdf = "0.14"  # kas-client is now the default
 ```
 
 **Pure Rust Builds**:
 ```toml
 # Before (v0.6.x) - not available
 # After (v0.7.0) - explicit pure Rust option
-opentdf = { version = "0.13", default-features = false, features = ["kas-client-rustcrypto"] }
+opentdf = { version = "0.14", default-features = false, features = ["kas-client-rustcrypto"] }
 ```
 
 ## What's New in v0.5.0
