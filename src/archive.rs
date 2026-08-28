@@ -701,9 +701,14 @@ impl TdfMultiEntryBuilder {
     }
 
     fn options(len: u64) -> FileOptions<'static, ()> {
-        // `large_file` drives the ZIP64 extra field. Enabling it only for
-        // members past the 32-bit limit keeps small archives compact while
-        // multi-gigabyte payloads stay legal.
+        // `large_file` forces the ZIP64 extra field for a member's own sizes.
+        // Local-header offsets past 4 GiB and a central directory past 4 GiB
+        // are handled by the zip crate on their own: it adds the ZIP64
+        // header-offset field whenever `header_start >= u32::MAX`, and writes
+        // a ZIP64 EOCD whenever the directory offset or size crosses that
+        // threshold. An archive of many sub-4 GiB members that together exceed
+        // 4 GiB — the common shape for this layout — is therefore correct
+        // without forcing the flag on every member.
         FileOptions::default()
             .compression_method(zip::CompressionMethod::Stored)
             .large_file(len > u64::from(u32::MAX))
