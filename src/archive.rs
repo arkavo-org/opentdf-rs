@@ -672,3 +672,120 @@ mod tests {
         Ok(())
     }
 }
+
+/// Byte range of a Stored zip member's data, for `read_at`-style access.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TdfMemberLocation {
+    /// Absolute offset of the member's first data byte in the archive.
+    pub data_start: u64,
+    /// Member length in bytes. Stored members are not compressed, so this is
+    /// both the compressed and the uncompressed size.
+    pub size: u64,
+}
+
+/// Writes a TDF whose payload is many Stored members rather than one
+/// concatenated `0.payload`, with the manifest written **last**.
+///
+/// [`TdfArchiveBuilder`] writes the manifest first, which cannot express a
+/// layout whose manifest carries a root signature over every segment tag.
+pub struct TdfMultiEntryBuilder {
+    writer: ZipWriter<File>,
+}
+
+impl TdfMultiEntryBuilder {
+    /// Creates a builder writing to `path`.
+    pub fn new<P: AsRef<Path>>(path: P) -> io::Result<Self> {
+        Ok(Self {
+            writer: ZipWriter::new(File::create(path)?),
+        })
+    }
+
+    fn options(len: u64) -> FileOptions<'static, ()> {
+        // `large_file` drives the ZIP64 extra field. Enabling it only for
+        // members past the 32-bit limit keeps small archives compact while
+        // multi-gigabyte payloads stay legal.
+        FileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored)
+            .large_file(len > u64::from(u32::MAX))
+    }
+
+    /// Adds one Stored member. `name` is used verbatim as the zip entry name,
+    /// including any `/`, which this layout uses as part of a member name and
+    /// not as a directory separator.
+    pub fn add_member(&mut self, name: &str, bytes: &[u8]) -> Result<(), TdfError> {
+        self.writer
+            .start_file::<_, ()>(name, Self::options(bytes.len() as u64))?;
+        self.writer.write_all(bytes)?;
+        Ok(())
+    }
+
+    /// Writes the manifest as the final member and finalizes the archive.
+    /// Returns the archive size in bytes.
+    pub fn finish_with_manifest(
+        mut self,
+        name: &str,
+        manifest: &TdfManifest,
+    ) -> Result<u64, TdfError> {
+        let json = manifest.to_json()?;
+        self.writer
+            .start_file::<_, ()>(name, Self::options(json.len() as u64))?;
+        self.writer.write_all(json.as_bytes())?;
+        let file = self.writer.finish()?;
+        Ok(file.metadata()?.len())
+    }
+}
+
+/// Central-directory map from member name to byte range, built once at open.
+///
+/// Random access is then a hash lookup plus a `seek`, with no scan of the
+/// preceding members.
+#[derive(Debug, Clone, Default)]
+pub struct TdfMemberIndex {
+    entries: std::collections::HashMap<String, TdfMemberLocation>,
+}
+
+impl TdfMemberIndex {
+    /// Scans the central directory. Every member must be Stored, so a
+    /// member's on-disk length equals its logical length.
+    pub fn open<R: Read + Seek>(reader: R) -> Result<Self, TdfError> {
+        let mut zip = ZipArchive::new(reader)?;
+        let mut entries = std::collections::HashMap::with_capacity(zip.len());
+        for i in 0..zip.len() {
+            let entry = zip.by_index(i)?;
+            if entry.compression() != zip::CompressionMethod::Stored {
+                return Err(TdfError::InvalidStructure {
+                    reason: format!("member '{}' is not Stored", entry.name()),
+                    expected: Some("compression method 0".to_string()),
+                });
+            }
+            entries.insert(
+                entry.name().to_string(),
+                TdfMemberLocation {
+                    data_start: entry.data_start(),
+                    size: entry.size(),
+                },
+            );
+        }
+        Ok(Self { entries })
+    }
+
+    /// Looks up a member by its exact UTF-8 name.
+    pub fn get(&self, name: &str) -> Option<TdfMemberLocation> {
+        self.entries.get(name).copied()
+    }
+
+    /// Whether a member with this exact name exists.
+    pub fn contains(&self, name: &str) -> bool {
+        self.entries.contains_key(name)
+    }
+
+    /// Number of members in the archive.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether the archive has no members.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}

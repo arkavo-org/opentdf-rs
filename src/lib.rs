@@ -103,7 +103,10 @@ pub use tdf::{Tdf, TdfEncryptBuilder, TdfEncryptFileBuilder};
 pub use tdf::{TdfDecryptBuilder, TdfDecryptFileBuilder};
 
 // Core types
-pub use archive::{TdfArchive, TdfArchiveBuilder, TdfArchiveMemoryBuilder, TdfError};
+pub use archive::{
+    TdfArchive, TdfArchiveBuilder, TdfArchiveMemoryBuilder, TdfError, TdfMemberIndex,
+    TdfMemberLocation, TdfMultiEntryBuilder,
+};
 
 // Unified error type for SDK consumers
 pub use error::OpenTdfError;
