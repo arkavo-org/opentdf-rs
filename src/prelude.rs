@@ -38,13 +38,15 @@ pub use crate::tdf::{TdfDecryptBuilder, TdfDecryptFileBuilder};
 
 // Re-export protocol types
 pub use opentdf_protocol::{
-    EncryptionInformation, EncryptionMethod, IntegrityInformation, KeyAccess, Payload,
-    PolicyBinding, RootSignature, Segment, TdfManifest,
+    EncryptionInformation, EncryptionMethod, GGUF_TDF_PROFILE_V1, GgufIndex, GgufSegment,
+    GgufSegmentKind, GgufTensor, IntegrityInformation, KeyAccess, Payload, PolicyBinding,
+    RootSignature, Segment, TdfManifest,
 };
 
 // Re-export crypto types
 pub use opentdf_crypto::{
-    EncryptedPayload, EncryptionError, SegmentInfo, SegmentedPayload, TdfEncryption,
+    EncryptedPayload, EncryptedSegment, EncryptionError, SegmentInfo, SegmentedPayload,
+    TdfEncryption,
 };
 
 // **Auto-import extension traits** - this is the key improvement!
