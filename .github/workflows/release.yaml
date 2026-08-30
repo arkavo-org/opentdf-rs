@@ -215,7 +215,17 @@ jobs:
     name: crates.io
     needs: build
     if: needs.build.outputs.tag_exists == 'false'
-    uses: ./.github/workflows/crates-io.yml
+    runs-on: ubuntu-latest
     permissions:
-      contents: read
-      id-token: write
+      actions: write
+    steps:
+      # crates.io Trusted Publishing is bound to the workflow *filename*
+      # `crates-io.yml`. A `workflow_call` from here mints an OIDC token whose
+      # workflow claim is `release.yaml`, which crates.io rejects (0.15.0
+      # release, run 33290929285). Dispatching the workflow by API keeps the
+      # claim on `crates-io.yml`; workflow_dispatch events raised with
+      # GITHUB_TOKEN do run (unlike pushes and tags).
+      - name: dispatch crates-io.yml
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run crates-io.yml --repo "$GITHUB_REPOSITORY" --ref "${{ needs.build.outputs.version }}"
