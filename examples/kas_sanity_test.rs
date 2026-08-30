@@ -7,13 +7,13 @@ use opentdf::{Policy, jsonrpc::TdfJsonRpc};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
-        "=== ZTDF-JSON Sanity Test with https://100.arkavo.net/kas.AccessService/Rewrap ===\n"
+        "=== ZTDF-JSON Sanity Test with https://platform.arkavo.net/kas.AccessService/Rewrap ===\n"
     );
 
     // Test data
     let test_data = b"Sanity test: Hello from ZTDF-JSON!";
-    let _kas_base_url = "https://100.arkavo.net";
-    let kas_url = "https://100.arkavo.net/kas.AccessService/Rewrap"; // for display only
+    let _kas_base_url = "https://platform.arkavo.net";
+    let kas_url = "https://platform.arkavo.net/kas.AccessService/Rewrap"; // for display only
 
     println!("1. Creating policy...");
     let policy = Policy::new(

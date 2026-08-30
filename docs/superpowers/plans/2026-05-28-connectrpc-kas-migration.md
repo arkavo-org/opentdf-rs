@@ -1181,11 +1181,11 @@ If `KasClient::new(...)` appears, replace as in Step 9. Skip Public-key changes 
 
 - [ ] **Step 11: Update `examples/kas_sanity_test.rs`**
 
-Open `examples/kas_sanity_test.rs`. The current line 13 hardcodes `"https://100.arkavo.net/kas/v2/rewrap"`. Change to:
+Open `examples/kas_sanity_test.rs`. The current line 13 hardcodes `"https://platform.arkavo.net/kas/v2/rewrap"`. Change to:
 
 ```rust
-    let kas_base_url = "https://100.arkavo.net";
-    let kas_url = "https://100.arkavo.net/kas.AccessService/Rewrap";  // for display only
+    let kas_base_url = "https://platform.arkavo.net";
+    let kas_url = "https://platform.arkavo.net/kas.AccessService/Rewrap";  // for display only
 ```
 
 If the example builds a `KasClient`, construct via `OpentdfConfiguration::for_kas_connect(kas_base_url)`.

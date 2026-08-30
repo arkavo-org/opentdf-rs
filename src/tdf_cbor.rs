@@ -1628,7 +1628,7 @@ mod tests {
 
     /// Get test KAS URL from environment variable or use default
     fn test_kas_url() -> String {
-        std::env::var("TEST_KAS_URL").unwrap_or_else(|_| "https://100.arkavo.net".to_string())
+        std::env::var("TEST_KAS_URL").unwrap_or_else(|_| "https://platform.arkavo.net".to_string())
     }
 
     /// Generate a test EC key pair for testing TDF-CBOR encryption
