@@ -9,13 +9,14 @@
 use crate::helpers::{generate_key_32, generate_nonce};
 use crate::types::{PayloadKey, PolicyKey};
 use aes_gcm::{
-    Aes256Gcm, Nonce,
-    aead::{Aead, KeyInit},
+    Aes256Gcm, Nonce, Tag,
+    aead::{Aead, AeadInPlace, KeyInit},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+use zeroize::Zeroize;
 
 #[derive(Debug, Error)]
 pub enum EncryptionError {
@@ -255,11 +256,20 @@ impl TdfEncryption {
         Ok(EncryptedSegment { bytes, tag })
     }
 
-    /// Decrypt one segment member into `dest`, verifying the GCM tag.
+    /// Decrypt one segment member into `dest` in place, verifying the GCM tag.
     ///
-    /// `dest.len()` must equal `member.len() - 28`. Bounding the destination
-    /// keeps a reader's scratch allocation fixed at the manifest's declared
-    /// `segmentSize` instead of growing with the archive.
+    /// `dest.len()` must equal `member.len() - 28`. `dest` is the only
+    /// plaintext buffer this function touches: the ciphertext body is
+    /// copied into it and then decrypted in place via
+    /// [`AeadInPlace::decrypt_in_place_detached`], so the function performs
+    /// no heap allocation and no second plaintext is ever created (and left
+    /// unzeroized on drop). Bounding the destination keeps a reader's
+    /// scratch allocation fixed at the manifest's declared `segmentSize`
+    /// instead of growing with the archive.
+    ///
+    /// If tag verification fails, `dest` is zeroized before the error is
+    /// returned, so a caller can never observe a partially transformed or
+    /// stale buffer.
     ///
     /// Returns the verified 16-byte tag so the caller can compare it with the
     /// manifest's segment hash and detect a tag/manifest swap.
@@ -290,20 +300,18 @@ impl TdfEncryption {
             .map_err(|_| EncryptionError::InvalidKeyLength)?;
         let nonce = Nonce::from_slice(&member[..IV_SIZE]);
 
-        let plaintext = cipher
-            .decrypt(nonce, &member[IV_SIZE..])
-            .map_err(EncryptionError::AeadError)?;
+        let ciphertext_end = member.len() - GCM_TAG_SIZE;
+        dest.copy_from_slice(&member[IV_SIZE..ciphertext_end]);
+        let tag = Tag::from_slice(&member[ciphertext_end..]);
 
-        if plaintext.len() != dest.len() {
-            return Err(EncryptionError::SegmentError(
-                "decrypted length disagrees with the destination".to_string(),
-            ));
+        if let Err(e) = cipher.decrypt_in_place_detached(nonce, b"", dest, tag) {
+            dest.zeroize();
+            return Err(EncryptionError::AeadError(e));
         }
-        dest.copy_from_slice(&plaintext);
 
-        let mut tag = [0u8; GCM_TAG_SIZE];
-        tag.copy_from_slice(&member[member.len() - GCM_TAG_SIZE..]);
-        Ok(tag)
+        let mut tag_bytes = [0u8; GCM_TAG_SIZE];
+        tag_bytes.copy_from_slice(&member[member.len() - GCM_TAG_SIZE..]);
+        Ok(tag_bytes)
     }
 
     /// Encrypt data using segment-based encryption for OpenTDF compatibility
@@ -602,6 +610,26 @@ mod single_segment_tests {
         let seg = a.encrypt_segment(b"secret weights").unwrap();
         let mut dest = vec![0u8; 14];
         assert!(b.decrypt_segment_into(&seg.bytes, &mut dest).is_err());
+    }
+
+    #[test]
+    fn decrypt_segment_into_zeroizes_dest_on_tag_failure() {
+        let enc = TdfEncryption::new().unwrap();
+        let plaintext = vec![0x11u8; 4096];
+        let seg = enc.encrypt_segment(&plaintext).unwrap();
+
+        // Flip a ciphertext byte (past the 12-byte IV) so the GCM tag fails
+        // to verify.
+        let mut tampered = seg.bytes.clone();
+        tampered[12] ^= 0x01;
+
+        let mut dest = vec![0xAAu8; plaintext.len()];
+        let err = enc.decrypt_segment_into(&tampered, &mut dest).unwrap_err();
+        assert!(matches!(err, EncryptionError::AeadError(_)));
+        assert!(
+            dest.iter().all(|b| *b == 0),
+            "dest must be zeroized after a failed decrypt, not left holding partial/garbage plaintext"
+        );
     }
 
     #[test]
