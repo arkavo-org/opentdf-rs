@@ -2,13 +2,24 @@
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-08-30
+
+Additive API for the `gguf-tdf/1` profile (multi-member archives with one OpenTDF segment per zip member) plus a bounded-plaintext fix in segment decryption. No wire-format change; existing archives read and write as before.
+
 ### Added
 
+- `TdfMultiEntryBuilder` and `TdfMemberIndex`: build a TDF archive with one encrypted member per segment and locate members through the central directory (ZIP64-aware) without reading the whole file.
+- `TdfEncryption::encrypt_segment` / `decrypt_segment_into`: single-segment encrypt and decrypt into a caller-owned buffer, returning the GMAC tag so it can be checked against the manifest row.
+- `TdfManifest`: optional `tdf_spec_version` and a `gguf` index object; `GgufIndex`, `GgufSegment`, `GgufSegmentKind` re-exported from the root crate.
 - crates.io Trusted Publishing from `arkavo-org/opentdf-rs` GitHub Actions (`.github/workflows/crates-io.yml`, environment `crates-io`), invoked after a new version tag in Release.
 
 ### Changed
 
 - README install snippets and badges now point at crates.io `opentdf` 0.14.
+
+### Fixed
+
+- `decrypt_segment_into` decrypted into a second heap-allocated plaintext, copied it into `dest`, and dropped it unzeroized — one unwiped full-segment plaintext per segment plus an extra alloc and memcpy on the load hot path. It now decrypts in place into `dest` and zeroizes `dest` on tag failure; a counting-allocator test proves zero heap allocations per segment ([#99](https://github.com/arkavo-org/opentdf-rs/issues/99), [#101](https://github.com/arkavo-org/opentdf-rs/pull/101)).
 
 ## [0.14.2] — 2026-08-26
 
