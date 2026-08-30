@@ -9,13 +9,14 @@
 use crate::helpers::{generate_key_32, generate_nonce};
 use crate::types::{PayloadKey, PolicyKey};
 use aes_gcm::{
-    Aes256Gcm, Nonce,
-    aead::{Aead, KeyInit},
+    Aes256Gcm, Nonce, Tag,
+    aead::{Aead, AeadInPlace, KeyInit},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+use zeroize::Zeroize;
 
 #[derive(Debug, Error)]
 pub enum EncryptionError {
@@ -33,6 +34,21 @@ pub enum EncryptionError {
 
     #[error("Segment error: {0}")]
     SegmentError(String),
+}
+
+/// One encrypted OpenTDF segment: `IV[12] || ciphertext || tag[16]`.
+///
+/// Produced by [`TdfEncryption::encrypt_segment`], which encrypts exactly one
+/// caller-chosen slice. Profiles with variable-length segments (such as a GGUF
+/// header followed by fixed-cap weight windows) cannot express their plan
+/// through [`TdfEncryption::encrypt_with_segments`], which cuts uniform chunks
+/// out of a fully buffered payload.
+#[derive(Debug, Clone)]
+pub struct EncryptedSegment {
+    /// Member bytes as written to storage.
+    pub bytes: Vec<u8>,
+    /// The 16-byte GCM tag, which is also the OpenTDF GMAC segment hash.
+    pub tag: [u8; 16],
 }
 
 /// Encrypted payload structure
@@ -206,6 +222,96 @@ impl TdfEncryption {
     /// Get the payload key
     pub fn payload_key(&self) -> &[u8] {
         self.payload_key.as_slice()
+    }
+
+    /// Encrypt exactly one pre-cut segment.
+    ///
+    /// The caller chooses the boundary, so a source is never fully buffered
+    /// and segments may vary in length.
+    pub fn encrypt_segment(&self, plaintext: &[u8]) -> Result<EncryptedSegment, EncryptionError> {
+        const GCM_TAG_SIZE: usize = 16;
+
+        let cipher = Aes256Gcm::new_from_slice(self.payload_key.as_slice())
+            .map_err(|_| EncryptionError::InvalidKeyLength)?;
+        let iv = generate_nonce();
+        let nonce = Nonce::from_slice(iv.as_slice());
+
+        let ciphertext = cipher
+            .encrypt(nonce, plaintext)
+            .map_err(EncryptionError::AeadError)?;
+
+        if ciphertext.len() < GCM_TAG_SIZE {
+            return Err(EncryptionError::SegmentError(
+                "AES-GCM output shorter than its tag".to_string(),
+            ));
+        }
+
+        let mut tag = [0u8; GCM_TAG_SIZE];
+        tag.copy_from_slice(&ciphertext[ciphertext.len() - GCM_TAG_SIZE..]);
+
+        let mut bytes = Vec::with_capacity(12 + ciphertext.len());
+        bytes.extend_from_slice(iv.as_slice());
+        bytes.extend_from_slice(&ciphertext);
+
+        Ok(EncryptedSegment { bytes, tag })
+    }
+
+    /// Decrypt one segment member into `dest` in place, verifying the GCM tag.
+    ///
+    /// `dest.len()` must equal `member.len() - 28`. `dest` is the only
+    /// plaintext buffer this function touches: the ciphertext body is
+    /// copied into it and then decrypted in place via
+    /// [`AeadInPlace::decrypt_in_place_detached`], so the function performs
+    /// no heap allocation and no second plaintext is ever created (and left
+    /// unzeroized on drop). Bounding the destination keeps a reader's
+    /// scratch allocation fixed at the manifest's declared `segmentSize`
+    /// instead of growing with the archive.
+    ///
+    /// If tag verification fails, `dest` is zeroized before the error is
+    /// returned, so a caller can never observe a partially transformed or
+    /// stale buffer.
+    ///
+    /// Returns the verified 16-byte tag so the caller can compare it with the
+    /// manifest's segment hash and detect a tag/manifest swap.
+    pub fn decrypt_segment_into(
+        &self,
+        member: &[u8],
+        dest: &mut [u8],
+    ) -> Result<[u8; 16], EncryptionError> {
+        const IV_SIZE: usize = 12;
+        const GCM_TAG_SIZE: usize = 16;
+        const OVERHEAD: usize = IV_SIZE + GCM_TAG_SIZE;
+
+        if member.len() < OVERHEAD {
+            return Err(EncryptionError::SegmentError(format!(
+                "segment member is {} bytes, shorter than the {OVERHEAD}-byte overhead",
+                member.len()
+            )));
+        }
+        if member.len() - OVERHEAD != dest.len() {
+            return Err(EncryptionError::SegmentError(format!(
+                "destination is {} bytes but member holds {} plaintext bytes",
+                dest.len(),
+                member.len() - OVERHEAD
+            )));
+        }
+
+        let cipher = Aes256Gcm::new_from_slice(self.payload_key.as_slice())
+            .map_err(|_| EncryptionError::InvalidKeyLength)?;
+        let nonce = Nonce::from_slice(&member[..IV_SIZE]);
+
+        let ciphertext_end = member.len() - GCM_TAG_SIZE;
+        dest.copy_from_slice(&member[IV_SIZE..ciphertext_end]);
+        let tag = Tag::from_slice(&member[ciphertext_end..]);
+
+        if let Err(e) = cipher.decrypt_in_place_detached(nonce, b"", dest, tag) {
+            dest.zeroize();
+            return Err(EncryptionError::AeadError(e));
+        }
+
+        let mut tag_bytes = [0u8; GCM_TAG_SIZE];
+        tag_bytes.copy_from_slice(&member[member.len() - GCM_TAG_SIZE..]);
+        Ok(tag_bytes)
     }
 
     /// Encrypt data using segment-based encryption for OpenTDF compatibility
@@ -428,5 +534,118 @@ mod tests {
         assert_eq!(gmac_tags.len(), segmented.gmac_tags.len());
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod single_segment_tests {
+    use super::*;
+
+    #[test]
+    fn encrypt_segment_layout_and_round_trip() {
+        let enc = TdfEncryption::new().unwrap();
+        let plaintext = vec![0xABu8; 300];
+
+        let seg = enc.encrypt_segment(&plaintext).unwrap();
+        // IV(12) || ciphertext(300) || tag(16)
+        assert_eq!(seg.bytes.len(), plaintext.len() + 28);
+        assert_eq!(&seg.bytes[seg.bytes.len() - 16..], &seg.tag[..]);
+
+        // Distinct IVs under the same payload key.
+        let seg2 = enc.encrypt_segment(&plaintext).unwrap();
+        assert_ne!(seg.bytes[..12], seg2.bytes[..12]);
+
+        let mut dest = vec![0u8; plaintext.len()];
+        let tag = enc.decrypt_segment_into(&seg.bytes, &mut dest).unwrap();
+        assert_eq!(dest, plaintext);
+        assert_eq!(tag, seg.tag);
+    }
+
+    #[test]
+    fn encrypt_segment_handles_empty_and_large_slices() {
+        let enc = TdfEncryption::new().unwrap();
+
+        let empty = enc.encrypt_segment(&[]).unwrap();
+        assert_eq!(empty.bytes.len(), 28);
+        let mut dest = Vec::new();
+        assert_eq!(
+            enc.decrypt_segment_into(&empty.bytes, &mut dest).unwrap(),
+            empty.tag
+        );
+
+        let big = vec![7u8; 4 * 1024 * 1024];
+        let seg = enc.encrypt_segment(&big).unwrap();
+        assert_eq!(seg.bytes.len(), big.len() + 28);
+        let mut dest = vec![0u8; big.len()];
+        enc.decrypt_segment_into(&seg.bytes, &mut dest).unwrap();
+        assert_eq!(dest, big);
+    }
+
+    #[test]
+    fn decrypt_segment_rejects_tampering_and_bad_length() {
+        let enc = TdfEncryption::new().unwrap();
+        let seg = enc.encrypt_segment(b"weights").unwrap();
+
+        let mut flipped = seg.bytes.clone();
+        flipped[20] ^= 0x01;
+        let mut dest = vec![0u8; 7];
+        assert!(enc.decrypt_segment_into(&flipped, &mut dest).is_err());
+
+        // Destination length must equal member length - 28.
+        let mut wrong = vec![0u8; 8];
+        assert!(enc.decrypt_segment_into(&seg.bytes, &mut wrong).is_err());
+
+        // Member shorter than IV + tag.
+        let mut tiny = Vec::new();
+        assert!(
+            enc.decrypt_segment_into(&seg.bytes[..20], &mut tiny)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn decrypt_segment_rejects_a_foreign_key() {
+        let a = TdfEncryption::new().unwrap();
+        let b = TdfEncryption::new().unwrap();
+        let seg = a.encrypt_segment(b"secret weights").unwrap();
+        let mut dest = vec![0u8; 14];
+        assert!(b.decrypt_segment_into(&seg.bytes, &mut dest).is_err());
+    }
+
+    #[test]
+    fn decrypt_segment_into_zeroizes_dest_on_tag_failure() {
+        let enc = TdfEncryption::new().unwrap();
+        let plaintext = vec![0x11u8; 4096];
+        let seg = enc.encrypt_segment(&plaintext).unwrap();
+
+        // Flip a ciphertext byte (past the 12-byte IV) so the GCM tag fails
+        // to verify.
+        let mut tampered = seg.bytes.clone();
+        tampered[12] ^= 0x01;
+
+        let mut dest = vec![0xAAu8; plaintext.len()];
+        let err = enc.decrypt_segment_into(&tampered, &mut dest).unwrap_err();
+        assert!(matches!(err, EncryptionError::AeadError(_)));
+        assert!(
+            dest.iter().all(|b| *b == 0),
+            "dest must be zeroized after a failed decrypt, not left holding partial/garbage plaintext"
+        );
+    }
+
+    #[test]
+    fn segment_tag_matches_encrypt_with_segments_gmac() {
+        // The single-segment API must produce the same member layout the
+        // existing streaming API produces, so manifests stay interchangeable.
+        let enc = TdfEncryption::new().unwrap();
+        let data = vec![3u8; 64];
+        let streamed = enc.encrypt_with_segments(&data, 64).unwrap();
+        let single = enc.encrypt_segment(&data).unwrap();
+
+        assert_eq!(streamed.segments[0].len(), single.bytes.len());
+        assert_eq!(
+            streamed.segment_info[0].encrypted_size,
+            single.bytes.len() as u64
+        );
+        assert_eq!(streamed.gmac_tags[0].len(), single.tag.len());
     }
 }

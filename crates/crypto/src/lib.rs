@@ -46,7 +46,7 @@ pub use hmac::{
     verify_root_signature,
 };
 pub use kem::{KemError, KeyEncapsulation};
-pub use tdf::{EncryptedPayload, SegmentInfo, SegmentedPayload, TdfEncryption};
+pub use tdf::{EncryptedPayload, EncryptedSegment, SegmentInfo, SegmentedPayload, TdfEncryption};
 pub use types::{AesKey, KeyError, Nonce96, PayloadKey, PolicyKey};
 
 // NanoTDF exports (requires EC KEM)

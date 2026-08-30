@@ -341,6 +341,8 @@ impl TdfJson {
             },
             encryption_information: self.manifest.encryption_information.clone(),
             schema_version: Some("1.0.0".to_string()),
+            tdf_spec_version: None,
+            gguf: None,
         }
     }
 
@@ -640,6 +642,8 @@ impl TdfJsonRpc {
             },
             encryption_information: self.manifest.encryption_information.clone(),
             schema_version: self.manifest.schema_version.clone(),
+            tdf_spec_version: None,
+            gguf: None,
         }
     }
 }
@@ -709,6 +713,8 @@ impl From<&TdfManifestInline> for TdfManifest {
             },
             encryption_information: inline.encryption_information.clone(),
             schema_version: inline.schema_version.clone(),
+            tdf_spec_version: None,
+            gguf: None,
         }
     }
 }
@@ -727,6 +733,8 @@ impl From<TdfManifestInline> for TdfManifest {
             },
             encryption_information: inline.encryption_information,
             schema_version: inline.schema_version,
+            tdf_spec_version: None,
+            gguf: None,
         }
     }
 }

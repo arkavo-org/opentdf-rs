@@ -27,7 +27,9 @@ pub use nanotdf_crypto_mbedtls as nanotdf_crypto;
 #[cfg(all(feature = "kem-ec", not(feature = "nanotdf-mbedtls")))]
 pub mod nanotdf_crypto;
 
-pub use encryption::{EncryptedPayload, SegmentInfo, SegmentedPayload, TdfEncryption};
+pub use encryption::{
+    EncryptedPayload, EncryptedSegment, SegmentInfo, SegmentedPayload, TdfEncryption,
+};
 #[cfg(feature = "kem-ec")]
 pub use nanotdf::{NanoTdf, NanoTdfBuilder, NanoTdfError, NanoTdfPayload, NanoTdfSignature};
 #[cfg(feature = "kem-ec")]

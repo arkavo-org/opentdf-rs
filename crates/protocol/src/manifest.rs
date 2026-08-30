@@ -18,6 +18,13 @@ pub struct TdfManifest {
     pub encryption_information: EncryptionInformation,
     #[serde(rename = "schemaVersion", skip_serializing_if = "Option::is_none")]
     pub schema_version: Option<String>,
+    /// OpenTDF specification version. Omitted by default so existing
+    /// manifests serialize unchanged; the `gguf-tdf/1` writer sets it.
+    #[serde(rename = "tdf_spec_version", skip_serializing_if = "Option::is_none")]
+    pub tdf_spec_version: Option<String>,
+    /// `gguf-tdf/1` hybrid index. Absent for every other TDF profile.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gguf: Option<crate::GgufIndex>,
 }
 
 /// Payload reference in TDF manifest
@@ -266,6 +273,8 @@ impl TdfManifest {
                 policy: String::new(),
             },
             schema_version: Some("3.0.0".to_string()),
+            tdf_spec_version: None,
+            gguf: None,
         }
     }
 
@@ -321,5 +330,64 @@ impl KeyAccess {
     /// Clear encrypted metadata
     pub fn clear_encrypted_metadata(&mut self) {
         self.encrypted_metadata = None;
+    }
+}
+
+#[cfg(test)]
+mod gguf_index_tests {
+    use super::*;
+
+    #[test]
+    fn gguf_index_round_trips_and_stays_absent_by_default() {
+        // Existing manifests must serialize unchanged: no new keys appear.
+        let plain = TdfManifest::new(
+            "0.payload".to_string(),
+            "https://kas.example.com".to_string(),
+        );
+        let value: serde_json::Value = serde_json::from_str(&plain.to_json().unwrap()).unwrap();
+        assert!(
+            value.get("gguf").is_none(),
+            "gguf must be absent when unset: {value}"
+        );
+        assert!(
+            value.get("tdf_spec_version").is_none(),
+            "tdf_spec_version must be absent when unset: {value}"
+        );
+
+        // The gguf-tdf/1 writer sets both and they round-trip.
+        let mut m = TdfManifest::new("header".to_string(), "https://kas.example.com".to_string());
+        m.tdf_spec_version = Some("4.3.0".to_string());
+        m.gguf = Some(crate::GgufIndex {
+            profile: crate::GGUF_TDF_PROFILE_V1.to_string(),
+            alignment: 32,
+            header_bytes: 64,
+            virtual_size: 352,
+            max_segment: 128,
+            tensors: vec![crate::GgufTensor {
+                name: "token_embd.weight".to_string(),
+                offset: 64,
+                size: 256,
+                segments: [1, 3],
+            }],
+            segments: vec![crate::GgufSegment {
+                id: 0,
+                kind: crate::GgufSegmentKind::Header,
+                plain: 64,
+                entry: "header".to_string(),
+            }],
+        });
+
+        let json = m.to_json().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["tdf_spec_version"], "4.3.0");
+        assert_eq!(value["gguf"]["profile"], "gguf-tdf/1");
+        assert_eq!(value["gguf"]["headerBytes"], 64);
+        assert_eq!(value["gguf"]["maxSegment"], 128);
+        assert_eq!(value["gguf"]["segments"][0]["kind"], "header");
+        assert_eq!(value["gguf"]["tensors"][0]["segments"][1], 3);
+
+        let back = TdfManifest::from_json(&json).unwrap();
+        assert_eq!(back.gguf.as_ref().unwrap().virtual_size, 352);
+        assert_eq!(back.tdf_spec_version.as_deref(), Some("4.3.0"));
     }
 }
