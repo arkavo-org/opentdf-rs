@@ -884,6 +884,9 @@ fn supports(feature: &str) -> Result<bool, ()> {
         // Official feature names kept conservative:
         "hexless" => Ok(true),
         "connectrpc" => Ok(true),
+        // Writes manifest.json at the zip root and resolves the payload entry
+        // from manifest.payload.url (opentdf/spec container rules).
+        "spec-container" => Ok(true),
 
         // Official catalog — unsupported until proven
         "assertions"
