@@ -11,7 +11,7 @@ use opentdf_crypto::{
 // Re-export protocol types for backward compatibility
 pub use opentdf_protocol::{
     EncryptionInformation, EncryptionMethod, IntegrityInformation, KeyAccess, Payload,
-    PolicyBinding, RootSignature, Segment, TdfManifest,
+    PolicyBinding, RootSignature, Segment, TDF_SPEC_VERSION, TdfManifest,
 };
 
 /// Extension trait for IntegrityInformation that requires crypto operations
@@ -230,7 +230,7 @@ mod tests {
         // Root schemaVersion remains the peer-visible version signal.
         assert_eq!(
             value.get("schemaVersion").and_then(|v| v.as_str()),
-            Some("3.0.0")
+            Some("4.3.0")
         );
 
         // Still accept the field when reading peer manifests that include it.
