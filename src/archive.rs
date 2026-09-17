@@ -15,10 +15,7 @@ use opentdf_protocol::KasError;
 #[cfg(feature = "kas-client")]
 use crate::kas::KasClient;
 
-#[cfg(feature = "kas-client")]
 use crate::TdfEncryption;
-
-#[cfg(feature = "kas-client")]
 use crate::manifest::IntegrityInformationExt;
 
 #[derive(Debug)]
@@ -120,59 +117,106 @@ impl<'a> TdfEntry<'a> {
     /// ```
     #[cfg(feature = "kas-client")]
     pub async fn decrypt_with_kas(&self, kas_client: &KasClient) -> Result<Vec<u8>, TdfError> {
-        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-
         // Unwrap the payload key using KAS
         // KasClient handles JWT signing internally
         let payload_key = kas_client.rewrap_standard_tdf(&self.manifest).await?;
 
-        // Create TDF encryption instance with the unwrapped payload key from KAS
-        // IMPORTANT: Use with_payload_key() not with_policy_key()!
         // The key from KAS IS the payload key, not a policy key
+        self.decrypt_with_key(&payload_key)
+    }
+
+    /// Decrypt the payload with an already-unwrapped payload key.
+    ///
+    /// Handles both the segmented (streamable) layout and the legacy
+    /// single-block layout. For the segmented layout every manifest segment
+    /// hash *and* the root signature are verified against the GMAC tags the
+    /// ciphertext produced, and any mismatch aborts before plaintext is
+    /// returned. Segment entries that omit `segmentSize` /
+    /// `encryptedSegmentSize` fall back to `segmentSizeDefault` /
+    /// `encryptedSegmentSizeDefault` per the spec.
+    pub fn decrypt_with_key(&self, payload_key: &[u8]) -> Result<Vec<u8>, TdfError> {
+        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+
+        // IMPORTANT: Use with_payload_key() not with_policy_key()!
         let tdf_encryption =
-            TdfEncryption::with_payload_key(&payload_key).map_err(|e| TdfError::CryptoError {
+            TdfEncryption::with_payload_key(payload_key).map_err(|e| TdfError::CryptoError {
                 algorithm: "AES-256-GCM".to_string(),
-                reason: "Invalid key from KAS".to_string(),
+                reason: "Invalid payload key".to_string(),
                 source: Some(Box::new(e)),
             })?;
 
-        // Check if this is a segmented TDF (modern format) or legacy (single block)
-        let segments = &self
-            .manifest
-            .encryption_information
-            .integrity_information
-            .segments;
+        let integrity = &self.manifest.encryption_information.integrity_information;
 
-        if !segments.is_empty() {
-            // Modern segmented format
-            // Convert Segment structs to (plaintext_size, encrypted_size) tuples
-            let segment_sizes: Vec<(u64, u64)> = segments
+        // Check if this is a segmented TDF (modern format) or legacy (single block)
+        if !integrity.segments.is_empty() {
+            // Modern segmented format: (plaintext_size, encrypted_size) per segment,
+            // with omitted sizes resolved from the integrityInformation defaults.
+            let segment_sizes = integrity.segment_sizes();
+
+            // The manifest must account for the payload exactly: bytes beyond
+            // the last segment belong to no segment and would never be
+            // authenticated, and a short payload is a truncated one.
+            // AES-GCM overhead per segment: a 12-byte IV prefix and a 16-byte tag.
+            const SEGMENT_OVERHEAD: u64 = 28;
+
+            // A declared plaintext size can never exceed its ciphertext minus
+            // that overhead. The plaintext sizes are pre-allocated before any
+            // segment is authenticated, so an unchecked value from a hostile
+            // manifest would abort the process on a failed allocation.
+            for (index, (plaintext, encrypted)) in segment_sizes.iter().enumerate() {
+                let max_plaintext = encrypted.saturating_sub(SEGMENT_OVERHEAD);
+                if *plaintext > max_plaintext {
+                    return Err(TdfError::CryptoError {
+                        algorithm: "AES-256-GCM-segments".to_string(),
+                        reason: format!(
+                            "integrity: segment {index} declares a {plaintext}-byte plaintext but \
+                             only {encrypted} encrypted bytes (at most {max_plaintext})"
+                        ),
+                        source: None,
+                    });
+                }
+            }
+
+            let described_size = segment_sizes
                 .iter()
-                .map(|s| {
-                    (
-                        s.segment_size.unwrap_or(0),
-                        s.encrypted_segment_size.unwrap_or(0),
-                    )
-                })
-                .collect();
+                .try_fold(0u64, |total, (_, encrypted)| total.checked_add(*encrypted))
+                .ok_or_else(|| TdfError::CryptoError {
+                    algorithm: "AES-256-GCM-segments".to_string(),
+                    reason: "integrity: the manifest's segment sizes overflow a 64-bit length"
+                        .to_string(),
+                    source: None,
+                })?;
+            if described_size != self.payload.len() as u64 {
+                return Err(TdfError::CryptoError {
+                    algorithm: "AES-256-GCM-segments".to_string(),
+                    reason: format!(
+                        "integrity: payload is {} bytes but the manifest's segments describe {} bytes",
+                        self.payload.len(),
+                        described_size
+                    ),
+                    source: None,
+                });
+            }
 
             let (plaintext, gmac_tags) = tdf_encryption
                 .decrypt_with_segments(&self.payload, &segment_sizes)
                 .map_err(|e| TdfError::CryptoError {
                     algorithm: "AES-256-GCM-segments".to_string(),
-                    reason: "Segment decryption failed".to_string(),
+                    reason: format!("integrity: segment decryption failed: {}", e),
                     source: Some(Box::new(e)),
                 })?;
 
-            // Verify root signature for integrity
-            self.manifest
-                .encryption_information
-                .integrity_information
-                .verify_root_signature(&gmac_tags, &payload_key)
-                .map_err(|e| TdfError::CryptoError {
-                    algorithm: "GMAC-SHA256".to_string(),
-                    reason: format!("Root signature verification failed: {}", e),
-                    source: None,
+            // Verify every segment hash and the root signature before any
+            // plaintext leaves this function.
+            integrity
+                .verify_segments_and_root_signature(&gmac_tags, payload_key)
+                .map_err(|e| {
+                    let reason = e.to_string();
+                    TdfError::CryptoError {
+                        algorithm: "GMAC-SHA256".to_string(),
+                        reason,
+                        source: Some(Box::new(e)),
+                    }
                 })?;
 
             Ok(plaintext)
@@ -192,12 +236,25 @@ impl<'a> TdfEntry<'a> {
                 aead::{Aead, KeyInit},
             };
 
-            let cipher = Aes256Gcm::new_from_slice(&payload_key).map_err(|_| {
-                TdfError::DecryptionFailed {
+            let cipher =
+                Aes256Gcm::new_from_slice(payload_key).map_err(|_| TdfError::DecryptionFailed {
                     reason: "Invalid key length".to_string(),
                     algorithm: Some("AES-256-GCM".to_string()),
-                }
-            })?;
+                })?;
+            // `Nonce::from_slice` panics on any length but 12, which would abort
+            // the process (and trap, on wasm) for a manifest we have not
+            // authenticated yet. An empty `method.iv` reaches here whenever a
+            // TDF carries no segments.
+            const GCM_NONCE_LENGTH: usize = 12;
+            if iv.len() != GCM_NONCE_LENGTH {
+                return Err(TdfError::DecryptionFailed {
+                    reason: format!(
+                        "integrity: method.iv is {} bytes, expected {GCM_NONCE_LENGTH}",
+                        iv.len()
+                    ),
+                    algorithm: Some("AES-256-GCM".to_string()),
+                });
+            }
             let nonce = Nonce::from_slice(&iv);
 
             // Decrypt the payload
@@ -255,7 +312,6 @@ pub enum TdfError {
     #[error("KAS error: {0}")]
     KasError(#[from] KasError),
 
-    #[cfg(feature = "kas-client")]
     #[error("Decryption failed: {reason}")]
     DecryptionFailed {
         reason: String,
@@ -341,7 +397,6 @@ impl TdfError {
             TdfError::CryptoError { .. } => "OPENTDF_E_CRYPTO",
             #[cfg(feature = "kas-client")]
             TdfError::KasError(_) => "OPENTDF_E_KAS",
-            #[cfg(feature = "kas-client")]
             TdfError::DecryptionFailed { .. } => "OPENTDF_E_DECRYPTION_FAILED",
             TdfError::PolicyValidationFailed { .. } => "OPENTDF_E_POLICY_VALIDATION",
         }
@@ -698,6 +753,56 @@ mod tests {
             .collect()
     }
 
+    /// Spec (integrity_information.md): `segmentSize` / `encryptedSegmentSize`
+    /// are optional and inferred from `segmentSizeDefault` /
+    /// `encryptedSegmentSizeDefault`. A reader must not treat "omitted" as 0.
+    #[test]
+    fn decrypts_segmented_tdf_whose_segments_omit_sizes() -> Result<(), TdfError> {
+        use crate::manifest::IntegrityInformationExt;
+
+        // 3 equal segments so every entry legitimately matches the defaults.
+        const SEGMENT: usize = 64;
+        let plaintext: Vec<u8> = (0..(SEGMENT * 3) as u32).map(|i| i as u8).collect();
+
+        let enc = TdfEncryption::new().expect("encryption context");
+        let segmented = enc
+            .encrypt_with_segments(&plaintext, SEGMENT)
+            .expect("segment encrypt");
+        assert_eq!(segmented.segment_info.len(), 3);
+
+        let mut manifest = manifest_with_url("0.payload");
+        manifest.encryption_information.method.iv = String::new();
+        {
+            let integrity = &mut manifest.encryption_information.integrity_information;
+            let first = &segmented.segment_info[0];
+            integrity.segment_size_default = first.plaintext_size;
+            integrity.encrypted_segment_size_default = first.encrypted_size;
+            integrity
+                .generate_root_signature(&segmented.gmac_tags, enc.payload_key())
+                .expect("root signature");
+        }
+        for seg in &segmented.segment_info {
+            // Sizes omitted on purpose.
+            manifest.add_segment(seg.hash.clone(), None, None);
+        }
+
+        // Wire check: the manifest really omits both keys.
+        let v: serde_json::Value = serde_json::from_str(&manifest.to_json()?)?;
+        let seg0 = &v["encryptionInformation"]["integrityInformation"]["segments"][0];
+        assert!(seg0.get("segmentSize").is_none(), "{seg0}");
+        assert!(seg0.get("encryptedSegmentSize").is_none(), "{seg0}");
+
+        let mut builder = TdfArchiveMemoryBuilder::new();
+        builder.add_entry_with_segments(&manifest, &segmented.segments, 0)?;
+        let bytes = builder.finish()?;
+
+        let mut archive = TdfArchive::new(Cursor::new(bytes))?;
+        let entry = archive.by_index()?;
+        let decrypted = entry.decrypt_with_key(enc.payload_key())?;
+        assert_eq!(decrypted, plaintext);
+        Ok(())
+    }
+
     #[test]
     fn builder_writes_spec_manifest_name_and_payload_from_url() -> Result<(), TdfError> {
         let bytes = create_test_archive()?;
@@ -869,6 +974,158 @@ mod tests {
         assert_eq!(archive.get_entry(1)?.payload, b"second payload data");
         assert!(archive.get_entry(2).is_err());
         Ok(())
+    }
+
+    /// Builds a 3-segment TDF in memory, letting the caller tamper with the
+    /// manifest after it has been signed but before it is written.
+    /// Returns (archive bytes, payload key, plaintext).
+    fn segmented_tdf(tamper: impl FnOnce(&mut TdfManifest)) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        use crate::manifest::IntegrityInformationExt;
+
+        const SEGMENT: usize = 64;
+        let plaintext: Vec<u8> = (0..(SEGMENT * 3) as u32).map(|i| i as u8).collect();
+
+        let enc = TdfEncryption::new().expect("encryption context");
+        let segmented = enc
+            .encrypt_with_segments(&plaintext, SEGMENT)
+            .expect("segment encrypt");
+
+        let mut manifest = manifest_with_url("0.payload");
+        manifest.encryption_information.method.iv = String::new();
+        {
+            let integrity = &mut manifest.encryption_information.integrity_information;
+            let first = &segmented.segment_info[0];
+            integrity.segment_size_default = first.plaintext_size;
+            integrity.encrypted_segment_size_default = first.encrypted_size;
+            integrity
+                .generate_root_signature(&segmented.gmac_tags, enc.payload_key())
+                .expect("root signature");
+        }
+        for seg in &segmented.segment_info {
+            manifest.add_segment(
+                seg.hash.clone(),
+                Some(seg.plaintext_size),
+                Some(seg.encrypted_size),
+            );
+        }
+
+        tamper(&mut manifest);
+
+        let mut builder = TdfArchiveMemoryBuilder::new();
+        builder
+            .add_entry_with_segments(&manifest, &segmented.segments, 0)
+            .expect("write segmented entry");
+        (
+            builder.finish().expect("finish archive"),
+            enc.payload_key().to_vec(),
+            plaintext,
+        )
+    }
+
+    /// Flips the first character of a base64 string to a different, still
+    /// valid base64 character, so the value decodes but no longer matches.
+    fn flip_first_b64_char(value: &str) -> String {
+        let mut chars: Vec<char> = value.chars().collect();
+        assert!(!chars.is_empty(), "empty base64 value");
+        chars[0] = if chars[0] == 'A' { 'B' } else { 'A' };
+        chars.into_iter().collect()
+    }
+
+    fn decrypt_error_message(bytes: Vec<u8>, key: &[u8]) -> String {
+        let mut archive = TdfArchive::new(Cursor::new(bytes)).expect("open archive");
+        let entry = archive.by_index().expect("read entry");
+        let err = entry
+            .decrypt_with_key(key)
+            .expect_err("decrypt must abort on an integrity failure");
+        err.to_string()
+    }
+
+    /// Control for the two tamper tests below: an untouched segmented TDF
+    /// still decrypts once both integrity checks run.
+    #[test]
+    fn untampered_segmented_tdf_decrypts() {
+        let (bytes, key, plaintext) = segmented_tdf(|_| {});
+        let mut archive = TdfArchive::new(Cursor::new(bytes)).expect("open archive");
+        let entry = archive.by_index().expect("read entry");
+        assert_eq!(entry.decrypt_with_key(&key).expect("decrypt"), plaintext);
+    }
+
+    /// A hostile `segmentSize` is pre-allocated before any segment is
+    /// authenticated, so it must be rejected rather than aborting the process
+    /// on a failed allocation. Plaintext can never exceed ciphertext minus the
+    /// 12-byte IV and 16-byte tag.
+    #[test]
+    fn oversized_declared_plaintext_is_rejected() {
+        let (bytes, key, _) = segmented_tdf(|manifest| {
+            let segment = &mut manifest
+                .encryption_information
+                .integrity_information
+                .segments[0];
+            segment.segment_size = Some(1 << 60);
+        });
+        let err = decrypt_error_message(bytes, &key);
+        assert!(err.contains("integrity"), "{err}");
+        assert!(err.contains("segment"), "{err}");
+    }
+
+    /// A TDF with no segments takes the legacy single-block branch, where an
+    /// empty or short `method.iv` used to panic inside `Nonce::from_slice`
+    /// (an unrecoverable trap on wasm) before anything was authenticated.
+    #[test]
+    fn legacy_branch_rejects_short_iv_instead_of_panicking() {
+        let (bytes, key, _) = segmented_tdf(|manifest| {
+            manifest
+                .encryption_information
+                .integrity_information
+                .segments
+                .clear();
+            manifest.encryption_information.method.iv = String::new();
+        });
+        let err = decrypt_error_message(bytes, &key);
+        assert!(err.contains("method.iv"), "{err}");
+        assert!(err.contains("integrity"), "{err}");
+    }
+
+    /// Spec (integrity_information.md): every `segments[i].hash` authenticates
+    /// its segment. Editing one must abort decrypt even though the root
+    /// signature still verifies — it is computed from the real ciphertext tags.
+    #[test]
+    fn tampered_segment_hash_aborts_decrypt() {
+        let (bytes, key, _) = segmented_tdf(|manifest| {
+            let segment = &mut manifest
+                .encryption_information
+                .integrity_information
+                .segments[1];
+            segment.hash = flip_first_b64_char(&segment.hash);
+        });
+
+        let msg = decrypt_error_message(bytes, &key);
+        assert!(msg.contains("segment"), "{msg}");
+        assert!(msg.contains("signature"), "{msg}");
+        assert!(
+            msg.to_lowercase().contains("integrity") || msg.to_lowercase().contains("signature"),
+            "{msg}"
+        );
+    }
+
+    /// A tampered `rootSignature.sig` must abort decrypt, with wording the
+    /// cross-SDK conformance harness matches on.
+    #[test]
+    fn tampered_root_signature_aborts_decrypt() {
+        let (bytes, key, _) = segmented_tdf(|manifest| {
+            let root = &mut manifest
+                .encryption_information
+                .integrity_information
+                .root_signature;
+            root.sig = flip_first_b64_char(&root.sig);
+        });
+
+        let msg = decrypt_error_message(bytes, &key);
+        assert!(msg.contains("root"), "{msg}");
+        assert!(
+            msg.to_lowercase().contains("integrity") || msg.to_lowercase().contains("signature"),
+            "{msg}"
+        );
     }
 }
 

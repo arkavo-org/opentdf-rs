@@ -102,6 +102,29 @@ pub fn verify_root_signature(
     }
 }
 
+/// Verify one manifest segment hash against the GMAC tag computed from the
+/// ciphertext, in constant time.
+///
+/// `encrypt_with_segments` writes a segment hash as `base64(raw 16-byte GMAC
+/// tag)`; this mirrors exactly that encoding. (Pre-4.3.0 Go TDFs hex-encode the
+/// tag before base64, but this crate neither writes nor verifies that form: its
+/// root signature is an HMAC over the raw tags, so such a payload already fails
+/// `verify_root_signature`.)
+///
+/// # Security Note
+///
+/// Uses `subtle::ConstantTimeEq`, which also rejects a length mismatch, to
+/// prevent timing attacks.
+pub fn verify_segment_hash(expected_hash_b64: &str, gmac_tag: &[u8]) -> Result<(), HmacError> {
+    let expected = BASE64.decode(expected_hash_b64)?;
+
+    if expected.ct_eq(gmac_tag).into() {
+        Ok(())
+    } else {
+        Err(HmacError::VerificationFailed)
+    }
+}
+
 /// Calculate policy binding using HMAC-SHA256
 ///
 /// This matches the OpenTDF Go SDK format:

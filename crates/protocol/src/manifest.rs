@@ -213,6 +213,26 @@ impl Default for IntegrityInformation {
     }
 }
 
+impl IntegrityInformation {
+    /// Resolve every segment's `(plaintext_size, encrypted_size)`.
+    ///
+    /// Spec (integrity_information.md): `segmentSize` and
+    /// `encryptedSegmentSize` are optional on a segment and are inferred from
+    /// `segmentSizeDefault` / `encryptedSegmentSizeDefault` when omitted.
+    pub fn segment_sizes(&self) -> Vec<(u64, u64)> {
+        self.segments
+            .iter()
+            .map(|s| {
+                (
+                    s.segment_size.unwrap_or(self.segment_size_default),
+                    s.encrypted_segment_size
+                        .unwrap_or(self.encrypted_segment_size_default),
+                )
+            })
+            .collect()
+    }
+}
+
 /// Root signature for integrity verification
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RootSignature {
