@@ -78,6 +78,12 @@ fn payload_entry_name_for(manifest: &TdfManifest, index: usize) -> Result<String
             expected: Some("a relative zip member name without '..' or leading '/'".to_string()),
         });
     }
+    if is_manifest_entry_name(url) {
+        return Err(TdfError::InvalidStructure {
+            reason: format!("payload url collides with the manifest entry name: {url:?}"),
+            expected: Some("a member name that is not shaped like a manifest entry".to_string()),
+        });
+    }
     Ok(url.to_string())
 }
 
@@ -778,6 +784,35 @@ mod tests {
             let err = archive.by_index().unwrap_err();
             assert!(err.to_string().contains("unsafe"), "{bad}: {err}");
         }
+        Ok(())
+    }
+
+    #[test]
+    fn reader_rejects_payload_url_shaped_like_manifest_entry() -> Result<(), TdfError> {
+        let m = manifest_with_url("2.manifest.json").to_json()?;
+        // The collision check fires before any lookup, so no payload member is needed.
+        let bytes = raw_zip(&[("manifest.json", m.as_bytes())]);
+        let mut archive = TdfArchive::new(Cursor::new(bytes))?;
+        let err = archive.by_index().unwrap_err();
+        assert!(err.to_string().contains("manifest"), "{err}");
+        Ok(())
+    }
+
+    #[test]
+    fn builder_rejects_payload_url_shaped_like_manifest_entry() -> Result<(), TdfError> {
+        let temp_file = NamedTempFile::new()?;
+        let mut builder = TdfArchiveBuilder::new(temp_file.path())?;
+        let err = builder
+            .add_entry(&manifest_with_url("2.manifest.json"), b"x", 0)
+            .unwrap_err();
+        assert!(err.to_string().contains("manifest"), "{err}");
+
+        // Confirm the rejection happened before any member was written.
+        let bytes = {
+            builder.finish()?;
+            std::fs::read(temp_file.path())?
+        };
+        assert!(names_of(&bytes).is_empty(), "{:?}", names_of(&bytes));
         Ok(())
     }
 
