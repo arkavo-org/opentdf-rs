@@ -24,6 +24,7 @@ pub use kas::{
 };
 
 pub use manifest::{
-    EncryptionInformation, EncryptionMethod, IntegrityInformation, KeyAccess, Payload,
-    PolicyBinding, RootSignature, Segment, TDF_SPEC_VERSION, TdfManifest, key_access_type,
+    Assertion, AssertionBinding, AssertionStatement, EncryptionInformation, EncryptionMethod,
+    IntegrityInformation, KeyAccess, Payload, PolicyBinding, RootSignature, Segment,
+    TDF_SPEC_VERSION, TdfManifest, key_access_type,
 };
