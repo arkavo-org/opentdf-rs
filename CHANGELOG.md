@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- TDF archives now write the manifest zip entry as `manifest.json` (spec-compliant) instead of `0.manifest.json`. Readers accept both names, and the payload entry is resolved from `manifest.payload.url` rather than assumed. `schemaVersion` is unchanged (still `4.3.0`); `tdf_spec_version` is now read at either its legacy or spec-conformant placement but never written. **Interop impact:** archives written by this version cannot be opened by released otdfctl, or the upstream opentdf/platform Go, Java, or JS SDKs until they add a `manifest.json` read fallback (an upstream reader-fallback PR is planned). Files written by older versions of this crate remain readable.
+
 ## [0.15.0] — 2026-08-30
 
 Additive API for the `gguf-tdf/1` profile (multi-member archives with one OpenTDF segment per zip member) plus a bounded-plaintext fix in segment decryption. No wire-format change; existing archives read and write as before.

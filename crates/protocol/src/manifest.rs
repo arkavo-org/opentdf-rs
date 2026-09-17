@@ -10,6 +10,9 @@
 
 use serde::{Deserialize, Serialize};
 
+/// The TDF spec version written into `schemaVersion` by every writer.
+pub const TDF_SPEC_VERSION: &str = "4.3.0";
+
 /// TDF manifest structure
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TdfManifest {
@@ -272,10 +275,24 @@ impl TdfManifest {
                 },
                 policy: String::new(),
             },
-            schema_version: Some("3.0.0".to_string()),
+            schema_version: Some(TDF_SPEC_VERSION.to_string()),
             tdf_spec_version: None,
             gguf: None,
         }
+    }
+
+    /// Resolve the spec version a peer wrote, in priority order:
+    /// root `schemaVersion` (what every SDK writes), then root `tdf_spec_version`
+    /// (spec prose), then `payload.tdf_spec_version` (spec JSON schema).
+    pub fn spec_version(&self) -> Option<&str> {
+        [
+            self.schema_version.as_deref(),
+            self.tdf_spec_version.as_deref(),
+            self.payload.tdf_spec_version.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|v| !v.is_empty())
     }
 
     /// Set the policy for the manifest using a raw string
@@ -389,5 +406,70 @@ mod gguf_index_tests {
         let back = TdfManifest::from_json(&json).unwrap();
         assert_eq!(back.gguf.as_ref().unwrap().virtual_size, 352);
         assert_eq!(back.tdf_spec_version.as_deref(), Some("4.3.0"));
+    }
+}
+
+#[cfg(test)]
+mod spec_version_tests {
+    use super::*;
+
+    fn minimal_json(top: &str, payload_extra: &str) -> String {
+        format!(
+            r#"{{
+            "payload": {{"type":"reference","url":"0.payload","protocol":"zip","isEncrypted":true{payload_extra}}},
+            "encryptionInformation": {{
+                "type":"split","keyAccess":[],
+                "method":{{"algorithm":"AES-256-GCM","isStreamable":true,"iv":""}},
+                "integrityInformation":{{"rootSignature":{{"alg":"HS256","sig":""}},"segmentHashAlg":"GMAC","segments":[],"segmentSizeDefault":0,"encryptedSegmentSizeDefault":0}},
+                "policy":""
+            }}{top}
+        }}"#
+        )
+    }
+
+    #[test]
+    fn spec_version_prefers_schema_version() {
+        let m = TdfManifest::from_json(&minimal_json(
+            r#","schemaVersion":"4.3.0","tdf_spec_version":"9.9.9""#,
+            r#","tdf_spec_version":"8.8.8""#,
+        ))
+        .unwrap();
+        assert_eq!(m.spec_version(), Some("4.3.0"));
+    }
+
+    #[test]
+    fn spec_version_then_top_level_tdf_spec_version() {
+        let m = TdfManifest::from_json(&minimal_json(
+            r#","tdf_spec_version":"9.9.9""#,
+            r#","tdf_spec_version":"8.8.8""#,
+        ))
+        .unwrap();
+        assert_eq!(m.spec_version(), Some("9.9.9"));
+    }
+
+    #[test]
+    fn spec_version_then_payload_tdf_spec_version() {
+        let m =
+            TdfManifest::from_json(&minimal_json("", r#","tdf_spec_version":"8.8.8""#)).unwrap();
+        assert_eq!(m.spec_version(), Some("8.8.8"));
+    }
+
+    #[test]
+    fn spec_version_absent_is_none() {
+        let m = TdfManifest::from_json(&minimal_json("", "")).unwrap();
+        assert_eq!(m.spec_version(), None);
+    }
+
+    #[test]
+    fn new_manifest_writes_schema_version_4_3_0_and_no_tdf_spec_version() {
+        let m = TdfManifest::new(
+            "0.payload".to_string(),
+            "https://kas.example.com".to_string(),
+        );
+        let v: serde_json::Value = serde_json::from_str(&m.to_json().unwrap()).unwrap();
+        assert_eq!(v["schemaVersion"], TDF_SPEC_VERSION);
+        assert_eq!(v["schemaVersion"], "4.3.0");
+        assert!(v.get("tdf_spec_version").is_none());
+        assert!(v["payload"].get("tdf_spec_version").is_none());
     }
 }

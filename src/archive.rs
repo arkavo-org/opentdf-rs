@@ -26,6 +26,67 @@ pub struct TdfArchive<R: Read + Seek> {
     zip_archive: ZipArchive<R>,
 }
 
+/// Spec (opentdf/spec schema/OpenTDF/README.md): the manifest entry MUST be
+/// `manifest.json` at the archive root.
+pub const TDF_MANIFEST_FILE_NAME: &str = "manifest.json";
+/// Name every SDK wrote before spec compliance; accepted on read forever.
+pub const LEGACY_TDF_MANIFEST_FILE_NAME: &str = "0.manifest.json";
+/// Default payload entry name. Written into `manifest.payload.url` by callers
+/// of `TdfManifest::new`; on read it is only a fallback for an empty url.
+pub const TDF_PAYLOAD_FILE_NAME: &str = "0.payload";
+
+fn manifest_entry_name_for_index(index: usize) -> (String, Option<String>) {
+    if index == 0 {
+        (
+            TDF_MANIFEST_FILE_NAME.to_string(),
+            Some(LEGACY_TDF_MANIFEST_FILE_NAME.to_string()),
+        )
+    } else {
+        (format!("{}.manifest.json", index), None)
+    }
+}
+
+fn is_safe_entry_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('/')
+        && !name.contains('\\')
+        && !name.split('/').any(|seg| seg == "..")
+}
+
+fn is_manifest_entry_name(name: &str) -> bool {
+    if name == TDF_MANIFEST_FILE_NAME {
+        return true;
+    }
+    match name.strip_suffix(".manifest.json") {
+        Some(prefix) => !prefix.is_empty() && prefix.bytes().all(|b| b.is_ascii_digit()),
+        None => false,
+    }
+}
+
+fn payload_entry_name_for(manifest: &TdfManifest, index: usize) -> Result<String, TdfError> {
+    let url = manifest.payload.url.as_str();
+    if url.is_empty() {
+        return Ok(if index == 0 {
+            TDF_PAYLOAD_FILE_NAME.to_string()
+        } else {
+            format!("{}.payload", index)
+        });
+    }
+    if !is_safe_entry_name(url) {
+        return Err(TdfError::InvalidStructure {
+            reason: format!("unsafe payload url in manifest: {url:?}"),
+            expected: Some("a relative zip member name without '..' or leading '/'".to_string()),
+        });
+    }
+    if is_manifest_entry_name(url) {
+        return Err(TdfError::InvalidStructure {
+            reason: format!("payload url collides with the manifest entry name: {url:?}"),
+            expected: Some("a member name that is not shaped like a manifest entry".to_string()),
+        });
+    }
+    Ok(url.to_string())
+}
+
 #[derive(Debug)]
 pub struct TdfEntry<'a> {
     pub manifest: TdfManifest,
@@ -335,10 +396,21 @@ impl<R: Read + Seek> TdfArchive<R> {
         Ok(Self { zip_archive })
     }
 
-    /// Returns the number of TDF entries in the archive
+    /// Returns the number of TDF entries in the archive (one per manifest member).
     pub fn len(&self) -> usize {
-        // Each TDF entry consists of a manifest and payload, so divide by 2
-        self.zip_archive.len() / 2
+        let mut count = 0;
+        let mut saw_index0 = false;
+        for name in self.zip_archive.file_names() {
+            if name == TDF_MANIFEST_FILE_NAME || name == LEGACY_TDF_MANIFEST_FILE_NAME {
+                if !saw_index0 {
+                    saw_index0 = true;
+                    count += 1;
+                }
+            } else if is_manifest_entry_name(name) {
+                count += 1;
+            }
+        }
+        count
     }
 
     /// Returns whether the archive is empty
@@ -351,30 +423,45 @@ impl<R: Read + Seek> TdfArchive<R> {
         self.get_entry(0)
     }
 
+    fn has_member(&self, name: &str) -> bool {
+        self.zip_archive.index_for_name(name).is_some()
+    }
+
     /// Gets a specific TDF entry by index
     pub fn get_entry(&mut self, index: usize) -> Result<TdfEntry<'_>, TdfError> {
-        let manifest_name = format!("{}.manifest.json", index);
-        let payload_name = format!("{}.payload", index);
+        let (primary, legacy) = manifest_entry_name_for_index(index);
+        let manifest_name = if self.has_member(&primary) {
+            primary.clone()
+        } else if let Some(l) = legacy.filter(|l| self.has_member(l)) {
+            l
+        } else {
+            return Err(TdfError::InvalidStructure {
+                reason: format!("Missing manifest file: {}", primary),
+                expected: Some(format!(
+                    "TDF archive should contain {} (or legacy {})",
+                    TDF_MANIFEST_FILE_NAME, LEGACY_TDF_MANIFEST_FILE_NAME
+                )),
+            });
+        };
 
         // Read manifest
         let manifest = {
-            let mut manifest_file = self.zip_archive.by_name(&manifest_name).map_err(|_| {
-                TdfError::InvalidStructure {
-                    reason: format!("Missing manifest file: {}", manifest_name),
-                    expected: Some("TDF archive should contain manifest.json files".to_string()),
-                }
-            })?;
+            let mut manifest_file = self.zip_archive.by_name(&manifest_name)?;
             let mut manifest_contents = String::new();
             manifest_file.read_to_string(&mut manifest_contents)?;
             TdfManifest::from_json(&manifest_contents)?
         };
 
-        // Read payload
+        // Read payload, named by manifest.payload.url
+        let payload_name = payload_entry_name_for(&manifest, index)?;
         let payload = {
             let mut payload_file = self.zip_archive.by_name(&payload_name).map_err(|_| {
                 TdfError::InvalidStructure {
-                    reason: format!("Missing payload file: {}", payload_name),
-                    expected: Some("TDF archive should contain .payload files".to_string()),
+                    reason: format!("Missing payload file: {payload_name:?}"),
+                    expected: Some(
+                        "TDF archive should contain the member named by manifest.payload.url"
+                            .to_string(),
+                    ),
                 }
             })?;
             let mut payload = Vec::new();
@@ -421,17 +508,19 @@ impl TdfArchiveBuilder {
         index: usize,
     ) -> Result<(), TdfError> {
         let manifest_json = manifest.to_json()?;
+        let (manifest_name, _) = manifest_entry_name_for_index(index);
+        let payload_name = payload_entry_name_for(manifest, index)?;
 
         // Write manifest
         self.writer.start_file::<_, ()>(
-            format!("{}.manifest.json", index),
+            manifest_name,
             FileOptions::default().compression_method(zip::CompressionMethod::Stored),
         )?;
         self.writer.write_all(manifest_json.as_bytes())?;
 
         // Write payload with explicit type parameters
         self.writer.start_file::<_, ()>(
-            format!("{}.payload", index),
+            payload_name,
             FileOptions::default().compression_method(zip::CompressionMethod::Stored),
         )?;
         self.writer.write_all(payload)?;
@@ -449,17 +538,19 @@ impl TdfArchiveBuilder {
         index: usize,
     ) -> Result<(), TdfError> {
         let manifest_json = manifest.to_json()?;
+        let (manifest_name, _) = manifest_entry_name_for_index(index);
+        let payload_name = payload_entry_name_for(manifest, index)?;
 
         // Write manifest
         self.writer.start_file::<_, ()>(
-            format!("{}.manifest.json", index),
+            manifest_name,
             FileOptions::default().compression_method(zip::CompressionMethod::Stored),
         )?;
         self.writer.write_all(manifest_json.as_bytes())?;
 
         // Write payload - concatenate all segments
         self.writer.start_file::<_, ()>(
-            format!("{}.payload", index),
+            payload_name,
             FileOptions::default().compression_method(zip::CompressionMethod::Stored),
         )?;
 
@@ -501,17 +592,19 @@ impl TdfArchiveMemoryBuilder {
         index: usize,
     ) -> Result<(), TdfError> {
         let manifest_json = manifest.to_json()?;
+        let (manifest_name, _) = manifest_entry_name_for_index(index);
+        let payload_name = payload_entry_name_for(manifest, index)?;
 
         // Write manifest
         self.writer.start_file::<_, ()>(
-            format!("{}.manifest.json", index),
+            manifest_name,
             FileOptions::default().compression_method(zip::CompressionMethod::Stored),
         )?;
         self.writer.write_all(manifest_json.as_bytes())?;
 
         // Write payload
         self.writer.start_file::<_, ()>(
-            format!("{}.payload", index),
+            payload_name,
             FileOptions::default().compression_method(zip::CompressionMethod::Stored),
         )?;
         self.writer.write_all(payload)?;
@@ -527,17 +620,19 @@ impl TdfArchiveMemoryBuilder {
         index: usize,
     ) -> Result<(), TdfError> {
         let manifest_json = manifest.to_json()?;
+        let (manifest_name, _) = manifest_entry_name_for_index(index);
+        let payload_name = payload_entry_name_for(manifest, index)?;
 
         // Write manifest
         self.writer.start_file::<_, ()>(
-            format!("{}.manifest.json", index),
+            manifest_name,
             FileOptions::default().compression_method(zip::CompressionMethod::Stored),
         )?;
         self.writer.write_all(manifest_json.as_bytes())?;
 
         // Write payload - concatenate all segments
         self.writer.start_file::<_, ()>(
-            format!("{}.payload", index),
+            payload_name,
             FileOptions::default().compression_method(zip::CompressionMethod::Stored),
         )?;
 
@@ -564,111 +659,215 @@ impl Default for TdfArchiveMemoryBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
+    use std::io::{Cursor, Write};
     use tempfile::NamedTempFile;
+    use zip::write::FileOptions;
+
+    fn manifest_with_url(url: &str) -> TdfManifest {
+        TdfManifest::new(url.to_string(), "http://kas.example.com".to_string())
+    }
 
     fn create_test_archive() -> Result<Vec<u8>, TdfError> {
-        let manifest = TdfManifest::new(
-            "0.payload".to_string(),
-            "http://kas.example.com".to_string(),
-        );
+        let manifest = manifest_with_url("0.payload");
         let payload = b"test payload data".to_vec();
-
         let temp_file = NamedTempFile::new()?;
         let mut builder = TdfArchiveBuilder::new(temp_file.path())?;
         builder.add_entry(&manifest, &payload, 0)?;
         builder.finish()?;
-
         Ok(std::fs::read(temp_file.path())?)
     }
 
+    /// Hand-build a zip with arbitrary member names, bypassing TdfArchiveBuilder.
+    fn raw_zip(members: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut w = ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, data) in members {
+            w.start_file::<_, ()>(
+                *name,
+                FileOptions::default().compression_method(zip::CompressionMethod::Stored),
+            )
+            .unwrap();
+            w.write_all(data).unwrap();
+        }
+        w.finish().unwrap().into_inner()
+    }
+
+    fn names_of(bytes: &[u8]) -> Vec<String> {
+        let mut z = ZipArchive::new(Cursor::new(bytes.to_vec())).unwrap();
+        (0..z.len())
+            .map(|i| z.by_index(i).unwrap().name().to_string())
+            .collect()
+    }
+
     #[test]
-    fn test_tdf_archive_creation_and_reading() -> Result<(), TdfError> {
-        let archive_data = create_test_archive()?;
-        let cursor = Cursor::new(archive_data);
-        let mut archive = TdfArchive::new(cursor)?;
-
-        assert_eq!(archive.len(), 1);
-
-        let entry = archive.by_index()?;
-        assert_eq!(entry.payload, b"test payload data");
-        assert_eq!(entry.manifest.payload.url, "0.payload");
-
+    fn builder_writes_spec_manifest_name_and_payload_from_url() -> Result<(), TdfError> {
+        let bytes = create_test_archive()?;
+        let names = names_of(&bytes);
+        assert!(names.contains(&"manifest.json".to_string()), "{names:?}");
+        assert!(!names.contains(&"0.manifest.json".to_string()), "{names:?}");
+        assert!(names.contains(&"0.payload".to_string()), "{names:?}");
         Ok(())
     }
 
     #[test]
-    fn test_tdf_archive_validation() -> Result<(), TdfError> {
-        let archive_data = create_test_archive()?;
-        let cursor = Cursor::new(archive_data);
-        let mut archive = TdfArchive::new(cursor)?;
+    fn builder_payload_entry_follows_manifest_url() -> Result<(), TdfError> {
+        let temp_file = NamedTempFile::new()?;
+        let mut builder = TdfArchiveBuilder::new(temp_file.path())?;
+        builder.add_entry(&manifest_with_url("data.bin"), b"abc", 0)?;
+        builder.finish()?;
+        let bytes = std::fs::read(temp_file.path())?;
+        assert_eq!(names_of(&bytes), vec!["manifest.json", "data.bin"]);
+        let mut archive = TdfArchive::new(Cursor::new(bytes))?;
+        assert_eq!(archive.by_index()?.payload, b"abc");
+        Ok(())
+    }
 
+    #[test]
+    fn memory_builder_matches_file_builder_names() -> Result<(), TdfError> {
+        let mut b = TdfArchiveMemoryBuilder::new();
+        b.add_entry(&manifest_with_url("0.payload"), b"x", 0)?;
+        let bytes = b.finish()?;
+        assert_eq!(names_of(&bytes), vec!["manifest.json", "0.payload"]);
+        Ok(())
+    }
+
+    #[test]
+    fn reader_accepts_legacy_manifest_name() -> Result<(), TdfError> {
+        let m = manifest_with_url("0.payload").to_json()?;
+        let bytes = raw_zip(&[("0.manifest.json", m.as_bytes()), ("0.payload", b"legacy")]);
+        let mut archive = TdfArchive::new(Cursor::new(bytes))?;
+        assert_eq!(archive.len(), 1);
+        assert_eq!(archive.by_index()?.payload, b"legacy");
+        Ok(())
+    }
+
+    #[test]
+    fn reader_prefers_spec_manifest_name_when_both_present() -> Result<(), TdfError> {
+        let spec = manifest_with_url("a").to_json()?;
+        let legacy = manifest_with_url("b").to_json()?;
+        let bytes = raw_zip(&[
+            ("0.manifest.json", legacy.as_bytes()),
+            ("manifest.json", spec.as_bytes()),
+            ("a", b"A"),
+            ("b", b"B"),
+        ]);
+        let mut archive = TdfArchive::new(Cursor::new(bytes))?;
+        assert_eq!(archive.by_index()?.payload, b"A");
+        Ok(())
+    }
+
+    #[test]
+    fn reader_falls_back_to_0_payload_when_url_empty() -> Result<(), TdfError> {
+        let m = manifest_with_url("").to_json()?;
+        let bytes = raw_zip(&[("manifest.json", m.as_bytes()), ("0.payload", b"fb")]);
+        let mut archive = TdfArchive::new(Cursor::new(bytes))?;
+        assert_eq!(archive.by_index()?.payload, b"fb");
+        Ok(())
+    }
+
+    #[test]
+    fn reader_errors_when_url_names_missing_entry() -> Result<(), TdfError> {
+        let m = manifest_with_url("missing.bin").to_json()?;
+        let bytes = raw_zip(&[("manifest.json", m.as_bytes()), ("0.payload", b"x")]);
+        let mut archive = TdfArchive::new(Cursor::new(bytes))?;
+        let err = archive.by_index().unwrap_err();
+        assert!(err.to_string().contains("missing.bin"), "{err}");
+        Ok(())
+    }
+
+    #[test]
+    fn reader_rejects_unsafe_payload_url() -> Result<(), TdfError> {
+        for bad in ["../x", "/abs", "a\\b", "x/../y"] {
+            let m = manifest_with_url(bad).to_json()?;
+            // The safety check fires before any lookup, so no payload member is needed.
+            let bytes = raw_zip(&[("manifest.json", m.as_bytes())]);
+            let mut archive = TdfArchive::new(Cursor::new(bytes))?;
+            let err = archive.by_index().unwrap_err();
+            assert!(err.to_string().contains("unsafe"), "{bad}: {err}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn reader_rejects_payload_url_shaped_like_manifest_entry() -> Result<(), TdfError> {
+        let m = manifest_with_url("2.manifest.json").to_json()?;
+        // The collision check fires before any lookup, so no payload member is needed.
+        let bytes = raw_zip(&[("manifest.json", m.as_bytes())]);
+        let mut archive = TdfArchive::new(Cursor::new(bytes))?;
+        let err = archive.by_index().unwrap_err();
+        assert!(err.to_string().contains("manifest"), "{err}");
+        Ok(())
+    }
+
+    #[test]
+    fn builder_rejects_payload_url_shaped_like_manifest_entry() -> Result<(), TdfError> {
+        let temp_file = NamedTempFile::new()?;
+        let mut builder = TdfArchiveBuilder::new(temp_file.path())?;
+        let err = builder
+            .add_entry(&manifest_with_url("2.manifest.json"), b"x", 0)
+            .unwrap_err();
+        assert!(err.to_string().contains("manifest"), "{err}");
+
+        // Confirm the rejection happened before any member was written.
+        let bytes = {
+            builder.finish()?;
+            std::fs::read(temp_file.path())?
+        };
+        assert!(names_of(&bytes).is_empty(), "{:?}", names_of(&bytes));
+        Ok(())
+    }
+
+    #[test]
+    fn len_counts_manifests_not_members() -> Result<(), TdfError> {
+        let m = manifest_with_url("0.payload").to_json()?;
+        let bytes = raw_zip(&[
+            ("manifest.json", m.as_bytes()),
+            ("0.payload", b"x"),
+            ("extra.txt", b"y"),
+        ]);
+        let mut archive = TdfArchive::new(Cursor::new(bytes))?;
+        assert_eq!(archive.len(), 1);
         archive.validate()?;
         Ok(())
     }
 
     #[test]
-    fn test_get_entry() -> Result<(), Box<dyn std::error::Error>> {
-        use tempfile::NamedTempFile;
+    fn test_tdf_archive_validation() -> Result<(), TdfError> {
+        let mut archive = TdfArchive::new(Cursor::new(create_test_archive()?))?;
+        archive.validate()?;
+        Ok(())
+    }
 
-        // Create test data for multiple entries
+    #[test]
+    fn test_get_entry_multi_index_keeps_indexed_names() -> Result<(), Box<dyn std::error::Error>> {
         let entries = [
             (
-                TdfManifest::new(
-                    "0.payload".to_string(),
-                    "https://kas1.example.com".to_string(),
-                ),
+                manifest_with_url("0.payload"),
                 b"first payload data".to_vec(),
             ),
             (
-                TdfManifest::new(
-                    "1.payload".to_string(),
-                    "https://kas2.example.com".to_string(),
-                ),
+                manifest_with_url("1.payload"),
                 b"second payload data".to_vec(),
             ),
         ];
-
-        // Create archive with multiple entries
         let temp_file = NamedTempFile::new()?;
         let temp_path = temp_file.path().to_owned();
-
         let mut builder = TdfArchiveBuilder::new(&temp_path)?;
         for (index, (manifest, payload)) in entries.iter().enumerate() {
             builder.add_entry(manifest, payload, index)?;
         }
         builder.finish()?;
 
-        // Read it back using get_entry
+        let bytes = std::fs::read(&temp_path)?;
+        assert_eq!(
+            names_of(&bytes),
+            vec!["manifest.json", "0.payload", "1.manifest.json", "1.payload"]
+        );
+
         let mut archive = TdfArchive::open(&temp_path)?;
-
-        // Verify correct number of entries
         assert_eq!(archive.len(), 2);
-
-        // Verify first entry
-        let entry0 = archive.get_entry(0)?;
-        assert_eq!(entry0.payload, b"first payload data");
-        assert_eq!(entry0.index, 0);
-        assert_eq!(entry0.manifest.payload.url, "0.payload");
-        assert_eq!(
-            entry0.manifest.encryption_information.key_access[0].url,
-            "https://kas1.example.com"
-        );
-
-        // Verify second entry
-        let entry1 = archive.get_entry(1)?;
-        assert_eq!(entry1.payload, b"second payload data");
-        assert_eq!(entry1.index, 1);
-        assert_eq!(entry1.manifest.payload.url, "1.payload");
-        assert_eq!(
-            entry1.manifest.encryption_information.key_access[0].url,
-            "https://kas2.example.com"
-        );
-
-        // Verify error on invalid index
-        let invalid_entry = archive.get_entry(2);
-        assert!(invalid_entry.is_err());
-
+        assert_eq!(archive.get_entry(0)?.payload, b"first payload data");
+        assert_eq!(archive.get_entry(1)?.payload, b"second payload data");
+        assert!(archive.get_entry(2).is_err());
         Ok(())
     }
 }
