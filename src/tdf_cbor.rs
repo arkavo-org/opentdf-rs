@@ -1800,7 +1800,7 @@ mod tests {
             },
         };
 
-        let result = doc.decrypt_with_key(&[0u8; 32]);
+        let result = doc.decrypt_with_key(TdfEncryption::new().unwrap().payload_key());
         assert!(
             matches!(result, Err(EncryptionError::InvalidIvLength(0))),
             "expected InvalidIvLength(0), got {result:?}"

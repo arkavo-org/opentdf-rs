@@ -1641,7 +1641,7 @@ mod tests {
         let envelope: TdfJson = serde_json::from_str(doc).unwrap();
         assert_eq!(envelope.manifest.encryption_information.method.iv, "");
 
-        let result = envelope.decrypt_with_key(&[0u8; 32]);
+        let result = envelope.decrypt_with_key(TdfEncryption::new().unwrap().payload_key());
         assert!(
             matches!(result, Err(EncryptionError::InvalidIvLength(0))),
             "expected InvalidIvLength(0), got {result:?}"
@@ -1671,7 +1671,7 @@ mod tests {
         }"#;
         let envelope: TdfJsonRpc = serde_json::from_str(doc).unwrap();
 
-        let result = envelope.decrypt_with_key(&[0u8; 32]);
+        let result = envelope.decrypt_with_key(TdfEncryption::new().unwrap().payload_key());
         assert!(
             matches!(result, Err(EncryptionError::InvalidIvLength(0))),
             "expected InvalidIvLength(0), got {result:?}"
