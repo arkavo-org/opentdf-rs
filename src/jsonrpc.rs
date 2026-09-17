@@ -57,6 +57,9 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use opentdf_crypto::{EncryptionError, TdfEncryption, calculate_policy_binding};
 use serde::{Deserialize, Serialize};
 
+/// AES-256-GCM nonce length in bytes; `method.iv` must carry at least this many.
+const GCM_NONCE_LENGTH: usize = 12;
+
 // ============================================================================
 // TDF-JSON Spec-Compliant Types (per TDF-JSON specification draft-00)
 // ============================================================================
@@ -310,11 +313,13 @@ impl TdfJson {
         let iv_bytes = BASE64.decode(&self.manifest.encryption_information.method.iv)?;
 
         // Extract just the payload IV (first 12 bytes)
-        let payload_iv = if iv_bytes.len() >= 12 {
-            &iv_bytes[0..12]
-        } else {
-            &iv_bytes[..]
-        };
+        // `method.iv` defaults to empty on read (Java omits it), so a short IV
+        // must be rejected here: `Nonce::from_slice` asserts the length and
+        // would abort the process.
+        if iv_bytes.len() < GCM_NONCE_LENGTH {
+            return Err(EncryptionError::InvalidIvLength(iv_bytes.len()));
+        }
+        let payload_iv = &iv_bytes[0..GCM_NONCE_LENGTH];
 
         // Create cipher with payload key
         let cipher = Aes256Gcm::new_from_slice(payload_key)
@@ -612,11 +617,13 @@ impl TdfJsonRpc {
         let iv_bytes = BASE64.decode(&self.manifest.encryption_information.method.iv)?;
 
         // Extract just the payload IV (first 12 bytes)
-        let payload_iv = if iv_bytes.len() >= 12 {
-            &iv_bytes[0..12]
-        } else {
-            &iv_bytes[..]
-        };
+        // `method.iv` defaults to empty on read (Java omits it), so a short IV
+        // must be rejected here: `Nonce::from_slice` asserts the length and
+        // would abort the process.
+        if iv_bytes.len() < GCM_NONCE_LENGTH {
+            return Err(EncryptionError::InvalidIvLength(iv_bytes.len()));
+        }
+        let payload_iv = &iv_bytes[0..GCM_NONCE_LENGTH];
 
         // Create cipher with payload key
         let cipher = Aes256Gcm::new_from_slice(payload_key)
@@ -1604,5 +1611,70 @@ mod tests {
             serde_json::from_str(TDF_JSON_WITH_SID_AND_ASSERTION).unwrap();
         let output = serde_json::to_value(&envelope).unwrap();
         assert_eq!(output, input);
+    }
+
+    /// Java-written manifests omit `method.iv`. Since `iv` now defaults to
+    /// empty on read, decrypt must reject it as an error instead of reaching
+    /// `Nonce::from_slice` with 0 bytes and aborting the process.
+    #[test]
+    fn tdf_json_decrypt_with_key_rejects_missing_iv_instead_of_panicking() {
+        let doc = r#"{
+            "tdf": "json",
+            "version": "1.0.0",
+            "manifest": {
+                "encryptionInformation": {
+                    "type": "split",
+                    "keyAccess": [],
+                    "method": {"algorithm": "AES-256-GCM"},
+                    "integrityInformation": {
+                        "rootSignature": {"alg": "HS256", "sig": ""},
+                        "segmentHashAlg": "GMAC",
+                        "segments": [],
+                        "segmentSizeDefault": 0,
+                        "encryptedSegmentSizeDefault": 0
+                    },
+                    "policy": ""
+                }
+            },
+            "payload": {"type": "inline", "protocol": "base64", "isEncrypted": true, "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}
+        }"#;
+        let envelope: TdfJson = serde_json::from_str(doc).unwrap();
+        assert_eq!(envelope.manifest.encryption_information.method.iv, "");
+
+        let result = envelope.decrypt_with_key(&[0u8; 32]);
+        assert!(
+            matches!(result, Err(EncryptionError::InvalidIvLength(0))),
+            "expected InvalidIvLength(0), got {result:?}"
+        );
+    }
+
+    #[test]
+    fn tdf_json_rpc_decrypt_with_key_rejects_missing_iv_instead_of_panicking() {
+        let doc = r#"{
+            "version": "3.0.0",
+            "manifest": {
+                "payload": {"type": "inline", "mimeType": "text/plain", "protocol": "base64", "isEncrypted": true, "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="},
+                "encryptionInformation": {
+                    "type": "split",
+                    "keyAccess": [],
+                    "method": {"algorithm": "AES-256-GCM"},
+                    "integrityInformation": {
+                        "rootSignature": {"alg": "HS256", "sig": ""},
+                        "segmentHashAlg": "GMAC",
+                        "segments": [],
+                        "segmentSizeDefault": 0,
+                        "encryptedSegmentSizeDefault": 0
+                    },
+                    "policy": ""
+                }
+            }
+        }"#;
+        let envelope: TdfJsonRpc = serde_json::from_str(doc).unwrap();
+
+        let result = envelope.decrypt_with_key(&[0u8; 32]);
+        assert!(
+            matches!(result, Err(EncryptionError::InvalidIvLength(0))),
+            "expected InvalidIvLength(0), got {result:?}"
+        );
     }
 }

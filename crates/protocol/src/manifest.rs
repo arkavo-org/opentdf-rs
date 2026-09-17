@@ -32,8 +32,21 @@ pub struct TdfManifest {
     /// Optional top-level `assertions` array (spec: assertion.md). Empty
     /// when absent; omitted from JSON when empty so existing manifests
     /// serialize unchanged.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        deserialize_with = "null_as_empty_vec",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub assertions: Vec<Assertion>,
+}
+
+/// Accept `"assertions": null` (Jackson-style writers emit it for an empty
+/// list) as an empty vector. `#[serde(default)]` alone covers only a missing key.
+fn null_as_empty_vec<'de, D>(deserializer: D) -> Result<Vec<Assertion>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<Vec<Assertion>>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 /// A verifiable statement about the TDF or its payload (spec: assertion.md).
@@ -79,10 +92,16 @@ pub struct AssertionStatement {
 
 /// The `binding` object of an assertion (spec: assertion_binding.md).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// Both fields default to empty so that `"binding": {}`, which the Go SDK
+/// emits for an unsigned assertion (non-pointer struct with `omitempty`
+/// string fields), parses and re-serializes unchanged.
 pub struct AssertionBinding {
     /// Signature method, e.g. `jws`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub method: String,
     /// The Base64URL-encoded signature (e.g. a JWS compact serialization).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub signature: String,
 }
 
@@ -704,6 +723,42 @@ mod sid_and_assertion_tests {
         let m: TdfManifest = serde_json::from_value(without).unwrap();
         assert!(m.assertions.is_empty());
         assert!(m.encryption_information.key_access[0].sid.is_none());
+    }
+
+    /// Jackson-style writers serialize an empty list as `null`. serde's
+    /// `default` covers only a missing key, so this must be handled explicitly.
+    #[test]
+    fn assertions_null_parses_as_empty() {
+        let json = r#"{
+            "payload": {"type":"reference","url":"0.payload","protocol":"zip","isEncrypted":true},
+            "encryptionInformation": {
+                "type":"split",
+                "keyAccess":[],
+                "method":{"algorithm":"AES-256-GCM","isStreamable":true,"iv":""},
+                "integrityInformation":{"rootSignature":{"alg":"HS256","sig":""},"segmentHashAlg":"GMAC","segments":[],"segmentSizeDefault":0,"encryptedSegmentSizeDefault":0},
+                "policy":""
+            },
+            "assertions": null
+        }"#;
+        let m = TdfManifest::from_json(json).expect("null assertions must parse");
+        assert!(m.assertions.is_empty());
+    }
+
+    /// Go's `Assertion.Binding` is a non-pointer struct with `omitempty` on its
+    /// string fields, so an unsigned assertion serializes as `"binding": {}`.
+    #[test]
+    fn unsigned_assertion_with_empty_binding_object_parses_and_round_trips() {
+        let json = r#"{"id":"a1","type":"handling","scope":"payload","statement":{"format":"string","value":"x"},"binding":{}}"#;
+        let a: Assertion = serde_json::from_str(json).expect("empty binding object must parse");
+        let binding = a.binding.as_ref().expect("binding object is present");
+        assert_eq!(binding.method, "");
+        assert_eq!(binding.signature, "");
+
+        let out = serde_json::to_value(&a).unwrap();
+        assert_eq!(
+            out,
+            serde_json::from_str::<serde_json::Value>(json).unwrap()
+        );
     }
 }
 
