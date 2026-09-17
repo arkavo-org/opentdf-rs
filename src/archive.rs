@@ -156,6 +156,27 @@ impl<'a> TdfEntry<'a> {
             // The manifest must account for the payload exactly: bytes beyond
             // the last segment belong to no segment and would never be
             // authenticated, and a short payload is a truncated one.
+            // AES-GCM overhead per segment: a 12-byte IV prefix and a 16-byte tag.
+            const SEGMENT_OVERHEAD: u64 = 28;
+
+            // A declared plaintext size can never exceed its ciphertext minus
+            // that overhead. The plaintext sizes are pre-allocated before any
+            // segment is authenticated, so an unchecked value from a hostile
+            // manifest would abort the process on a failed allocation.
+            for (index, (plaintext, encrypted)) in segment_sizes.iter().enumerate() {
+                let max_plaintext = encrypted.saturating_sub(SEGMENT_OVERHEAD);
+                if *plaintext > max_plaintext {
+                    return Err(TdfError::CryptoError {
+                        algorithm: "AES-256-GCM-segments".to_string(),
+                        reason: format!(
+                            "integrity: segment {index} declares a {plaintext}-byte plaintext but \
+                             only {encrypted} encrypted bytes (at most {max_plaintext})"
+                        ),
+                        source: None,
+                    });
+                }
+            }
+
             let described_size = segment_sizes
                 .iter()
                 .try_fold(0u64, |total, (_, encrypted)| total.checked_add(*encrypted))
@@ -220,6 +241,20 @@ impl<'a> TdfEntry<'a> {
                     reason: "Invalid key length".to_string(),
                     algorithm: Some("AES-256-GCM".to_string()),
                 })?;
+            // `Nonce::from_slice` panics on any length but 12, which would abort
+            // the process (and trap, on wasm) for a manifest we have not
+            // authenticated yet. An empty `method.iv` reaches here whenever a
+            // TDF carries no segments.
+            const GCM_NONCE_LENGTH: usize = 12;
+            if iv.len() != GCM_NONCE_LENGTH {
+                return Err(TdfError::DecryptionFailed {
+                    reason: format!(
+                        "integrity: method.iv is {} bytes, expected {GCM_NONCE_LENGTH}",
+                        iv.len()
+                    ),
+                    algorithm: Some("AES-256-GCM".to_string()),
+                });
+            }
             let nonce = Nonce::from_slice(&iv);
 
             // Decrypt the payload
@@ -1013,6 +1048,42 @@ mod tests {
         let mut archive = TdfArchive::new(Cursor::new(bytes)).expect("open archive");
         let entry = archive.by_index().expect("read entry");
         assert_eq!(entry.decrypt_with_key(&key).expect("decrypt"), plaintext);
+    }
+
+    /// A hostile `segmentSize` is pre-allocated before any segment is
+    /// authenticated, so it must be rejected rather than aborting the process
+    /// on a failed allocation. Plaintext can never exceed ciphertext minus the
+    /// 12-byte IV and 16-byte tag.
+    #[test]
+    fn oversized_declared_plaintext_is_rejected() {
+        let (bytes, key, _) = segmented_tdf(|manifest| {
+            let segment = &mut manifest
+                .encryption_information
+                .integrity_information
+                .segments[0];
+            segment.segment_size = Some(1 << 60);
+        });
+        let err = decrypt_error_message(bytes, &key);
+        assert!(err.contains("integrity"), "{err}");
+        assert!(err.contains("segment"), "{err}");
+    }
+
+    /// A TDF with no segments takes the legacy single-block branch, where an
+    /// empty or short `method.iv` used to panic inside `Nonce::from_slice`
+    /// (an unrecoverable trap on wasm) before anything was authenticated.
+    #[test]
+    fn legacy_branch_rejects_short_iv_instead_of_panicking() {
+        let (bytes, key, _) = segmented_tdf(|manifest| {
+            manifest
+                .encryption_information
+                .integrity_information
+                .segments
+                .clear();
+            manifest.encryption_information.method.iv = String::new();
+        });
+        let err = decrypt_error_message(bytes, &key);
+        assert!(err.contains("method.iv"), "{err}");
+        assert!(err.contains("integrity"), "{err}");
     }
 
     /// Spec (integrity_information.md): every `segments[i].hash` authenticates
