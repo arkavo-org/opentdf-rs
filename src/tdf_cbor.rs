@@ -45,8 +45,8 @@
 //! ```
 
 use crate::manifest::{
-    EncryptionInformation, EncryptionMethod, IntegrityInformation, IntegrityInformationExt,
-    KeyAccess, RootSignature, Segment,
+    Assertion, EncryptionInformation, EncryptionMethod, IntegrityInformation,
+    IntegrityInformationExt, KeyAccess, RootSignature, Segment,
 };
 use crate::policy::Policy;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -233,9 +233,10 @@ pub struct TdfCborManifest {
     /// Encryption information including key access and policy
     pub encryption_information: EncryptionInformation,
 
-    /// Optional assertions for additional metadata
+    /// Optional assertions (spec: assertion.md), same shape as
+    /// `TdfManifest::assertions`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub assertions: Option<Vec<serde_json::Value>>,
+    pub assertions: Option<Vec<Assertion>>,
 }
 
 /// Binary payload for TDF-CBOR transport
@@ -1133,6 +1134,8 @@ impl TdfCbor {
                 .ok_or_else(|| TdfCborError::MissingField("policyBinding".to_string()))?,
             encrypted_metadata: None,
             kid,
+            // The TDF-CBOR KAO integer-key table defines no split id.
+            sid: None,
             ephemeral_public_key,
             schema_version,
         })
@@ -1522,6 +1525,7 @@ impl TdfCborBuilder {
             access_type: "wrapped".to_string(),
             url: kas_url,
             kid: None,
+            sid: None,
             protocol: "kas".to_string(),
             wrapped_key,
             policy_binding: crate::manifest::PolicyBinding {

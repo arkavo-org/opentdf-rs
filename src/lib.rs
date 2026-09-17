@@ -70,9 +70,9 @@ pub mod prelude;
 
 // Re-export protocol types
 pub use opentdf_protocol::{
-    EncryptionInformation, EncryptionMethod, GGUF_TDF_PROFILE_V1, GgufIndex, GgufSegment,
-    GgufSegmentKind, GgufTensor, IntegrityInformation, KeyAccess, Payload, PolicyBinding,
-    RootSignature, Segment, TdfManifest,
+    Assertion, AssertionBinding, AssertionStatement, EncryptionInformation, EncryptionMethod,
+    GGUF_TDF_PROFILE_V1, GgufIndex, GgufSegment, GgufSegmentKind, GgufTensor, IntegrityInformation,
+    KeyAccess, Payload, PolicyBinding, RootSignature, Segment, TdfManifest,
 };
 
 // Re-export crypto types

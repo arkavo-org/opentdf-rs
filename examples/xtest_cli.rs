@@ -430,6 +430,7 @@ fn encrypt_json(
         access_type: "wrapped".to_string(),
         url: kas_url.to_string(),
         kid: None,
+        sid: None,
         protocol: "kas".to_string(),
         wrapped_key: ec_result.wrapped_key,
         policy_binding: opentdf::manifest::PolicyBinding {
@@ -548,6 +549,7 @@ fn encrypt_cbor(
         access_type: "wrapped".to_string(),
         url: kas_url.to_string(),
         kid: None,
+        sid: None,
         protocol: "kas".to_string(),
         wrapped_key: ec_result.wrapped_key,
         policy_binding: opentdf::manifest::PolicyBinding {

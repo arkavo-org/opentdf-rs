@@ -5,6 +5,7 @@
 //! - Encryption configuration
 //! - Key access objects
 //! - Integrity information (segments and root signature)
+//! - Assertions (statement + binding)
 //!
 //! Note: Cryptographic operations (HMAC, policy binding generation) are in the crypto crate.
 
@@ -28,6 +29,61 @@ pub struct TdfManifest {
     /// `gguf-tdf/1` hybrid index. Absent for every other TDF profile.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gguf: Option<crate::GgufIndex>,
+    /// Optional top-level `assertions` array (spec: assertion.md). Empty
+    /// when absent; omitted from JSON when empty so existing manifests
+    /// serialize unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assertions: Vec<Assertion>,
+}
+
+/// A verifiable statement about the TDF or its payload (spec: assertion.md).
+///
+/// Field names and JSON shape match the OpenTDF spec and the Go SDK
+/// (`sdk/assertion.go`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Assertion {
+    /// Unique identifier for this assertion within the manifest.
+    pub id: String,
+    /// Categorizes the assertion's purpose, e.g. `handling` or `other`.
+    #[serde(rename = "type")]
+    pub assertion_type: String,
+    /// What the assertion applies to: `tdo` or `payload`.
+    pub scope: String,
+    /// Whether the statement applies to `encrypted` or `unencrypted` data.
+    /// Optional in the spec (default `encrypted`); omitted when unset.
+    #[serde(rename = "appliesToState", skip_serializing_if = "Option::is_none")]
+    pub applies_to_state: Option<String>,
+    /// The assertion content (spec: assertion_statement.md).
+    pub statement: AssertionStatement,
+    /// Cryptographic binding of the assertion to this TDF
+    /// (spec: assertion_binding.md). Omitted when unsigned.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub binding: Option<AssertionBinding>,
+}
+
+/// The `statement` object of an assertion (spec: assertion_statement.md).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssertionStatement {
+    /// How `value` is encoded: `json-structured`, `base64binary`, `string`, ...
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub format: String,
+    /// Optional URI identifying the schema of `value`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    /// The assertion content. Kept as raw JSON (string *or* structured
+    /// object/array/number/bool) so it round-trips byte-for-byte for
+    /// JCS hashing and never gets re-typed.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub value: serde_json::Value,
+}
+
+/// The `binding` object of an assertion (spec: assertion_binding.md).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssertionBinding {
+    /// Signature method, e.g. `jws`.
+    pub method: String,
+    /// The Base64URL-encoded signature (e.g. a JWS compact serialization).
+    pub signature: String,
 }
 
 /// Payload reference in TDF manifest
@@ -101,6 +157,9 @@ pub struct KeyAccess {
     pub url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kid: Option<String>,
+    /// Optional key split (share) identifier (spec: key_access_object.md `sid`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sid: Option<String>,
     pub protocol: String,
     #[serde(rename = "wrappedKey")]
     pub wrapped_key: String,
@@ -122,6 +181,7 @@ impl KeyAccess {
             access_type: key_access_type::WRAPPED.to_string(),
             url,
             kid: None,
+            sid: None,
             protocol: "kas".to_string(),
             wrapped_key: String::new(),
             policy_binding: PolicyBinding {
@@ -140,6 +200,7 @@ impl KeyAccess {
             access_type: key_access_type::EC_WRAPPED.to_string(),
             url,
             kid: None,
+            sid: None,
             protocol: "kas".to_string(),
             wrapped_key: String::new(),
             policy_binding: PolicyBinding {
@@ -172,8 +233,13 @@ impl KeyAccess {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EncryptionMethod {
     pub algorithm: String,
-    #[serde(rename = "isStreamable")]
+    /// Spec: required. Pre-4.3.0 Java manifests omit it; default false.
+    #[serde(rename = "isStreamable", default)]
     pub is_streamable: bool,
+    /// Spec prose: required. Every streaming SDK carries per-segment IVs in
+    /// the payload and writes `""` or omits the field (Java), so it defaults
+    /// to empty on read.
+    #[serde(default)]
     pub iv: String,
 }
 
@@ -298,6 +364,7 @@ impl TdfManifest {
             schema_version: Some(TDF_SPEC_VERSION.to_string()),
             tdf_spec_version: None,
             gguf: None,
+            assertions: Vec::new(),
         }
     }
 
@@ -491,5 +558,189 @@ mod spec_version_tests {
         assert_eq!(v["schemaVersion"], "4.3.0");
         assert!(v.get("tdf_spec_version").is_none());
         assert!(v["payload"].get("tdf_spec_version").is_none());
+    }
+}
+
+#[cfg(test)]
+mod peer_method_tolerance_tests {
+    use super::*;
+
+    /// Java SDK manifests omit `method.iv` (and the oldest omit `isStreamable`).
+    #[test]
+    fn method_without_iv_or_is_streamable_parses() {
+        let m: EncryptionMethod = serde_json::from_str(r#"{"algorithm":"AES-256-GCM"}"#).unwrap();
+        assert_eq!(m.algorithm, "AES-256-GCM");
+        assert!(!m.is_streamable);
+        assert_eq!(m.iv, "");
+
+        let m: EncryptionMethod =
+            serde_json::from_str(r#"{"algorithm":"AES-256-GCM","isStreamable":true}"#).unwrap();
+        assert!(m.is_streamable);
+        assert_eq!(m.iv, "");
+    }
+}
+
+#[cfg(test)]
+mod sid_and_assertion_tests {
+    use super::*;
+
+    /// Manifest carrying `keyAccess[].sid` and one assertion whose
+    /// `statement.value` is a structured JSON object (spec: assertion_statement.md).
+    const MANIFEST_WITH_SID_AND_ASSERTION: &str = r#"{
+        "payload": {"type":"reference","url":"0.payload","protocol":"zip","isEncrypted":true,"mimeType":"text/plain"},
+        "encryptionInformation": {
+            "type":"split",
+            "keyAccess":[{
+                "type":"wrapped",
+                "url":"https://kas.example.com",
+                "kid":"r1",
+                "sid":"split-id-1",
+                "protocol":"kas",
+                "wrappedKey":"AAAA",
+                "policyBinding":{"alg":"HS256","hash":"BBBB"}
+            }],
+            "method":{"algorithm":"AES-256-GCM","isStreamable":true,"iv":""},
+            "integrityInformation":{"rootSignature":{"alg":"HS256","sig":""},"segmentHashAlg":"GMAC","segments":[],"segmentSizeDefault":0,"encryptedSegmentSizeDefault":0},
+            "policy":""
+        },
+        "assertions":[{
+            "id":"nato-label-1",
+            "type":"handling",
+            "scope":"payload",
+            "appliesToState":"encrypted",
+            "statement":{
+                "schema":"urn:nato:stanag:4774:confidentialitymetadatalabel:1:0",
+                "format":"json-structured",
+                "value":{
+                    "Xmlns":"urn:nato:stanag:4774:confidentialitymetadatalabel:1:0",
+                    "CreationTime":"2015-08-29T16:15:00Z",
+                    "ConfidentialityInformation":{"PolicyIdentifier":"NATO","Classification":"SECRET","nested":[1,true,null,{"k":"v"}]}
+                }
+            },
+            "binding":{"method":"jws","signature":"eyJhbGciOiJSUzI1NiJ9.e30.sig"}
+        }],
+        "schemaVersion":"4.3.0"
+    }"#;
+
+    #[test]
+    fn manifest_round_trips_key_access_sid_and_assertions() {
+        let input: serde_json::Value =
+            serde_json::from_str(MANIFEST_WITH_SID_AND_ASSERTION).unwrap();
+
+        let m = TdfManifest::from_json(MANIFEST_WITH_SID_AND_ASSERTION).unwrap();
+
+        // Typed access documents the intent, not just Value equality.
+        assert_eq!(
+            m.encryption_information.key_access[0].sid.as_deref(),
+            Some("split-id-1")
+        );
+        assert_eq!(m.assertions.len(), 1);
+        let a = &m.assertions[0];
+        assert_eq!(a.id, "nato-label-1");
+        assert_eq!(a.assertion_type, "handling");
+        assert_eq!(a.scope, "payload");
+        assert_eq!(a.applies_to_state.as_deref(), Some("encrypted"));
+        assert_eq!(a.statement.format, "json-structured");
+        assert_eq!(
+            a.statement.schema.as_deref(),
+            Some("urn:nato:stanag:4774:confidentialitymetadatalabel:1:0")
+        );
+        assert!(
+            a.statement.value.is_object(),
+            "statement.value must stay structured JSON: {:?}",
+            a.statement.value
+        );
+        let b = a.binding.as_ref().expect("binding present");
+        assert_eq!(b.method, "jws");
+        assert_eq!(b.signature, "eyJhbGciOiJSUzI1NiJ9.e30.sig");
+
+        // Re-serialize: nothing dropped, nothing invented.
+        let output: serde_json::Value = serde_json::from_str(&m.to_json().unwrap()).unwrap();
+        assert_eq!(output, input);
+    }
+
+    #[test]
+    fn manifest_with_string_statement_value_round_trips() {
+        let json = MANIFEST_WITH_SID_AND_ASSERTION
+            .replace(r#""format":"json-structured","#, r#""format":"string","#);
+        // Swap the object value for a plain string value.
+        let mut input: serde_json::Value = serde_json::from_str(&json).unwrap();
+        input["assertions"][0]["statement"]["value"] =
+            serde_json::Value::String("plain text".into());
+
+        let m: TdfManifest = serde_json::from_value(input.clone()).unwrap();
+        assert_eq!(
+            m.assertions[0].statement.value,
+            serde_json::json!("plain text")
+        );
+
+        let output = serde_json::to_value(&m).unwrap();
+        assert_eq!(output, input);
+    }
+
+    #[test]
+    fn manifest_without_sid_or_assertions_serializes_unchanged() {
+        // Existing manifests (no sid, no assertions) must not grow new keys.
+        let m = TdfManifest::new(
+            "0.payload".to_string(),
+            "https://kas.example.com".to_string(),
+        );
+        assert!(m.encryption_information.key_access[0].sid.is_none());
+        assert!(m.assertions.is_empty());
+
+        let v: serde_json::Value = serde_json::from_str(&m.to_json().unwrap()).unwrap();
+        assert!(v.get("assertions").is_none(), "{v}");
+        assert!(
+            v["encryptionInformation"]["keyAccess"][0]
+                .get("sid")
+                .is_none(),
+            "{v}"
+        );
+
+        // And a peer manifest that omits both still parses (serde default).
+        let json = MANIFEST_WITH_SID_AND_ASSERTION.replace(r#""sid":"split-id-1","#, "");
+        let mut without: serde_json::Value = serde_json::from_str(&json).unwrap();
+        without.as_object_mut().unwrap().remove("assertions");
+        let m: TdfManifest = serde_json::from_value(without).unwrap();
+        assert!(m.assertions.is_empty());
+        assert!(m.encryption_information.key_access[0].sid.is_none());
+    }
+}
+
+#[cfg(test)]
+mod segment_size_fallback_tests {
+    use super::*;
+
+    #[test]
+    fn segment_sizes_fall_back_to_integrity_defaults_when_omitted() {
+        let mut info = IntegrityInformation {
+            segment_size_default: 1000,
+            encrypted_segment_size_default: 1028,
+            ..IntegrityInformation::default()
+        };
+        // Spec (integrity_information.md): segmentSize / encryptedSegmentSize are
+        // optional and inferred from the *Default values when omitted.
+        info.segments.push(Segment {
+            hash: "a".into(),
+            segment_size: None,
+            encrypted_segment_size: None,
+        });
+        // Explicit values always win (a re-encrypted or short tail segment).
+        info.segments.push(Segment {
+            hash: "b".into(),
+            segment_size: Some(7),
+            encrypted_segment_size: Some(35),
+        });
+        // Mixed: only one side omitted.
+        info.segments.push(Segment {
+            hash: "c".into(),
+            segment_size: Some(1000),
+            encrypted_segment_size: None,
+        });
+
+        assert_eq!(
+            info.segment_sizes(),
+            vec![(1000, 1028), (7, 35), (1000, 1028)]
+        );
     }
 }

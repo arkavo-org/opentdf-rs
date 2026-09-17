@@ -48,8 +48,9 @@
 #![allow(deprecated)]
 
 use crate::manifest::{
-    EncryptionInformation, EncryptionMethod, IntegrityInformation, IntegrityInformationExt,
-    KeyAccess, Payload, RootSignature, Segment, TdfManifest,
+    Assertion, EncryptionInformation, EncryptionMethod, IntegrityInformation,
+    IntegrityInformationExt, KeyAccess, Payload, RootSignature, Segment, TDF_SPEC_VERSION,
+    TdfManifest,
 };
 use crate::policy::Policy;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -106,9 +107,10 @@ pub struct TdfJsonManifest {
     #[serde(rename = "encryptionInformation")]
     pub encryption_information: EncryptionInformation,
 
-    /// Optional assertions for additional metadata
+    /// Optional assertions (spec: assertion.md), same shape as
+    /// `TdfManifest::assertions`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub assertions: Option<Vec<serde_json::Value>>,
+    pub assertions: Option<Vec<Assertion>>,
 }
 
 /// JSON payload for TDF-JSON transport
@@ -340,9 +342,12 @@ impl TdfJson {
                 tdf_spec_version: None,
             },
             encryption_information: self.manifest.encryption_information.clone(),
-            schema_version: Some("1.0.0".to_string()),
+            // Same source as the zip writer (`TdfManifest::new`): the TDF spec
+            // version, not the TDF-JSON container `version` ("1.0.0").
+            schema_version: Some(TDF_SPEC_VERSION.to_string()),
             tdf_spec_version: None,
             gguf: None,
+            assertions: self.manifest.assertions.clone().unwrap_or_default(),
         }
     }
 
@@ -436,6 +441,7 @@ impl TdfJsonBuilder {
             access_type: "wrapped".to_string(),
             url: kas_url,
             kid: None,
+            sid: None,
             protocol: "kas".to_string(),
             wrapped_key,
             policy_binding: crate::manifest::PolicyBinding {
@@ -644,6 +650,7 @@ impl TdfJsonRpc {
             schema_version: self.manifest.schema_version.clone(),
             tdf_spec_version: None,
             gguf: None,
+            assertions: Vec::new(),
         }
     }
 }
@@ -715,6 +722,7 @@ impl From<&TdfManifestInline> for TdfManifest {
             schema_version: inline.schema_version.clone(),
             tdf_spec_version: None,
             gguf: None,
+            assertions: Vec::new(),
         }
     }
 }
@@ -735,6 +743,7 @@ impl From<TdfManifestInline> for TdfManifest {
             schema_version: inline.schema_version,
             tdf_spec_version: None,
             gguf: None,
+            assertions: Vec::new(),
         }
     }
 }
@@ -820,6 +829,7 @@ impl TdfJsonRpcBuilder {
             access_type: "wrapped".to_string(),
             url: kas_url,
             kid: None,
+            sid: None,
             protocol: "kas".to_string(),
             wrapped_key: encrypted_payload.encrypted_key.clone(),
             policy_binding: crate::manifest::PolicyBinding {
@@ -1011,6 +1021,7 @@ mod tests {
             access_type: "wrapped".to_string(),
             url: test_kas_url(),
             kid: None,
+            sid: None,
             protocol: "kas".to_string(),
             wrapped_key: encrypted_payload.encrypted_key.clone(),
             policy_binding: crate::manifest::PolicyBinding {
@@ -1353,6 +1364,7 @@ mod tests {
             access_type: "wrapped".to_string(),
             url: test_kas_url(),
             kid: None,
+            sid: None,
             protocol: "kas".to_string(),
             wrapped_key: encrypted_payload.encrypted_key.clone(),
             policy_binding: crate::manifest::PolicyBinding {
@@ -1523,5 +1535,74 @@ mod tests {
         assert_eq!(manifest.payload.url, "inline");
         assert_eq!(manifest.payload.protocol, "base64");
         assert!(manifest.payload.is_encrypted);
+    }
+
+    /// A TDF-JSON document whose manifest carries `keyAccess[].sid` and an
+    /// assertion, parsed straight from the wire (no KAS key needed).
+    const TDF_JSON_WITH_SID_AND_ASSERTION: &str = r#"{
+        "tdf": "json",
+        "version": "1.0.0",
+        "manifest": {
+            "encryptionInformation": {
+                "type": "split",
+                "keyAccess": [{
+                    "type": "wrapped",
+                    "url": "https://kas.example.com",
+                    "sid": "split-id-1",
+                    "protocol": "kas",
+                    "wrappedKey": "AAAA",
+                    "policyBinding": {"alg": "HS256", "hash": "BBBB"}
+                }],
+                "method": {"algorithm": "AES-256-GCM", "isStreamable": true, "iv": ""},
+                "integrityInformation": {
+                    "rootSignature": {"alg": "HS256", "sig": ""},
+                    "segmentHashAlg": "GMAC",
+                    "segments": [],
+                    "segmentSizeDefault": 0,
+                    "encryptedSegmentSizeDefault": 0
+                },
+                "policy": ""
+            },
+            "assertions": [{
+                "id": "a1",
+                "type": "handling",
+                "scope": "payload",
+                "appliesToState": "encrypted",
+                "statement": {"format": "json-structured", "value": {"k": ["v", 1]}},
+                "binding": {"method": "jws", "signature": "x.y.z"}
+            }]
+        },
+        "payload": {"type": "inline", "protocol": "base64", "isEncrypted": true, "value": ""}
+    }"#;
+
+    #[test]
+    fn test_tdf_json_to_standard_manifest_uses_spec_version_and_keeps_sid_and_assertions() {
+        let envelope: TdfJson = serde_json::from_str(TDF_JSON_WITH_SID_AND_ASSERTION).unwrap();
+        // The TDF-JSON envelope version is the container format version, not the TDF spec.
+        assert_eq!(envelope.version, "1.0.0");
+
+        let manifest = envelope.to_standard_manifest();
+
+        // schemaVersion must come from the same source as the zip writer (TdfManifest::new).
+        assert_eq!(manifest.schema_version.as_deref(), Some(TDF_SPEC_VERSION));
+        assert_eq!(manifest.spec_version(), Some(TDF_SPEC_VERSION));
+
+        // sid and assertions survive the conversion.
+        assert_eq!(
+            manifest.encryption_information.key_access[0].sid.as_deref(),
+            Some("split-id-1")
+        );
+        assert_eq!(manifest.assertions.len(), 1);
+        assert_eq!(manifest.assertions[0].id, "a1");
+        assert_eq!(
+            manifest.assertions[0].statement.value,
+            serde_json::json!({"k": ["v", 1]})
+        );
+
+        // And the envelope itself re-serializes without dropping either.
+        let input: serde_json::Value =
+            serde_json::from_str(TDF_JSON_WITH_SID_AND_ASSERTION).unwrap();
+        let output = serde_json::to_value(&envelope).unwrap();
+        assert_eq!(output, input);
     }
 }
