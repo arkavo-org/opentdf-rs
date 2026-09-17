@@ -725,25 +725,11 @@ async fn decrypt_zip(
         .segments;
 
     if !segments.is_empty() {
-        // Modern segmented format - use TdfEncryption for decryption
-        use opentdf_crypto::TdfEncryption;
-
-        let tdf_encryption =
-            TdfEncryption::with_payload_key(key).map_err(|e| format!("Invalid key: {:?}", e))?;
-
-        let segment_sizes: Vec<(u64, u64)> = segments
-            .iter()
-            .map(|s| {
-                (
-                    s.segment_size.unwrap_or(0),
-                    s.encrypted_segment_size.unwrap_or(0),
-                )
-            })
-            .collect();
-
-        let (plaintext, _) = tdf_encryption
-            .decrypt_with_segments(&entry.payload, &segment_sizes)
-            .map_err(|e| format!("Segment decryption failed: {:?}", e))?;
+        // Modern segmented format. Route through the library path so the
+        // offline (--symmetric-key) branch gets the same segment-hash and
+        // root-signature verification as the KAS path, and so omitted segment
+        // sizes fall back to the integrityInformation defaults.
+        let plaintext = entry.decrypt_with_key(key).map_err(|e| format!("{}", e))?;
 
         Ok(plaintext)
     } else {

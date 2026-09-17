@@ -43,7 +43,7 @@ pub mod types;
 pub use helpers::{CryptoError, create_aes_cipher, generate_key_32, generate_nonce};
 pub use hmac::{
     HmacError, calculate_hmac, calculate_policy_binding, calculate_root_signature,
-    verify_root_signature,
+    verify_root_signature, verify_segment_hash,
 };
 pub use kem::{KemError, KeyEncapsulation};
 pub use tdf::{EncryptedPayload, EncryptedSegment, SegmentInfo, SegmentedPayload, TdfEncryption};

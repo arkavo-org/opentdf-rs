@@ -279,30 +279,12 @@ async fn _tdf_decrypt_with_kas_impl(tdf_data: &str, kas_token: &str) -> Result<S
         kas::unwrap_rsa_oaep(&rewrap_response.wrapped_key, &ephemeral_keypair.private_key).await?;
 
     // Step 7: Decrypt payload
-    let tdf_encryption = TdfEncryption::with_payload_key(&payload_key)
-        .map_err(|e| format!("Failed to create decryption context: {}", e))?;
-
-    // Read encrypted payload from archive
-    let payload_bytes = entry.payload;
-
-    // Convert segments to the expected format: (plaintext_size, encrypted_size)
-    let segment_tuples: Vec<(u64, u64)> = entry
-        .manifest
-        .encryption_information
-        .integrity_information
-        .segments
-        .iter()
-        .map(|seg| {
-            (
-                seg.segment_size.unwrap_or(0),
-                seg.encrypted_segment_size.unwrap_or(0),
-            )
-        })
-        .collect();
-
-    // Decrypt using segment information
-    let (plaintext, _gmac_tags) = tdf_encryption
-        .decrypt_with_segments(&payload_bytes, &segment_tuples)
+    //
+    // `decrypt_with_key` verifies every manifest segment hash and the root
+    // signature against the GMAC tags of the ciphertext, and aborts before
+    // returning plaintext if either check fails.
+    let plaintext = entry
+        .decrypt_with_key(&payload_key)
         .map_err(|e| format!("Decryption failed: {}", e))?;
 
     // Step 8: Return base64-encoded plaintext

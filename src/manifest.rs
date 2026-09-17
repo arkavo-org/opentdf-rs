@@ -5,7 +5,8 @@
 
 use crate::policy::{Policy, PolicyError};
 use opentdf_crypto::{
-    PayloadKey, calculate_policy_binding, calculate_root_signature, verify_root_signature,
+    HmacError, PayloadKey, calculate_policy_binding, calculate_root_signature,
+    verify_root_signature, verify_segment_hash,
 };
 
 // Re-export protocol types for backward compatibility
@@ -13,6 +14,33 @@ pub use opentdf_protocol::{
     EncryptionInformation, EncryptionMethod, IntegrityInformation, KeyAccess, Payload,
     PolicyBinding, RootSignature, Segment, TDF_SPEC_VERSION, TdfManifest,
 };
+
+/// Why a TDF failed integrity verification while being decrypted.
+///
+/// The wording is part of the cross-SDK conformance contract: a harness greps
+/// the decrypt failure output for `root`, `segment` and `signature`.
+#[derive(Debug, thiserror::Error)]
+pub enum IntegrityError {
+    /// The manifest describes a different number of segments than the payload
+    /// decrypted into.
+    #[error(
+        "integrity: manifest lists {manifest} segments but {computed} segments were decrypted from the payload"
+    )]
+    SegmentCountMismatch { manifest: usize, computed: usize },
+
+    /// A `segments[i].hash` is not decodable base64.
+    #[error("integrity: segment {index} signature is not valid base64: {reason}")]
+    SegmentHashEncoding { index: usize, reason: String },
+
+    /// A `segments[i].hash` does not match the GMAC tag of that segment's
+    /// ciphertext, i.e. the manifest was tampered with.
+    #[error("integrity: segment {index} signature does not match the decrypted ciphertext")]
+    SegmentHashMismatch { index: usize },
+
+    /// `rootSignature.sig` does not match the aggregate of the segment tags.
+    #[error("integrity: root signature verification failed: {0}")]
+    RootSignature(String),
+}
 
 /// Extension trait for IntegrityInformation that requires crypto operations
 pub trait IntegrityInformationExt {
@@ -27,6 +55,14 @@ pub trait IntegrityInformationExt {
         gmac_tags: &[Vec<u8>],
         payload_key: &[u8],
     ) -> Result<(), String>;
+
+    /// Verify a decrypted payload against **both** integrity checks the spec
+    /// requires: every `segments[i].hash`, then the root signature.
+    fn verify_segments_and_root_signature(
+        &self,
+        gmac_tags: &[Vec<u8>],
+        payload_key: &[u8],
+    ) -> Result<(), IntegrityError>;
 }
 
 impl IntegrityInformationExt for IntegrityInformation {
@@ -77,6 +113,41 @@ impl IntegrityInformationExt for IntegrityInformation {
 
         verify_root_signature(gmac_tags, &payload_key, &self.root_signature.sig)
             .map_err(|e| format!("Signature verification failed: {}", e))
+    }
+
+    /// Verify each manifest segment hash against the GMAC tag computed from the
+    /// ciphertext, then verify the root signature. Both checks always run.
+    ///
+    /// The root signature alone is not sufficient: it is derived from the tags
+    /// the ciphertext actually produced, so it still verifies after an attacker
+    /// edits `integrityInformation.segments[i].hash`. Per
+    /// `spec/schema/OpenTDF/integrity_information.md` the segment hashes
+    /// authenticate each segment, so they are compared here too, in constant
+    /// time.
+    fn verify_segments_and_root_signature(
+        &self,
+        gmac_tags: &[Vec<u8>],
+        payload_key: &[u8],
+    ) -> Result<(), IntegrityError> {
+        if self.segments.len() != gmac_tags.len() {
+            return Err(IntegrityError::SegmentCountMismatch {
+                manifest: self.segments.len(),
+                computed: gmac_tags.len(),
+            });
+        }
+
+        for (index, (segment, gmac_tag)) in self.segments.iter().zip(gmac_tags).enumerate() {
+            verify_segment_hash(&segment.hash, gmac_tag).map_err(|e| match e {
+                HmacError::Base64Error(source) => IntegrityError::SegmentHashEncoding {
+                    index,
+                    reason: source.to_string(),
+                },
+                _ => IntegrityError::SegmentHashMismatch { index },
+            })?;
+        }
+
+        self.verify_root_signature(gmac_tags, payload_key)
+            .map_err(IntegrityError::RootSignature)
     }
 }
 
