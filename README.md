@@ -9,6 +9,15 @@ A Rust implementation of the OpenTDF (Trusted Data Format) specification, provid
 
 OpenTDF-RS enables cryptographic binding of access policies directly to data objects, supporting a Zero Trust security model with continuous verification. This library allows secure data sharing across organizations and industries.
 
+## Terminology
+
+- **TDF** (Trusted Data Format): the format — a ZIP archive holding `manifest.json` plus an encrypted payload (spec version 4.3.0). "TDF3" is a legacy name for this same ZIP-based format and does not appear in the current spec.
+- **OpenTDF**: the project (spec repo, platform, SDKs), sponsored and maintained by Virtru, that publishes the JSON TDF specification. The spec's own schema README also uses "OpenTDF" loosely as the name of the ZIP-based format.
+- **ZTDF** (Zero Trust Data Format): a profile of TDF for Five Eyes / ACP 240 use that mandates specific assertions; its detailed spec is maintained outside opentdf/spec. Caveat: the platform CLI (`otdfctl encrypt --tdf-type`) defaults to `ztdf` and treats `tdf3` as an alias for it, so in platform tooling both names simply mean the ZIP-based TDF.
+- **NanoTDF**: a compact binary encoding. It was removed from opentdf/spec (PR #63) and opentdf/platform (PR #3013) in January 2026, but remains supported in opentdf-rs.
+- **TDF-JSON**: this crate's own inline-payload JSON container for JSON-RPC protocols (`src/jsonrpc.rs`, container version `1.0.0`; see [docs/ZTDF_JSON.md](docs/ZTDF_JSON.md)). It is not ZTDF.
+- **TDF-CBOR**: this crate's own inline-payload CBOR container (`src/tdf_cbor.rs`). It is not ZTDF.
+
 ## Features
 
 - TDF Archive Creation and Reading
@@ -450,7 +459,7 @@ TDF files created by spec-compliant SDKs (Go, Rust) can be decrypted across plat
 OpenTDF-RS uses industry-standard cryptographic primitives:
 
 - **Symmetric Encryption**: AES-256-GCM (Authenticated Encryption with Associated Data)
-- **Key Wrapping (Standard TDF)**: RSA-2048 with OAEP padding
+- **Key Wrapping (TDF)**: RSA-2048 with OAEP padding
 - **Key Agreement (NanoTDF)**: ECDH with P-256 curve + HKDF-SHA256
 - **Policy Binding**: HMAC-SHA256
 - **JWT Signing**: ES256 (ECDSA with P-256)
