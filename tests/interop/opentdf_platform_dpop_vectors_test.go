@@ -1,6 +1,12 @@
 // Verifies opentdf-rs caller-key vectors against the opentdf-platform
 // fork's own DPoP verifier.
 //
+// Targets Authentication.validateDPoP in opentdf-platform branch
+// feat/agent-credentials-kas @ 08945d1e (service/internal/auth/authn.go),
+// which returns (jwk.Key, bool, error): the bool reports whether the
+// key-bound proof rules applied (cnf.jwk) rather than the cnf.jkt
+// thumbprint check. These vectors bind via cnf.jkt, so it is always false.
+//
 // This file belongs to opentdf-rs. To record tests/data/dpop_interop_vectors.json,
 // copy it into the fork's service/internal/auth/ and run it there; it is never
 // committed to the fork.
@@ -68,13 +74,16 @@ func TestOpentdfRsDPoPVectors(t *testing.T) {
 				Build()
 			require.NoError(t, err)
 
-			dpopKey, err := a.validateDPoP(access, v.AccessToken, connectRewrap, []string{v.DPoP})
+			dpopKey, keyBound, err := a.validateDPoP(access, v.AccessToken, connectRewrap, []string{v.DPoP})
 			require.NoError(t, err)
+			// These vectors' access tokens carry cnf.jkt (a thumbprint), not
+			// cnf.jwk, so the key-bound proof rules never apply here.
+			require.False(t, keyBound)
 
-			_, err = a.validateDPoP(access, v.AccessToken+"-other", connectRewrap, []string{v.DPoP})
+			_, _, err = a.validateDPoP(access, v.AccessToken+"-other", connectRewrap, []string{v.DPoP})
 			require.ErrorContains(t, err, "ath")
 
-			_, err = a.validateDPoP(access, v.AccessToken, fullURL, []string{v.DPoP})
+			_, _, err = a.validateDPoP(access, v.AccessToken, fullURL, []string{v.DPoP})
 			require.ErrorContains(t, err, "htu")
 
 			srt, err := jwt.Parse([]byte(v.SignedRequestToken),

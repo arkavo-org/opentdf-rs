@@ -465,6 +465,12 @@ mod tests {
 
     /// A real UnsignedRewrapRequest body, so the harness also proves the
     /// platform parses what this crate signs.
+    ///
+    /// Both vectors in `interop_vectors` share this one request body. Its
+    /// `clientPublicKey` is the P-256 test key regardless of which key signs
+    /// the vector's SRT/DPoP proof, because the platform only parses the
+    /// request body — the rewrap key inside it is unrelated to the signing
+    /// key under test.
     fn vector_request_body() -> String {
         use crate::p256::pkcs8::{EncodePublicKey, LineEnding};
         use base64::engine::general_purpose::STANDARD as BASE64;
@@ -550,7 +556,7 @@ mod tests {
         assert_eq!(
             recorded["vectors"],
             interop_vectors(),
-            "signing output drifted from the vectors the platform verifier accepted"
+            "signing or request-body serialization drifted from the vectors the platform verifier accepted"
         );
     }
 

@@ -399,6 +399,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 An agent whose access token names its own key in `cnf` rewraps with proof of possession:
 
 ```rust
+// Runs inside an async fn returning Result<(), Box<dyn std::error::Error>>
+// (or similar), hence the `.await` and `?` below.
 use opentdf::kas::{CallerKey, KasClient};
 use opentdf::kas_discovery::fetch_well_known;
 
