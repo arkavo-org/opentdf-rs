@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-09-27
+
+Adds a caller-key mode to `KasClient`, so an agent whose access token is bound to its own key (`cnf`) can rewrap from the Arkavo platform KAS with proof of possession. It also releases the manifest entry-name change below.
+
+### Added
+
+- `kas::CallerKey` (`Ed25519(ed25519_dalek::SigningKey)` or `P256(p256::ecdsa::SigningKey)`) and `KasClient::with_caller_key`.
+  - Each rewrap sends `Authorization: DPoP <token>` and an RFC 9449 proof: `typ` `dpop+jwt`, `alg` `EdDSA`/`ES256`, and the public `jwk`, with claims `htm`, `htu`, `iat`, `jti` (128-bit random) and `ath`.
+  - It signs the signed request token with the same key and sends `Connect-Protocol-Version: 1`.
+  - `htu` is the Connect procedure `/kas.AccessService/Rewrap`.
+  - A configuration that resolved only to the legacy REST rewrap fails with `KasError::ConfigError` before anything is sent.
+  - Without a caller key, requests are unchanged.
+- `KasClient::set_access_token`: replaces the access token between requests. `ath` is computed at send time.
+- `CallerKey::dpop_proof`: a proof for another Connect procedure of the same platform.
+- `opentdf::ed25519_dalek`: re-exported under `kas-client`, matching `CallerKey::Ed25519`.
+- `tests/data/dpop_interop_vectors.json`: recorded Ed25519 and P-256 vectors, verified by the opentdf-platform fork's `validateDPoP` through `tests/interop/opentdf_platform_dpop_vectors_test.go`.
+
 ### Changed
 
 - TDF archives now write the manifest zip entry as `manifest.json` (spec-compliant) instead of `0.manifest.json`. Readers accept both names, and the payload entry is resolved from `manifest.payload.url` rather than assumed. `schemaVersion` is unchanged (still `4.3.0`); `tdf_spec_version` is now read at either its legacy or spec-conformant placement but never written. **Interop impact:** archives written by this version cannot be opened by released otdfctl, or the upstream opentdf/platform Go, Java, or JS SDKs until they add a `manifest.json` read fallback (an upstream reader-fallback PR is planned). Files written by older versions of this crate remain readable.
