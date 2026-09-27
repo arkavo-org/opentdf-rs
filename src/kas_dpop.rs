@@ -21,6 +21,14 @@ const JTI_BYTES: usize = 16;
 /// Lifetime of a signed request token, matching the ephemeral-key path.
 const SRT_LIFETIME_SECS: i64 = 60;
 
+/// Method of every Connect unary call, and so the DPoP `htm` of a rewrap.
+pub(crate) const REWRAP_HTM: &str = "POST";
+
+/// DPoP `htu` for a rewrap. The platform compares `htu` with the Connect
+/// procedure rather than the request URL, so the proof stays valid behind a
+/// reverse proxy that rewrites scheme and host.
+pub(crate) const CONNECT_REWRAP_PROCEDURE: &str = "/kas.AccessService/Rewrap";
+
 /// The caller's own signing key, the key its access token names in `cnf`.
 ///
 /// Set it with [`crate::kas::KasClient::with_caller_key`].
