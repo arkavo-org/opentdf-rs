@@ -437,8 +437,13 @@ mod tests {
             p256_d[..8].to_lowercase(),
             B64URL.encode(hex::decode(p256_d).unwrap())[..8].to_string(),
         ];
-        for secret in encodings {
-            assert!(!rendered.contains(&secret), "Debug leaked {secret}");
+        // The message names the encoding by index, never the key bytes, so a
+        // failing run doesn't print key material.
+        for (index, secret) in encodings.iter().enumerate() {
+            assert!(
+                !rendered.contains(secret.as_str()),
+                "Debug leaked private-key encoding #{index}"
+            );
         }
     }
 
