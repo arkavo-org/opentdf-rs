@@ -205,9 +205,11 @@ impl KasClient {
     ///   when the platform doesn't expose `/.well-known/opentdf-configuration`.
     ///   `OpentdfConfiguration::for_kas_legacy_rest(base_url)` is the escape
     ///   hatch for pre-ConnectRPC deployments.
-    /// * `oauth_token` - Bearer token sent in the `Authorization` header.
+    /// * `oauth_token` - The access token sent in the `Authorization` header.
     ///   Opaque passthrough: pass a JWT or a base64url-encoded CWT — the
-    ///   server decides how to validate.
+    ///   server decides how to validate. Sent as `Bearer <token>` by default.
+    ///   Once [`KasClient::with_caller_key`] sets a caller key, requests
+    ///   switch to `Authorization: DPoP <token>` plus an RFC 9449 DPoP proof.
     ///
     /// # Security
     ///
@@ -224,7 +226,9 @@ impl KasClient {
     /// This client generates an ephemeral RSA-2048 key pair for signing the
     /// inner JWT rewrap request envelope. That is separate from the access
     /// token — the inner JWT is the rewrap-request signature; the `oauth_token`
-    /// is the platform-issued access token.
+    /// is the platform-issued access token. When [`KasClient::with_caller_key`]
+    /// sets a caller key, that caller key signs the inner (signed request)
+    /// token instead of the ephemeral RSA key.
     pub fn new(
         config: &crate::kas_discovery::OpentdfConfiguration,
         oauth_token: impl Into<String>,
@@ -305,6 +309,12 @@ impl KasClient {
     /// `htu` names it, and the REST path behind a proxy cannot verify `htu`.
     fn require_connect_rewrap(&self) -> Result<(), KasError> {
         use crate::kas_discovery::KasTransport;
+        // Both checks are needed: `transport` records how the endpoint was
+        // discovered/configured, not the path actually resolved, so a
+        // Connect-advertised endpoint could still carry a non-standard rewrap
+        // path; the URL suffix check catches that. And `htu` in the DPoP
+        // proof is always the well-known procedure path, so it must equal
+        // what we're about to call, not merely look like a Connect endpoint.
         let is_connect_rewrap = self.endpoints.transport == KasTransport::Connect
             && url::Url::parse(&self.endpoints.rewrap_url)
                 .is_ok_and(|u| u.path().ends_with(CONNECT_REWRAP_PROCEDURE));
