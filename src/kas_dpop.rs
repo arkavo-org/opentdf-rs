@@ -18,6 +18,9 @@ use crate::sha2::{Digest, Sha256};
 /// any replay cache the KAS keeps.
 const JTI_BYTES: usize = 16;
 
+/// Lifetime of a signed request token, matching the ephemeral-key path.
+const SRT_LIFETIME_SECS: i64 = 60;
+
 /// The caller's own signing key, the key its access token names in `cnf`.
 ///
 /// Set it with [`crate::kas::KasClient::with_caller_key`].
@@ -56,6 +59,20 @@ struct DpopClaims<'a> {
     ath: String,
 }
 
+#[derive(Serialize)]
+struct SrtHeader {
+    alg: &'static str,
+    typ: &'static str,
+}
+
+#[derive(Serialize)]
+struct SrtClaims<'a> {
+    #[serde(rename = "requestBody")]
+    request_body: &'a str,
+    iat: i64,
+    exp: i64,
+}
+
 impl CallerKey {
     /// A DPoP proof (RFC 9449) for one request carrying `access_token`.
     ///
@@ -91,6 +108,27 @@ impl CallerKey {
             iat,
             jti,
             ath: access_token_hash(access_token),
+        })?;
+        self.sign_compact(&header, &claims)
+    }
+
+    /// Signed request token over `request_body`, signed by this key.
+    ///
+    /// The KAS verifies the SRT with the key the caller proved possession of
+    /// through DPoP, so a caller-bound token needs this key here as well.
+    pub(crate) fn signed_request_token_at(
+        &self,
+        request_body: &str,
+        iat: i64,
+    ) -> Result<String, KasError> {
+        let header = serde_json::to_vec(&SrtHeader {
+            alg: self.algorithm(),
+            typ: "JWT",
+        })?;
+        let claims = serde_json::to_vec(&SrtClaims {
+            request_body,
+            iat,
+            exp: iat + SRT_LIFETIME_SECS,
         })?;
         self.sign_compact(&header, &claims)
     }
@@ -393,6 +431,20 @@ mod tests {
         ];
         for secret in encodings {
             assert!(!rendered.contains(&secret), "Debug leaked {secret}");
+        }
+    }
+
+    #[test]
+    fn signed_request_token_is_signed_by_the_caller_key() {
+        let body = r#"{"clientPublicKey":"pem","requests":[]}"#;
+        for key in [rfc8037_key(), rfc6979_key()] {
+            let srt = key.signed_request_token_at(body, 1_780_000_000).unwrap();
+            assert_eq!(part(&srt, 0), json!({"alg": key.algorithm(), "typ": "JWT"}));
+            assert_eq!(
+                part(&srt, 1),
+                json!({"requestBody": body, "iat": 1_780_000_000, "exp": 1_780_000_060})
+            );
+            verify_with(&key, &srt);
         }
     }
 }
