@@ -73,6 +73,9 @@ use {
     reqwest::Client,
 };
 
+#[cfg(feature = "kas-client")]
+pub use crate::kas_dpop::CallerKey;
+
 // NOTE: KAS protocol types are now imported from opentdf-protocol crate
 // The types below (KasError, UnsignedRewrapRequest, etc.) are re-exported from there
 

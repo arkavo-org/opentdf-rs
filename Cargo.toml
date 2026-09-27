@@ -38,6 +38,8 @@ aws-lc-rs = { version = "1.18", optional = true }
 pem = { version = "3.0", optional = true }
 # URL parsing and validation for KAS endpoint security
 url = { version = "2", optional = true }
+# Caller-key DPoP proofs for agent rewrap (pure Rust Ed25519; P-256 comes from opentdf-crypto)
+ed25519-dalek = { version = "2", optional = true }
 
 # CBOR encoding for TDF-CBOR format (optional)
 ciborium = { version = "0.2", optional = true }
@@ -121,7 +123,7 @@ kas-client = ["_kas-client-base", "dep:aws-lc-rs", "dep:pem", "opentdf-crypto/aw
 kas-client-rustcrypto = ["_kas-client-base", "opentdf-crypto/rustcrypto-provider"]
 
 # Internal: shared KAS client dependencies (do not use directly)
-_kas-client-base = ["dep:reqwest", "dep:tokio", "dep:jsonwebtoken", "dep:rand", "dep:url", "opentdf-crypto/kem-rsa", "opentdf-crypto/kem-ec", "rustls-tls"]
+_kas-client-base = ["dep:reqwest", "dep:tokio", "dep:jsonwebtoken", "dep:rand", "dep:url", "dep:ed25519-dalek", "opentdf-crypto/kem-rsa", "opentdf-crypto/kem-ec", "rustls-tls"]
 
 # TLS backend selection for reqwest
 rustls-tls = ["reqwest?/rustls-tls"]
