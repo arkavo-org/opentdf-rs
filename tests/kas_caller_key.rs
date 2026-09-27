@@ -203,3 +203,122 @@ async fn caller_key_signs_the_request_token() {
         verify_with(&key, &seen.srt);
     }
 }
+
+fn expected_jwk(key: &CallerKey) -> Value {
+    match key {
+        CallerKey::Ed25519(k) => json!({
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": B64URL.encode(k.verifying_key().to_bytes()),
+        }),
+        CallerKey::P256(k) => {
+            let point = k.verifying_key().to_encoded_point(false);
+            json!({
+                "kty": "EC",
+                "crv": "P-256",
+                "x": B64URL.encode(point.x().unwrap()),
+                "y": B64URL.encode(point.y().unwrap()),
+            })
+        }
+    }
+}
+
+fn ath(token: &str) -> String {
+    use opentdf::sha2::{Digest, Sha256};
+    B64URL.encode(Sha256::digest(token.as_bytes()))
+}
+
+#[tokio::test]
+async fn caller_key_sends_dpop_proof_bound_to_token_and_procedure() {
+    for key in [ed25519_key(), p256_key()] {
+        let (server, mock, seen) = recording_kas(REWRAP, 1).await;
+        let client = KasClient::new(
+            &OpentdfConfiguration::for_kas_connect(server.url()),
+            "agent-token",
+        )
+        .unwrap()
+        .with_caller_key(key.clone());
+
+        let dek = client
+            .rewrap_standard_tdf(&manifest(server.url()))
+            .await
+            .unwrap();
+
+        mock.assert_async().await;
+        assert_eq!(dek, DEK);
+        let seen = seen.lock().unwrap()[0].clone();
+        assert_eq!(seen.authorization.as_deref(), Some("DPoP agent-token"));
+        assert_eq!(seen.connect_protocol_version.as_deref(), Some("1"));
+        assert_eq!(seen.dpop.len(), 1, "exactly one DPoP header");
+
+        let proof = &seen.dpop[0];
+        let header = jws_part(proof, 0);
+        assert_eq!(header["typ"], "dpop+jwt");
+        assert_eq!(header["alg"], expected_alg(&key));
+        assert_eq!(header["jwk"], expected_jwk(&key));
+        verify_with(&key, proof);
+
+        let claims = jws_part(proof, 1);
+        assert_eq!(claims["htm"], "POST");
+        // The server listens on http://127.0.0.1:<port>; only the bare
+        // procedure matches what the platform compares against.
+        assert_eq!(claims["htu"], REWRAP);
+        assert_eq!(claims["ath"], ath("agent-token"));
+
+        // Proof and request token are signed by the same key.
+        assert_eq!(jws_part(&seen.srt, 0)["alg"], header["alg"]);
+        verify_with(&key, &seen.srt);
+    }
+}
+
+#[tokio::test]
+async fn refreshed_access_token_is_bound_on_the_next_rewrap() {
+    let (server, mock, seen) = recording_kas(REWRAP, 2).await;
+    let mut client = KasClient::new(
+        &OpentdfConfiguration::for_kas_connect(server.url()),
+        "agent-token-1",
+    )
+    .unwrap()
+    .with_caller_key(ed25519_key());
+
+    client
+        .rewrap_standard_tdf(&manifest(server.url()))
+        .await
+        .unwrap();
+    client.set_access_token("agent-token-2");
+    client
+        .rewrap_standard_tdf(&manifest(server.url()))
+        .await
+        .unwrap();
+
+    mock.assert_async().await;
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(seen[1].authorization.as_deref(), Some("DPoP agent-token-2"));
+    let first = jws_part(&seen[0].dpop[0], 1);
+    let second = jws_part(&seen[1].dpop[0], 1);
+    assert_eq!(first["ath"], ath("agent-token-1"));
+    assert_eq!(second["ath"], ath("agent-token-2"));
+    assert_ne!(first["jti"], second["jti"], "jti must differ per request");
+}
+
+#[tokio::test]
+async fn caller_key_refuses_legacy_rest_before_sending() {
+    let (server, mock, _seen) = recording_kas("/kas/v2/rewrap", 0).await;
+    let client = KasClient::new(
+        &OpentdfConfiguration::for_kas_legacy_rest(server.url()),
+        "agent-token",
+    )
+    .unwrap()
+    .with_caller_key(p256_key());
+
+    let err = client
+        .rewrap_standard_tdf(&manifest(server.url()))
+        .await
+        .unwrap_err();
+
+    mock.assert_async().await;
+    assert!(
+        matches!(err, opentdf::KasError::ConfigError { .. }),
+        "got: {err}"
+    );
+}
