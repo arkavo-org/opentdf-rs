@@ -1,0 +1,52 @@
+{
+  "provenance": {
+    "checks": [
+      "validateDPoP accepts the proof with receiverInfo{/kas.AccessService/Rewrap, POST} and cnf.jkt = thumbprint(public_jwk)",
+      "validateDPoP rejects the proof for a different access token (ath)",
+      "validateDPoP rejects the proof when the expected htu is the full URL",
+      "the SRT verifies with the DPoP key under its alg, and requestBody protojson-parses as kas.UnsignedRewrapRequest"
+    ],
+    "generator": "cargo test --lib kas_dpop::tests::write_interop_vectors -- --ignored",
+    "keys": "Ed25519: RFC 8032 section 7.1 TEST 1; P-256: RFC 6979 A.2.5",
+    "opentdf_platform_commit": "c2b1c182b0f04a17b11b4186a193507d19858c31",
+    "opentdf_platform_repo": "https://github.com/arkavo-org/opentdf-platform",
+    "verifier": "tests/interop/opentdf_platform_dpop_vectors_test.go, copied into opentdf-platform service/internal/auth/ and run with go test"
+  },
+  "vectors": [
+    {
+      "access_token": "vector-access-token",
+      "alg": "EdDSA",
+      "dpop": "eyJ0eXAiOiJkcG9wK2p3dCIsImFsZyI6IkVkRFNBIiwiandrIjp7Imt0eSI6Ik9LUCIsImNydiI6IkVkMjU1MTkiLCJ4IjoiMTFxWUFZS3hDcmZWU183VHlXUUhPZzdoY3ZQYXBpTWxyd0lhYVBjSFVSbyJ9fQ.eyJodG0iOiJQT1NUIiwiaHR1IjoiL2thcy5BY2Nlc3NTZXJ2aWNlL1Jld3JhcCIsImlhdCI6MTc4MDAwMDAwMCwianRpIjoib3BlbnRkZi1ycy1pbnRlcm9wLWVkMjU1MTkiLCJhdGgiOiJ3U3Y3b19qR2Q1dzktX2V1d0xmbE50MngzZWFFN09WZGZPQ0VXV3FXVUtFIn0.-_hKD8yduQ8WZ1uNUuDjRCLJ4aWvXGdAQJB28Q_ywveujQZ2nyY2URmuu0pj3UDqeC3cwLTWNmBtTzr8oCdHBQ",
+      "htm": "POST",
+      "htu": "/kas.AccessService/Rewrap",
+      "iat": 1780000000,
+      "jti": "opentdf-rs-interop-ed25519",
+      "name": "ed25519",
+      "public_jwk": {
+        "crv": "Ed25519",
+        "kty": "OKP",
+        "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+      },
+      "request_body": "{\"clientPublicKey\":\"-----BEGIN PUBLIC KEY-----\\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEYP7UuiVanTHJYet0xjVtaMBJuJI7\\nYfps5mliLmDyn7Z5A/4QCLi8maQa6elWKLxk8vGyDC1+n1F3o8KU1EYimQ==\\n-----END PUBLIC KEY-----\\n\",\"requests\":[{\"policy\":{\"id\":\"00000000-0000-0000-0000-000000000000\",\"body\":\"e30=\"},\"keyAccessObjects\":[{\"keyAccessObjectId\":\"kao-0\",\"keyAccessObject\":{\"type\":\"wrapped\",\"url\":\"https://platform.arkavo.net\",\"protocol\":\"kas\",\"wrappedKey\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\",\"policyBinding\":{\"hash\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\",\"algorithm\":\"HS256\"}}}]}]}",
+      "signed_request_token": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJyZXF1ZXN0Qm9keSI6IntcImNsaWVudFB1YmxpY0tleVwiOlwiLS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS1cXG5NRmt3RXdZSEtvWkl6ajBDQVFZSUtvWkl6ajBEQVFjRFFnQUVZUDdVdWlWYW5USEpZZXQweGpWdGFNQkp1Skk3XFxuWWZwczVtbGlMbUR5bjdaNUEvNFFDTGk4bWFRYTZlbFdLTHhrOHZHeURDMStuMUYzbzhLVTFFWWltUT09XFxuLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tXFxuXCIsXCJyZXF1ZXN0c1wiOlt7XCJwb2xpY3lcIjp7XCJpZFwiOlwiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMDAwXCIsXCJib2R5XCI6XCJlMzA9XCJ9LFwia2V5QWNjZXNzT2JqZWN0c1wiOlt7XCJrZXlBY2Nlc3NPYmplY3RJZFwiOlwia2FvLTBcIixcImtleUFjY2Vzc09iamVjdFwiOntcInR5cGVcIjpcIndyYXBwZWRcIixcInVybFwiOlwiaHR0cHM6Ly9wbGF0Zm9ybS5hcmthdm8ubmV0XCIsXCJwcm90b2NvbFwiOlwia2FzXCIsXCJ3cmFwcGVkS2V5XCI6XCJBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBPVwiLFwicG9saWN5QmluZGluZ1wiOntcImhhc2hcIjpcIkFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE9XCIsXCJhbGdvcml0aG1cIjpcIkhTMjU2XCJ9fX1dfV19IiwiaWF0IjoxNzgwMDAwMDAwLCJleHAiOjE3ODAwMDAwNjB9.65xF5O9L01WJvTtwbj7xb4QxoC_mkP25mal5Mlk7VdTsGNd4vj0vlOV0_B9kqFFjuma2HKSyteRCBHD6tuKfAw"
+    },
+    {
+      "access_token": "vector-access-token",
+      "alg": "ES256",
+      "dpop": "eyJ0eXAiOiJkcG9wK2p3dCIsImFsZyI6IkVTMjU2IiwiandrIjp7Imt0eSI6IkVDIiwiY3J2IjoiUC0yNTYiLCJ4IjoiWVA3VXVpVmFuVEhKWWV0MHhqVnRhTUJKdUpJN1lmcHM1bWxpTG1EeW43WSIsInkiOiJlUVAtRUFpNHZKbWtHdW5wVmlpOFpQTHhzZ3d0ZnA5UmQ2UENsTlJHSXBrIn19.eyJodG0iOiJQT1NUIiwiaHR1IjoiL2thcy5BY2Nlc3NTZXJ2aWNlL1Jld3JhcCIsImlhdCI6MTc4MDAwMDAwMCwianRpIjoib3BlbnRkZi1ycy1pbnRlcm9wLXAyNTYiLCJhdGgiOiJ3U3Y3b19qR2Q1dzktX2V1d0xmbE50MngzZWFFN09WZGZPQ0VXV3FXVUtFIn0.0Fcp4rivlfvN5l6dY7K6eeHceamUQSnN6ZxLmuTYYbv4BitogGAHm1D9LRnUq9IVT3L31ENX_LL3cG3tUOdO1A",
+      "htm": "POST",
+      "htu": "/kas.AccessService/Rewrap",
+      "iat": 1780000000,
+      "jti": "opentdf-rs-interop-p256",
+      "name": "p256",
+      "public_jwk": {
+        "crv": "P-256",
+        "kty": "EC",
+        "x": "YP7UuiVanTHJYet0xjVtaMBJuJI7Yfps5mliLmDyn7Y",
+        "y": "eQP-EAi4vJmkGunpVii8ZPLxsgwtfp9Rd6PClNRGIpk"
+      },
+      "request_body": "{\"clientPublicKey\":\"-----BEGIN PUBLIC KEY-----\\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEYP7UuiVanTHJYet0xjVtaMBJuJI7\\nYfps5mliLmDyn7Z5A/4QCLi8maQa6elWKLxk8vGyDC1+n1F3o8KU1EYimQ==\\n-----END PUBLIC KEY-----\\n\",\"requests\":[{\"policy\":{\"id\":\"00000000-0000-0000-0000-000000000000\",\"body\":\"e30=\"},\"keyAccessObjects\":[{\"keyAccessObjectId\":\"kao-0\",\"keyAccessObject\":{\"type\":\"wrapped\",\"url\":\"https://platform.arkavo.net\",\"protocol\":\"kas\",\"wrappedKey\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\",\"policyBinding\":{\"hash\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\",\"algorithm\":\"HS256\"}}}]}]}",
+      "signed_request_token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJyZXF1ZXN0Qm9keSI6IntcImNsaWVudFB1YmxpY0tleVwiOlwiLS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS1cXG5NRmt3RXdZSEtvWkl6ajBDQVFZSUtvWkl6ajBEQVFjRFFnQUVZUDdVdWlWYW5USEpZZXQweGpWdGFNQkp1Skk3XFxuWWZwczVtbGlMbUR5bjdaNUEvNFFDTGk4bWFRYTZlbFdLTHhrOHZHeURDMStuMUYzbzhLVTFFWWltUT09XFxuLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tXFxuXCIsXCJyZXF1ZXN0c1wiOlt7XCJwb2xpY3lcIjp7XCJpZFwiOlwiMDAwMDAwMDAtMDAwMC0wMDAwLTAwMDAtMDAwMDAwMDAwMDAwXCIsXCJib2R5XCI6XCJlMzA9XCJ9LFwia2V5QWNjZXNzT2JqZWN0c1wiOlt7XCJrZXlBY2Nlc3NPYmplY3RJZFwiOlwia2FvLTBcIixcImtleUFjY2Vzc09iamVjdFwiOntcInR5cGVcIjpcIndyYXBwZWRcIixcInVybFwiOlwiaHR0cHM6Ly9wbGF0Zm9ybS5hcmthdm8ubmV0XCIsXCJwcm90b2NvbFwiOlwia2FzXCIsXCJ3cmFwcGVkS2V5XCI6XCJBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBPVwiLFwicG9saWN5QmluZGluZ1wiOntcImhhc2hcIjpcIkFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE9XCIsXCJhbGdvcml0aG1cIjpcIkhTMjU2XCJ9fX1dfV19IiwiaWF0IjoxNzgwMDAwMDAwLCJleHAiOjE3ODAwMDAwNjB9.sD-mxJxp-ZM2lYI1J1bJf28W_HuO2vbuLUsgndvpdC8rLcVN-Ojmv-4Y3Ge-N974ahzdzJvudDNF_RygcUBHEQ"
+    }
+  ]
+}

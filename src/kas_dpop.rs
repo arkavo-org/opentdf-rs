@@ -455,4 +455,131 @@ mod tests {
             verify_with(&key, &srt);
         }
     }
+
+    const VECTOR_PATH: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/data/dpop_interop_vectors.json"
+    );
+    const VECTOR_IAT: i64 = 1_780_000_000;
+    const VECTOR_TOKEN: &str = "vector-access-token";
+
+    /// A real UnsignedRewrapRequest body, so the harness also proves the
+    /// platform parses what this crate signs.
+    fn vector_request_body() -> String {
+        use crate::p256::pkcs8::{EncodePublicKey, LineEnding};
+        use base64::engine::general_purpose::STANDARD as BASE64;
+        use opentdf_protocol::{
+            KasPolicy, KasPolicyBinding, KeyAccessObject, KeyAccessObjectWrapper, PolicyRequest,
+            UnsignedRewrapRequest,
+        };
+        let client_public_key = crate::p256::PublicKey::from(rfc6979_signing_key().verifying_key())
+            .to_public_key_pem(LineEnding::LF)
+            .unwrap();
+        let request = UnsignedRewrapRequest {
+            client_public_key,
+            requests: vec![PolicyRequest {
+                algorithm: None,
+                policy: KasPolicy {
+                    id: "00000000-0000-0000-0000-000000000000".to_string(),
+                    body: BASE64.encode(b"{}"),
+                },
+                key_access_objects: vec![KeyAccessObjectWrapper {
+                    key_access_object_id: "kao-0".to_string(),
+                    key_access_object: KeyAccessObject {
+                        key_type: "wrapped".to_string(),
+                        url: "https://platform.arkavo.net".to_string(),
+                        protocol: "kas".to_string(),
+                        wrapped_key: BASE64.encode([0u8; 32]),
+                        policy_binding: KasPolicyBinding {
+                            hash: BASE64.encode([0u8; 32]),
+                            algorithm: Some("HS256".to_string()),
+                        },
+                        encrypted_metadata: None,
+                        kid: None,
+                        header: None,
+                        ephemeral_public_key: None,
+                    },
+                }],
+            }],
+        };
+        serde_json::to_string(&request).unwrap()
+    }
+
+    fn interop_vectors() -> Value {
+        let body = vector_request_body();
+        Value::Array(
+            [("ed25519", rfc8037_key()), ("p256", rfc6979_key())]
+                .into_iter()
+                .map(|(name, key)| {
+                    let jti = format!("opentdf-rs-interop-{name}");
+                    json!({
+                        "name": name,
+                        "alg": key.algorithm(),
+                        "public_jwk": key.jwk(),
+                        "access_token": VECTOR_TOKEN,
+                        "htm": REWRAP_HTM,
+                        "htu": CONNECT_REWRAP_PROCEDURE,
+                        "iat": VECTOR_IAT,
+                        "jti": jti,
+                        "request_body": body,
+                        "dpop": key
+                            .dpop_proof_at(
+                                REWRAP_HTM,
+                                CONNECT_REWRAP_PROCEDURE,
+                                VECTOR_TOKEN,
+                                VECTOR_IAT,
+                                &jti,
+                            )
+                            .unwrap(),
+                        "signed_request_token": key
+                            .signed_request_token_at(&body, VECTOR_IAT)
+                            .unwrap(),
+                    })
+                })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn interop_vectors_reproduce_the_recorded_fixture() {
+        let recorded: Value = serde_json::from_str(
+            &std::fs::read_to_string(VECTOR_PATH)
+                .expect("fixture missing; record it with write_interop_vectors (Task 4)"),
+        )
+        .unwrap();
+        assert_eq!(
+            recorded["vectors"],
+            interop_vectors(),
+            "signing output drifted from the vectors the platform verifier accepted"
+        );
+    }
+
+    #[test]
+    #[ignore = "records tests/data/dpop_interop_vectors.json; run only when re-verifying against opentdf-platform"]
+    fn write_interop_vectors() {
+        let commit = std::env::var("OPENTDF_PLATFORM_COMMIT").expect(
+            "set OPENTDF_PLATFORM_COMMIT to the fork commit the Go harness verifies against",
+        );
+        let file = json!({
+            "provenance": {
+                "generator": "cargo test --lib kas_dpop::tests::write_interop_vectors -- --ignored",
+                "verifier": "tests/interop/opentdf_platform_dpop_vectors_test.go, copied into opentdf-platform service/internal/auth/ and run with go test",
+                "opentdf_platform_repo": "https://github.com/arkavo-org/opentdf-platform",
+                "opentdf_platform_commit": commit,
+                "checks": [
+                    "validateDPoP accepts the proof with receiverInfo{/kas.AccessService/Rewrap, POST} and cnf.jkt = thumbprint(public_jwk)",
+                    "validateDPoP rejects the proof for a different access token (ath)",
+                    "validateDPoP rejects the proof when the expected htu is the full URL",
+                    "the SRT verifies with the DPoP key under its alg, and requestBody protojson-parses as kas.UnsignedRewrapRequest"
+                ],
+                "keys": "Ed25519: RFC 8032 section 7.1 TEST 1; P-256: RFC 6979 A.2.5"
+            },
+            "vectors": interop_vectors(),
+        });
+        std::fs::write(
+            VECTOR_PATH,
+            serde_json::to_string_pretty(&file).unwrap() + "\n",
+        )
+        .unwrap();
+    }
 }
