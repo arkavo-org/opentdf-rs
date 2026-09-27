@@ -53,6 +53,9 @@ mod tdf;
 pub mod kas;
 
 #[cfg(feature = "kas-client")]
+mod kas_dpop;
+
+#[cfg(feature = "kas-client")]
 pub mod kas_discovery;
 
 #[cfg(feature = "kas-client")]
@@ -94,6 +97,11 @@ pub use opentdf_crypto::{AesKey, KeyError, PayloadKey, PolicyKey};
 #[cfg(feature = "kas-client")]
 pub use opentdf_crypto::{hkdf, p256, pkcs8, sha1, sha2};
 
+// Re-exported so callers build `kas::CallerKey::Ed25519` against the same
+// major version this crate signs with.
+#[cfg(feature = "kas-client")]
+pub use ed25519_dalek;
+
 // Re-export rsa crate only for rustcrypto-rsa feature (legacy, has RUSTSEC-2023-0071)
 #[cfg(feature = "rustcrypto-rsa")]
 pub use opentdf_crypto::rsa;
@@ -126,7 +134,7 @@ pub use fqn::{AttributeFqn, FqnValidationRules, NamespaceRegistry};
 
 // KAS feature types
 #[cfg(feature = "kas-client")]
-pub use kas::{KasClient, KeyType};
+pub use kas::{CallerKey, KasClient, KeyType};
 
 #[cfg(feature = "kas-client")]
 #[allow(deprecated)]
