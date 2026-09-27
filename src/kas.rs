@@ -170,8 +170,9 @@ impl EphemeralKeyPair {
 
 /// KAS client for rewrap protocol
 ///
-/// This client handles JWT signing internally using an ephemeral RSA key pair.
-/// The JWT contains the rewrap request and is signed with RS256.
+/// By default the client signs the rewrap request (the signed request token)
+/// with an internal ephemeral RSA key (RS256) and sends the access token as a
+/// bearer. [`KasClient::with_caller_key`] switches to the caller's own key.
 /// Uses aws-lc-rs for constant-time RSA operations (FIPS validated).
 #[cfg(feature = "kas-client")]
 pub struct KasClient {
@@ -179,6 +180,7 @@ pub struct KasClient {
     endpoints: crate::kas_discovery::KasEndpoints,
     oauth_token: String,
     signing_key: PrivateDecryptingKey,
+    caller_key: Option<CallerKey>,
 }
 
 #[cfg(feature = "kas-client")]
@@ -247,7 +249,20 @@ impl KasClient {
             endpoints,
             oauth_token: oauth_token.into(),
             signing_key,
+            caller_key: None,
         })
+    }
+
+    /// Bind this client to the caller's own key: the key its access token
+    /// names in `cnf`.
+    ///
+    /// Every rewrap then signs the signed request token with `key` (`EdDSA`
+    /// for Ed25519, `ES256` for P-256) instead of the ephemeral RSA key,
+    /// because the KAS verifies that token with the key the caller proved
+    /// possession of.
+    pub fn with_caller_key(mut self, key: CallerKey) -> Self {
+        self.caller_key = Some(key);
+        self
     }
 
     /// Internal helper for sending signed rewrap requests to KAS via ConnectRPC
@@ -395,7 +410,8 @@ impl KasClient {
     /// }
     /// ```
     ///
-    /// The JWT is signed with RS256 using the client's internal signing key.
+    /// The JWT is signed with RS256 using the client's internal signing key,
+    /// or with the caller key (`EdDSA`/`ES256`) when one is set.
     /// Uses aws-lc-rs for constant-time RSA operations (FIPS validated).
     fn sign_rewrap_request(&self, request: &UnsignedRewrapRequest) -> Result<String, KasError> {
         use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
@@ -414,6 +430,13 @@ impl KasClient {
 
         // Create JWT claims
         let now = chrono::Utc::now().timestamp();
+
+        // The KAS verifies the SRT with the key the caller proved possession
+        // of, so a caller-bound token needs the SRT signed by that same key.
+        if let Some(caller_key) = &self.caller_key {
+            return caller_key.signed_request_token_at(&request_json, now);
+        }
+
         let claims = Claims {
             request_body: request_json,
             iat: now,
