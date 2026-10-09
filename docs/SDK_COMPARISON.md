@@ -19,8 +19,8 @@ This document compares the Rust implementation (opentdf-rs) against the Swift SD
 
 | Feature | opentdf-rs | OpenTDFKit | Go SDK | Spec Compliance |
 |---------|-----------|------------|--------|-----------------|
-| **Standard TDF (ZIP-based)** | ✅ Full | ✅ Full | ✅ Full | ✅ |
-| **NanoTDF** | ❌ Not implemented | ✅ Full | ✅ Full | ⚠️ Missing |
+| **TDF (ZIP-based)** | ✅ Full | ✅ Full | ✅ Full | ✅ |
+| **NanoTDF** | ✅ Implemented (see [NANOTDF.md](NANOTDF.md)) | ✅ Full | ❌ Removed Jan 2026 (platform #3013) | ⚠️ Removed from spec Jan 2026 (spec #63) |
 | **Manifest Schema** | ✅ Implemented | ✅ Implemented | ✅ Implemented | ✅ |
 | **Policy Object** | ✅ ABAC support | ✅ Basic | ✅ Full | ✅ |
 
@@ -127,11 +127,11 @@ This document compares the Rust implementation (opentdf-rs) against the Swift SD
 
 ### Critical Gaps in opentdf-rs
 
-1. **NanoTDF Support Missing** ⚠️ HIGH PRIORITY
-   - Both Swift and Go SDKs have full NanoTDF implementation
-   - NanoTDF is part of the official OpenTDF spec
+1. **NanoTDF Support** (historical gap, since closed; the Go SDK has since dropped NanoTDF)
+   - At analysis time both Swift and Go SDKs had full NanoTDF implementation and opentdf-rs had none
+   - NanoTDF was part of the OpenTDF spec until its removal in January 2026 (opentdf/spec #63; opentdf/platform #3013 dropped support); opentdf-rs continues to support it
    - Required for IoT/embedded/mobile use cases
-   - Minimum overhead < 200 bytes vs standard TDF ~1KB+
+   - Minimum overhead < 200 bytes vs TDF (ZIP-based) ~1KB+
 
 2. **No KAS Rewrap Protocol** ⚠️ HIGH PRIORITY
    - Cannot interact with real KAS servers for key unwrapping
@@ -249,7 +249,7 @@ type PolicyObject struct {
 
 ## Specification Compliance Assessment
 
-### Standard TDF Format
+### TDF Format
 
 | Spec Requirement | opentdf-rs | Status |
 |-----------------|-----------|--------|

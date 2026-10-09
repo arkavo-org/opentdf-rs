@@ -1,21 +1,23 @@
-# ZTDF-JSON: TDF for JSON-RPC Protocols
+# TDF-JSON: TDF for JSON-RPC Protocols
+
+> Formerly called ZTDF-JSON in this repo. ZTDF properly names the ACP 240 profile of TDF; this document describes opentdf-rs's inline-payload JSON container.
 
 ## Overview
 
-ZTDF-JSON is an adaptation of the OpenTDF TDF3 format optimized for JSON-RPC protocols like A2A (Agent-to-Agent) and MCP (Model Context Protocol). It provides the same security guarantees as standard TDF while eliminating ZIP overhead by inlining the encrypted payload.
+TDF-JSON is an adaptation of the OpenTDF TDF format optimized for JSON-RPC protocols like A2A (Agent-to-Agent) and MCP (Model Context Protocol). It provides the same security guarantees as ZIP-based TDF while eliminating ZIP overhead by inlining the encrypted payload.
 
 ## Key Features
 
 - **Inline Payload**: Encrypted data embedded directly in JSON manifest
 - **JSON-Native**: Fits naturally in JSON-RPC message envelopes
-- **Full OpenTDF Compatibility**: Maintains all security properties of TDF3
+- **Full OpenTDF Compatibility**: Maintains all security properties of TDF
 - **Zero Trust**: Data remains encrypted until authorized by KAS
 - **ABAC Support**: Fine-grained attribute-based access control
 - **Protocol Agnostic**: Works with any JSON-RPC 2.0 protocol
 
 ## Format Comparison
 
-### Traditional TDF3 (ZIP Archive)
+### TDF (ZIP archive)
 
 ```
 TDF Archive (.tdf)
@@ -23,7 +25,7 @@ TDF Archive (.tdf)
 └── 0.payload              # Encrypted content (separate file)
 ```
 
-### ZTDF-JSON (Inline)
+### TDF-JSON (Inline)
 
 ```json
 {
