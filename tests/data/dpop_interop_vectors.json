@@ -8,7 +8,7 @@
     ],
     "generator": "cargo test --lib kas_dpop::tests::write_interop_vectors -- --ignored",
     "keys": "Ed25519: RFC 8032 section 7.1 TEST 1; P-256: RFC 6979 A.2.5",
-    "opentdf_platform_commit": "c2b1c182b0f04a17b11b4186a193507d19858c31",
+    "opentdf_platform_commit": "a608078bd267041f78f23740db6766f54e575cf6",
     "opentdf_platform_repo": "https://github.com/arkavo-org/opentdf-platform",
     "verifier": "tests/interop/opentdf_platform_dpop_vectors_test.go, copied into opentdf-platform service/internal/auth/ and run with go test"
   },

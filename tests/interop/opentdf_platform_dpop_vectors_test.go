@@ -1,9 +1,9 @@
 // Verifies opentdf-rs caller-key vectors against the opentdf-platform
 // fork's own DPoP verifier.
 //
-// Targets Authentication.validateDPoP in opentdf-platform branch
-// feat/agent-credentials-kas @ 08945d1e (service/internal/auth/authn.go),
-// which returns (jwk.Key, bool, error): the bool reports whether the
+// Targets Authentication.validateDPoP in opentdf-platform as of
+// arkavo-org/opentdf-platform#49 (merge commit a608078b,
+// service/internal/auth/authn.go), which returns (jwk.Key, bool, error): the bool reports whether the
 // key-bound proof rules applied (cnf.jwk) rather than the cnf.jkt
 // thumbprint check. These vectors bind via cnf.jkt, so it is always false.
 //
@@ -51,7 +51,8 @@ func TestOpentdfRsDPoPVectors(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &file))
 	require.Len(t, file.Vectors, 2)
 
-	// P1 adds EdDSA to the allow-list; before P1 lands, enable it the same way.
+	// P1 (#49) adds EdDSA to the allow-list, so this is a no-op from a608078b
+	// on; it only matters when re-running against an older commit.
 	if _, ok := allowedSignatureAlgorithms[jwa.EdDSA]; !ok {
 		allowedSignatureAlgorithms[jwa.EdDSA] = true
 		defer delete(allowedSignatureAlgorithms, jwa.EdDSA)
