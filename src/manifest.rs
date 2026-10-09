@@ -162,11 +162,8 @@ pub trait KeyAccessExt {
 impl KeyAccessExt for KeyAccess {
     /// Generate policy binding using HMAC-SHA256 from raw policy string
     ///
-    /// This matches the OpenTDF Go SDK format:
-    /// 1. Base64 encode the policy JSON
-    /// 2. HMAC-SHA256 the base64-encoded policy using the key
-    /// 3. Hex encode the HMAC result (32 bytes → 64 hex chars)
-    /// 4. Base64 encode the hex string for storage
+    /// Writes the spec binding `Base64(HMAC-SHA256(key, Base64(policy)))`; see
+    /// `opentdf_crypto::calculate_policy_binding`.
     fn generate_policy_binding_raw(&mut self, policy: &str, key: &[u8]) -> Result<(), String> {
         let binding = calculate_policy_binding(policy, key)
             .map_err(|e| format!("Failed to calculate policy binding: {}", e))?;

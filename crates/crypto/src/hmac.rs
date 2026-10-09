@@ -127,22 +127,16 @@ pub fn verify_segment_hash(expected_hash_b64: &str, gmac_tag: &[u8]) -> Result<(
 
 /// Calculate policy binding using HMAC-SHA256
 ///
-/// This matches the OpenTDF Go SDK format:
-/// 1. Base64 encode the policy JSON
-/// 2. HMAC-SHA256 the base64-encoded policy using the key
-/// 3. Hex encode the HMAC result (32 bytes → 64 hex chars)
-/// 4. Base64 encode the hex string for storage
+/// Produces the spec binding `Base64(HMAC-SHA256(key, Base64(policy_json)))`,
+/// 44 characters. The HMAC input is the manifest's `policy` string, which is
+/// what the KAS hashes, so pass the policy JSON, not its base64 form.
+///
+/// Rewrap needs a KAS with opentdf/platform#4081, which accepts this form as
+/// well as the Go SDK's legacy `Base64(hex(HMAC))`.
 pub fn calculate_policy_binding(policy_json: &str, key: &[u8]) -> Result<String, HmacError> {
     let policy_base64 = BASE64.encode(policy_json);
-
-    // HMAC the base64-encoded policy
     let hmac_result = calculate_hmac(key, policy_base64.as_bytes())?;
-
-    // Hex encode the HMAC result
-    let hex_string = hex::encode(hmac_result);
-
-    // Base64 encode the hex string
-    Ok(BASE64.encode(hex_string.as_bytes()))
+    Ok(BASE64.encode(hmac_result))
 }
 
 #[cfg(test)]
@@ -223,6 +217,20 @@ mod tests {
         // Should be deterministic
         let binding2 = calculate_policy_binding(policy, key).unwrap();
         assert_eq!(binding, binding2);
+    }
+
+    /// Known answer for the spec binding `Base64(HMAC-SHA256(key, Base64(policy)))`,
+    /// cross-checked with `openssl dgst -sha256 -hmac` over the base64 policy (the
+    /// same computation as OpenTDFKit 5.0.0's `TDFCrypto.policyBinding`).
+    #[test]
+    fn test_policy_binding_known_answer() {
+        let policy = r#"{"body":{"dataAttributes":[]}}"#;
+        let key = b"test_key_32_bytes_long_for_hmac!";
+
+        let binding = calculate_policy_binding(policy, key).unwrap();
+
+        assert_eq!(binding, "03yakXSzXkEvVt/Om8VVgFBWI3a+vYCxqtK4Ki80sbo=");
+        assert_eq!(BASE64.decode(&binding).unwrap().len(), 32);
     }
 
     #[test]

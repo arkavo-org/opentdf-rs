@@ -5,6 +5,15 @@
 ### Changed
 
 - TDF archives now write the manifest zip entry as `manifest.json` (spec-compliant) instead of `0.manifest.json`. Readers accept both names, and the payload entry is resolved from `manifest.payload.url` rather than assumed. `schemaVersion` is unchanged (still `4.3.0`); `tdf_spec_version` is now read at either its legacy or spec-conformant placement but never written. **Interop impact:** archives written by this version cannot be opened by released otdfctl, or the upstream opentdf/platform Go, Java, or JS SDKs until they add a `manifest.json` read fallback (an upstream reader-fallback PR is planned). Files written by older versions of this crate remain readable.
+- **Breaking (wire): spec policy binding.** `keyAccess.policyBinding.hash` is now `Base64(HMAC-SHA256(DEK, Base64(policy)))`, 44 characters, replacing the Go SDK's legacy `Base64(hex(HMAC))` (88 characters). This matches OpenTDFKit 5.0.0. **Interop impact:** rewrap needs a KAS with opentdf/platform#4081; platform.arkavo.net has it through arkavo-org/opentdf-platform#54, and no released upstream KAS accepts this form yet. TDFs written by older versions still rewrap, since a patched KAS accepts both forms. The `hex` dependency is dropped from `opentdf-crypto`.
+
+### Fixed
+
+- TDF-JSON (`TdfJson`, `TdfJsonRpc`) and TDF-CBOR (`TdfCbor`) builders, and the `xtest_cli` JSON/CBOR paths, computed the policy binding over the policy base64-encoded twice. A KAS that verifies the binding (`HMAC(DEK, manifest policy)`) refused to rewrap them. They now bind over the manifest's `policy` string, as ZIP TDFs already did.
+
+### CI
+
+- X-Test pins the KAS to opentdf/platform#4081 (`ca178b05`) and the upstream Go peer to opentdf/platform#4063 (`29498d20`), as OpenTDFKit does, until upstream releases include both. The previous floating pins rejected the spec binding and could not read `manifest.json`.
 
 ## [0.15.0] — 2026-08-30
 
