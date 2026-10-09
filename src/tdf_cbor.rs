@@ -1509,7 +1509,7 @@ impl TdfCborBuilder {
         let policy_b64 = BASE64.encode(policy_json.as_bytes());
 
         // Calculate policy binding hash
-        let policy_hash = calculate_policy_binding(&policy_b64, payload_key)
+        let policy_hash = calculate_policy_binding(&policy_json, payload_key)
             .map_err(|e| TdfCborError::EncodingError(e.to_string()))?;
 
         // Decode the base64 ciphertext to get raw bytes
@@ -1742,6 +1742,37 @@ mod tests {
         assert_eq!(parsed.tdf, "cbor");
         assert_eq!(parsed.version, [1, 0, 0]);
         assert_eq!(parsed.payload.value, original.payload.value);
+    }
+
+    /// The KAS checks the binding as `HMAC-SHA256(DEK, manifest policy)`, where
+    /// the manifest policy is the base64 string itself.
+    #[test]
+    fn test_policy_binding_matches_manifest_policy() {
+        let policy = Policy::new(
+            "test-policy".to_string(),
+            vec![],
+            vec!["user@example.com".to_string()],
+        );
+        let (private_pem, public_pem) = generate_test_ec_key_pair();
+
+        let container = TdfCbor::encrypt(b"binding")
+            .kas_url(&test_kas_url())
+            .kas_public_key(&public_pem)
+            .policy(policy)
+            .build()
+            .expect("Failed to create container");
+
+        let info = &container.manifest.encryption_information;
+        let kao = &info.key_access[0];
+        let dek = opentdf_crypto::unwrap_key_with_ec(
+            &private_pem,
+            &kao.wrapped_key,
+            kao.ephemeral_public_key.as_deref().unwrap(),
+        )
+        .unwrap();
+        let expected =
+            BASE64.encode(opentdf_crypto::calculate_hmac(&dek, info.policy.as_bytes()).unwrap());
+        assert_eq!(kao.policy_binding.hash, expected);
     }
 
     #[test]

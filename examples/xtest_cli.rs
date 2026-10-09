@@ -420,7 +420,7 @@ fn encrypt_json(
     // Create policy binding
     let policy_json = serde_json::to_string(policy)?;
     let policy_b64 = BASE64.encode(policy_json.as_bytes());
-    let policy_hash = calculate_policy_binding(&policy_b64, &symmetric_key)?;
+    let policy_hash = calculate_policy_binding(&policy_json, &symmetric_key)?;
 
     // Wrap key with EC
     let ec_result = wrap_key_with_ec(kas_public_key, &symmetric_key)?;
@@ -539,7 +539,7 @@ fn encrypt_cbor(
     // Create policy binding
     let policy_json = serde_json::to_string(policy)?;
     let policy_b64 = BASE64.encode(policy_json.as_bytes());
-    let policy_hash = calculate_policy_binding(&policy_b64, &symmetric_key)?;
+    let policy_hash = calculate_policy_binding(&policy_json, &symmetric_key)?;
 
     // Wrap key with EC
     let ec_result = wrap_key_with_ec(kas_public_key, &symmetric_key)?;

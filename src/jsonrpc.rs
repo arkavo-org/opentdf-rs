@@ -428,7 +428,7 @@ impl TdfJsonBuilder {
         let policy_b64 = BASE64.encode(policy_json.as_bytes());
 
         // Calculate policy binding hash
-        let policy_hash = calculate_policy_binding(&policy_b64, payload_key)
+        let policy_hash = calculate_policy_binding(&policy_json, payload_key)
             .map_err(|_| EncryptionError::KeyGenerationError)?;
 
         // Wrap key using EC (ECDH + HKDF + AES-GCM) - KAS public key is required
@@ -828,7 +828,7 @@ impl TdfJsonRpcBuilder {
         let policy_b64 = BASE64.encode(policy_json.as_bytes());
 
         // Calculate policy binding hash
-        let policy_hash = calculate_policy_binding(&policy_b64, payload_key)
+        let policy_hash = calculate_policy_binding(&policy_json, payload_key)
             .map_err(|_| EncryptionError::KeyGenerationError)?;
 
         // Create key access object
@@ -1020,7 +1020,7 @@ mod tests {
         // Create policy binding
         let policy_json = serde_json::to_string(&policy).expect("Failed to serialize policy");
         let policy_b64 = BASE64.encode(policy_json.as_bytes());
-        let policy_hash = calculate_policy_binding(&policy_b64, &payload_key)
+        let policy_hash = calculate_policy_binding(&policy_json, &payload_key)
             .expect("Failed to calculate policy binding");
 
         // Create key access object
@@ -1306,6 +1306,38 @@ mod tests {
         assert!(envelope.payload.length.is_some());
     }
 
+    /// The KAS checks the binding as `HMAC-SHA256(DEK, manifest policy)`, where
+    /// the manifest policy is the base64 string itself.
+    #[cfg(feature = "kas-client")]
+    #[test]
+    fn test_tdf_json_policy_binding_matches_manifest_policy() {
+        let policy = Policy::new(
+            "test-policy".to_string(),
+            vec![],
+            vec!["user@example.com".to_string()],
+        );
+        let (private_pem, public_pem) = generate_test_ec_key_pair();
+
+        let envelope = TdfJson::encrypt(b"binding")
+            .kas_url(&test_kas_url())
+            .kas_public_key(&public_pem)
+            .policy(policy)
+            .build()
+            .expect("Failed to create envelope");
+
+        let info = &envelope.manifest.encryption_information;
+        let kao = &info.key_access[0];
+        let dek = opentdf_crypto::unwrap_key_with_ec(
+            &private_pem,
+            &kao.wrapped_key,
+            kao.ephemeral_public_key.as_deref().unwrap(),
+        )
+        .unwrap();
+        let expected =
+            BASE64.encode(opentdf_crypto::calculate_hmac(&dek, info.policy.as_bytes()).unwrap());
+        assert_eq!(kao.policy_binding.hash, expected);
+    }
+
     #[cfg(feature = "kas-client")]
     #[test]
     fn test_tdf_json_serialize_deserialize() {
@@ -1363,7 +1395,7 @@ mod tests {
         // Create policy binding
         let policy_json = serde_json::to_string(&policy).expect("Failed to serialize policy");
         let policy_b64 = BASE64.encode(policy_json.as_bytes());
-        let policy_hash = calculate_policy_binding(&policy_b64, &payload_key)
+        let policy_hash = calculate_policy_binding(&policy_json, &payload_key)
             .expect("Failed to calculate policy binding");
 
         // Create key access object

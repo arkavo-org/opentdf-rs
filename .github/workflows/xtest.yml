@@ -31,12 +31,16 @@ on:
       platform-ref:
         required: false
         type: string
-        default: latest
+        # TODO: back to `latest` once a service/* release includes
+        # opentdf/platform#4081 (KAS accepts spec Base64(HMAC) policy bindings).
+        default: ca178b05ee15c0ba5b075f0a2b05d1da6dd585bc
         description: "opentdf/platform ref: 'latest'/'lts', branch, tag, or SHA"
       otdfctl-ref:
         required: false
         type: string
-        default: latest
+        # TODO: back to `latest` once an otdfctl/* release includes
+        # opentdf/platform#4063 (Go reads the spec manifest.json entry).
+        default: 29498d207c8b7b80ab820ba50b0f674026ab277f
         description: "go/otdfctl peer ref: 'latest'/'lts', branch, tag, or SHA"
 
 concurrency:
@@ -61,8 +65,14 @@ jobs:
       go-channel: ${{ steps.resolve.outputs.go-channel }}
     env:
       TESTS_REF_IN: ${{ inputs.tests-ref || 'latest' }}
-      PLATFORM_REF_IN: ${{ inputs.platform-ref || 'latest' }}
-      OTDFCTL_REF_IN: ${{ inputs.otdfctl-ref || 'latest' }}
+      # Pinned until a service/* release includes opentdf/platform#4081:
+      # this crate writes spec-form policy bindings, which released KAS
+      # versions reject.
+      PLATFORM_REF_IN: ${{ inputs.platform-ref || 'ca178b05ee15c0ba5b075f0a2b05d1da6dd585bc' }}
+      # Pinned until an otdfctl/* release includes opentdf/platform#4063:
+      # released go reads only 0.manifest.json; this crate writes the spec
+      # name manifest.json.
+      OTDFCTL_REF_IN: ${{ inputs.otdfctl-ref || '29498d207c8b7b80ab820ba50b0f674026ab277f' }}
       GH_TOKEN: ${{ github.token }}
       # Live main while community suite tracks Stage-1 rust ↔ go there.
       TESTS_FALLBACK_REF: main
@@ -117,6 +127,14 @@ jobs:
           else
             GO_REF="$OTDFCTL_REF_IN"
             GO_CHANNEL="$OTDFCTL_REF_IN"
+            # otdf-sdk-mgr builds PR heads from source under the tag pull-<n>
+            # (sdk/go/dist/pull-<n>). The default pin is PR #4063's head commit,
+            # which it resolves through refs/pull/4063/head.
+            if [[ "$OTDFCTL_REF_IN" == "29498d207c8b7b80ab820ba50b0f674026ab277f" ]]; then
+              GO_CHANNEL="pull-4063"
+            elif [[ "$OTDFCTL_REF_IN" =~ ^refs/pull/([0-9]+)/ ]]; then
+              GO_CHANNEL="pull-${BASH_REMATCH[1]}"
+            fi
           fi
 
           {
