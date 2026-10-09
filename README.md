@@ -321,7 +321,7 @@ The KAS client is enabled by default:
 
 ```toml
 [dependencies]
-opentdf = "0.14"
+opentdf = "0.16"
 ```
 
 #### Creating a KAS Client (v0.13+)
@@ -393,6 +393,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+#### Agent caller key (DPoP)
+
+An agent whose access token names its own key in `cnf` rewraps with proof of possession:
+
+```rust
+// Runs inside an async fn returning Result<(), Box<dyn std::error::Error>>
+// (or similar), hence the `.await` and `?` below.
+use opentdf::kas::{CallerKey, KasClient};
+use opentdf::kas_discovery::fetch_well_known;
+
+let http = reqwest::Client::builder()
+    .timeout(std::time::Duration::from_secs(10))
+    .build()?;
+let cfg = fetch_well_known("https://platform.arkavo.net", &http).await?;
+let mut kas = KasClient::new(&cfg, agent_access_token)?
+    .with_caller_key(CallerKey::Ed25519(agent_signing_key)); // or CallerKey::P256(..)
+let payload_key = kas.rewrap_standard_tdf(&manifest).await?;
+
+// After refreshing the agent token, bind the new one on the next rewrap:
+kas.set_access_token(refreshed_token);
+```
+
+Each rewrap then goes to the Connect endpoint `/kas.AccessService/Rewrap` with `Authorization: DPoP <token>` and a `DPoP` proof (`htm`, `htu` = the Connect procedure, `iat`, `jti`, `ath`). The signed request token is signed by the same key (`EdDSA` or `ES256`). A REST-only configuration is refused. Build `agent_signing_key` with `opentdf::ed25519_dalek` so the major version matches.
 
 ### Testing with Real KAS
 
@@ -612,7 +636,7 @@ Add to your Cargo.toml ([crates.io](https://crates.io/crates/opentdf)):
 
 ```toml
 [dependencies]
-opentdf = "0.14"
+opentdf = "0.16"
 ```
 
 ### Feature Flags
@@ -640,16 +664,16 @@ opentdf = "0.14"
 
 ```toml
 # Recommended: Secure defaults (aws-lc-rs + rustls)
-opentdf = "0.14"
+opentdf = "0.16"
 
 # Pure Rust: No C compiler needed (accepts timing vulnerability)
-opentdf = { version = "0.14", default-features = false, features = ["kas-client-rustcrypto"] }
+opentdf = { version = "0.16", default-features = false, features = ["kas-client-rustcrypto"] }
 
 # Native TLS: Use system TLS (OpenSSL on Linux, SecureTransport on macOS)
-opentdf = { version = "0.14", default-features = false, features = ["kas-client", "native-tls"] }
+opentdf = { version = "0.16", default-features = false, features = ["kas-client", "native-tls"] }
 
 # Minimal: Core TDF operations only (no KAS client, no async)
-opentdf = { version = "0.14", default-features = false }
+opentdf = { version = "0.16", default-features = false }
 ```
 
 #### WASM Note
@@ -675,14 +699,14 @@ Version 0.7.0 brings critical security improvements and better feature organizat
 opentdf = { version = "0.6", features = ["kas"] }
 
 # After (v0.7.0) - "kas" still works but is deprecated
-opentdf = "0.14"  # kas-client is now the default
+opentdf = "0.16"  # kas-client is now the default
 ```
 
 **Pure Rust Builds**:
 ```toml
 # Before (v0.6.x) - not available
 # After (v0.7.0) - explicit pure Rust option
-opentdf = { version = "0.14", default-features = false, features = ["kas-client-rustcrypto"] }
+opentdf = { version = "0.16", default-features = false, features = ["kas-client-rustcrypto"] }
 ```
 
 ## What's New in v0.5.0

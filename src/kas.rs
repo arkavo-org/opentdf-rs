@@ -26,6 +26,13 @@
 //! This client requires pre-signed JWT tokens. For a complete JWT helper implementation,
 //! see `examples/jwt_helper.rs`.
 //!
+//! # Caller key (DPoP)
+//!
+//! A caller whose access token is bound to its own key (`cnf`), such as an
+//! agent, sets that key with [`KasClient::with_caller_key`]. Each rewrap then
+//! carries an RFC 9449 DPoP proof and a request token, both signed by that
+//! key, and goes to the Connect rewrap endpoint.
+//!
 //! # Example
 //!
 //! ```no_run
@@ -72,6 +79,12 @@ use {
     },
     reqwest::Client,
 };
+
+#[cfg(feature = "kas-client")]
+pub use crate::kas_dpop::CallerKey;
+
+#[cfg(feature = "kas-client")]
+use crate::kas_dpop::{CONNECT_REWRAP_PROCEDURE, REWRAP_HTM};
 
 // NOTE: KAS protocol types are now imported from opentdf-protocol crate
 // The types below (KasError, UnsignedRewrapRequest, etc.) are re-exported from there
@@ -167,8 +180,9 @@ impl EphemeralKeyPair {
 
 /// KAS client for rewrap protocol
 ///
-/// This client handles JWT signing internally using an ephemeral RSA key pair.
-/// The JWT contains the rewrap request and is signed with RS256.
+/// By default the client signs the rewrap request (the signed request token)
+/// with an internal ephemeral RSA key (RS256) and sends the access token as a
+/// bearer. [`KasClient::with_caller_key`] switches to the caller's own key.
 /// Uses aws-lc-rs for constant-time RSA operations (FIPS validated).
 #[cfg(feature = "kas-client")]
 pub struct KasClient {
@@ -176,6 +190,7 @@ pub struct KasClient {
     endpoints: crate::kas_discovery::KasEndpoints,
     oauth_token: String,
     signing_key: PrivateDecryptingKey,
+    caller_key: Option<CallerKey>,
 }
 
 #[cfg(feature = "kas-client")]
@@ -190,9 +205,11 @@ impl KasClient {
     ///   when the platform doesn't expose `/.well-known/opentdf-configuration`.
     ///   `OpentdfConfiguration::for_kas_legacy_rest(base_url)` is the escape
     ///   hatch for pre-ConnectRPC deployments.
-    /// * `oauth_token` - Bearer token sent in the `Authorization` header.
+    /// * `oauth_token` - The access token sent in the `Authorization` header.
     ///   Opaque passthrough: pass a JWT or a base64url-encoded CWT — the
-    ///   server decides how to validate.
+    ///   server decides how to validate. Sent as `Bearer <token>` by default.
+    ///   Once [`KasClient::with_caller_key`] sets a caller key, requests
+    ///   switch to `Authorization: DPoP <token>` plus an RFC 9449 DPoP proof.
     ///
     /// # Security
     ///
@@ -209,7 +226,9 @@ impl KasClient {
     /// This client generates an ephemeral RSA-2048 key pair for signing the
     /// inner JWT rewrap request envelope. That is separate from the access
     /// token — the inner JWT is the rewrap-request signature; the `oauth_token`
-    /// is the platform-issued access token.
+    /// is the platform-issued access token. When [`KasClient::with_caller_key`]
+    /// sets a caller key, that caller key signs the inner (signed request)
+    /// token instead of the ephemeral RSA key.
     pub fn new(
         config: &crate::kas_discovery::OpentdfConfiguration,
         oauth_token: impl Into<String>,
@@ -244,7 +263,71 @@ impl KasClient {
             endpoints,
             oauth_token: oauth_token.into(),
             signing_key,
+            caller_key: None,
         })
+    }
+
+    /// Bind this client to the caller's own key: the key its access token
+    /// names in `cnf`.
+    ///
+    /// Every rewrap then:
+    /// - signs the signed request token with `key` (`EdDSA` for Ed25519,
+    ///   `ES256` for P-256) instead of the ephemeral RSA key;
+    /// - sends `Authorization: DPoP <token>` and a `DPoP` proof signed by
+    ///   `key`, built at send time from the current token, with `htu` set to
+    ///   the Connect procedure `/kas.AccessService/Rewrap`;
+    /// - requires the Connect rewrap endpoint. A configuration that resolved
+    ///   to the legacy REST endpoint fails with [`KasError::ConfigError`]
+    ///   before any request is sent.
+    ///
+    /// ```
+    /// use opentdf::kas::{CallerKey, KasClient};
+    /// use opentdf::kas_discovery::OpentdfConfiguration;
+    ///
+    /// let cfg = OpentdfConfiguration::for_kas_connect("https://platform.arkavo.net");
+    /// let agent_key = opentdf::ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+    /// let client = KasClient::new(&cfg, "agent-access-token")?
+    ///     .with_caller_key(CallerKey::Ed25519(agent_key));
+    /// # drop(client);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn with_caller_key(mut self, key: CallerKey) -> Self {
+        self.caller_key = Some(key);
+        self
+    }
+
+    /// Replace the access token used from the next request on.
+    ///
+    /// Agent tokens are short-lived and refreshed while the client lives. The
+    /// DPoP `ath` is computed from this token at send time, so a refreshed
+    /// token is bound on its first use.
+    pub fn set_access_token(&mut self, oauth_token: impl Into<String>) {
+        self.oauth_token = oauth_token.into();
+    }
+
+    /// Caller-bound rewraps go only to the Connect procedure: the proof's
+    /// `htu` names it, and the REST path behind a proxy cannot verify `htu`.
+    fn require_connect_rewrap(&self) -> Result<(), KasError> {
+        use crate::kas_discovery::KasTransport;
+        // Both checks are needed: `transport` records how the endpoint was
+        // discovered/configured, not the path actually resolved, so a
+        // Connect-advertised endpoint could still carry a non-standard rewrap
+        // path; the URL suffix check catches that. And `htu` in the DPoP
+        // proof is always the well-known procedure path, so it must equal
+        // what we're about to call, not merely look like a Connect endpoint.
+        let is_connect_rewrap = self.endpoints.transport == KasTransport::Connect
+            && url::Url::parse(&self.endpoints.rewrap_url)
+                .is_ok_and(|u| u.path().ends_with(CONNECT_REWRAP_PROCEDURE));
+        if is_connect_rewrap {
+            Ok(())
+        } else {
+            Err(KasError::ConfigError {
+                reason: format!(
+                    "caller-key (DPoP) rewrap requires the Connect endpoint {}; resolved rewrap URL is {}",
+                    CONNECT_REWRAP_PROCEDURE, self.endpoints.rewrap_url
+                ),
+            })
+        }
     }
 
     /// Internal helper for sending signed rewrap requests to KAS via ConnectRPC
@@ -255,19 +338,37 @@ impl KasClient {
         &self,
         signed_request: &SignedRewrapRequest,
     ) -> Result<RewrapResponse, KasError> {
-        let response = self
+        let request = self
             .http_client
             .post(&self.endpoints.rewrap_url)
-            .header("Authorization", format!("Bearer {}", self.oauth_token))
-            .header("Content-Type", "application/json")
-            .json(signed_request)
-            .send()
-            .await
-            .map_err(|e| KasError::RequestError {
-                method: "POST".to_string(),
-                url: self.endpoints.rewrap_url.clone(),
-                reason: e.to_string(),
-            })?;
+            .header("Content-Type", "application/json");
+        let request = match &self.caller_key {
+            None => request.header("Authorization", format!("Bearer {}", self.oauth_token)),
+            Some(caller_key) => {
+                self.require_connect_rewrap()?;
+                // Built per request from the current token, so `ath` binds a
+                // token replaced with `set_access_token` on its first use.
+                let proof = caller_key.dpop_proof(
+                    REWRAP_HTM,
+                    CONNECT_REWRAP_PROCEDURE,
+                    &self.oauth_token,
+                )?;
+                request
+                    .header("Authorization", format!("DPoP {}", self.oauth_token))
+                    .header("DPoP", proof)
+                    .header("Connect-Protocol-Version", "1")
+            }
+        };
+        let response =
+            request
+                .json(signed_request)
+                .send()
+                .await
+                .map_err(|e| KasError::RequestError {
+                    method: "POST".to_string(),
+                    url: self.endpoints.rewrap_url.clone(),
+                    reason: e.to_string(),
+                })?;
 
         let status = response.status();
         if !status.is_success() {
@@ -392,7 +493,8 @@ impl KasClient {
     /// }
     /// ```
     ///
-    /// The JWT is signed with RS256 using the client's internal signing key.
+    /// The JWT is signed with RS256 using the client's internal signing key,
+    /// or with the caller key (`EdDSA`/`ES256`) when one is set.
     /// Uses aws-lc-rs for constant-time RSA operations (FIPS validated).
     fn sign_rewrap_request(&self, request: &UnsignedRewrapRequest) -> Result<String, KasError> {
         use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
@@ -411,6 +513,13 @@ impl KasClient {
 
         // Create JWT claims
         let now = chrono::Utc::now().timestamp();
+
+        // The KAS verifies the SRT with the key the caller proved possession
+        // of, so a caller-bound token needs the SRT signed by that same key.
+        if let Some(caller_key) = &self.caller_key {
+            return caller_key.signed_request_token_at(&request_json, now);
+        }
+
         let claims = Claims {
             request_body: request_json,
             iat: now,
