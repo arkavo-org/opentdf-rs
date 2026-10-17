@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.16.1] — 2026-10-17
+
+Moves to zip 9 for RUSTSEC-2026-0367, RUSTSEC-2026-0368 and RUSTSEC-2026-0369, which zip 2.x has and zip 9.0 fixes: extraction kept SUID and SGID bits, created symlinks pointing outside the destination, and applied permissions through symlinks. opentdf never calls the affected `extract` functions, but every crate that depends on it inherits the vulnerable zip and fails `cargo audit` until it moves.
+
+### Changed
+
+- `zip` 2.2 → 9.0.4. zip 9 reports a member name that is not UTF-8 as an error rather than a lossy string:
+  - `TdfMemberIndex::open` fails on such a name.
+  - `TdfArchive::len` skips it, since it cannot be a manifest entry.
+
 ## [0.16.0] — 2026-09-27
 
 Adds a caller-key mode to `KasClient`, so an agent whose access token is bound to its own key (`cnf`) can rewrap from the Arkavo platform KAS with proof of possession. It also releases four changes already on main since 0.15.0: the spec-compliant manifest entry name, per-segment integrity verification on decrypt, round-tripping of `keyAccess.sid` / manifest assertions, and the spec policy binding OpenTDFKit 5.0.0 writes.
