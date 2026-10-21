@@ -224,9 +224,9 @@ $ cargo run --example decrypt_otdfctl_nanotdf
 
 ### Rewrap Protocol
 
-NanoTDF uses a different rewrap protocol than standard TDF:
+NanoTDF uses a different rewrap protocol than TDF (ZIP-based):
 
-**Standard TDF**: Sends manifest with wrapped key
+**TDF (ZIP-based)**: Sends manifest with wrapped key
 **NanoTDF**: Sends header bytes with ephemeral public key
 
 ### Implementation
@@ -249,7 +249,7 @@ pub async fn rewrap_nanotdf(
 
 ### Key Differences
 
-| Aspect | Standard TDF | NanoTDF |
+| Aspect | TDF (ZIP-based) | NanoTDF |
 |--------|--------------|---------|
 | Key data | Wrapped key | Header bytes |
 | Algorithm | RSA (default) | EC (secp256r1) |

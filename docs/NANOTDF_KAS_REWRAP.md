@@ -62,9 +62,9 @@ For NanoTDF, the rewrap request includes:
 }
 ```
 
-### Key Differences from Standard TDF
+### Key Differences from TDF (ZIP-based)
 
-| Aspect | Standard TDF | NanoTDF |
+| Aspect | TDF (ZIP-based) | NanoTDF |
 |--------|-------------|---------|
 | Key data sent | Wrapped key from manifest | Header bytes |
 | Algorithm | RSA (default) | EC (secp256r1) |
