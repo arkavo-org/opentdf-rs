@@ -15,8 +15,8 @@ readme = "README.md"
 
 [dependencies]
 # New modular crates
-opentdf-protocol = { path = "crates/protocol", version = "0.16.1" }
-opentdf-crypto = { path = "crates/crypto", version = "0.16.1", default-features = false }
+opentdf-protocol = { path = "crates/protocol", version = "0.17.0" }
+opentdf-crypto = { path = "crates/crypto", version = "0.17.0", default-features = false }
 
 # Core dependencies (using workspace versions)
 zip = { version = "9.0.4", default-features = false, features = ["deflate"] }
@@ -49,7 +49,7 @@ tempfile = "3.14"
 mockito = "1.6"
 criterion = "0.5"
 # Required for jwt_helper.rs example
-p256 = { version = "0.13", features = ["ecdsa", "pem"] }
+p256 = { version = "0.14", features = ["ecdsa", "pem", "getrandom"] }
 rand = "0.8"
 # Required for mock KAS server and xtest CLI
 axum = "0.8"
@@ -70,7 +70,7 @@ ciborium = "0.2"
 members = ["crates/protocol", "crates/crypto", "crates/kas", "crates/wasm"]
 
 [workspace.package]
-version = "0.16.1"
+version = "0.17.0"
 
 [workspace.dependencies]
 # Core serialization
@@ -99,13 +99,13 @@ rand = "0.8"
 zeroize = { version = "1.8", features = ["derive", "alloc"] }
 
 # Key encoding
-pkcs8 = { version = "0.10", features = ["pem"] }
+pkcs8 = { version = "0.11", features = ["pem"] }
 
 # EC curves
-p256 = { version = "0.13", features = ["ecdsa", "pem", "ecdh"] }
-p384 = { version = "0.13", features = ["ecdsa", "pem", "ecdh"] }
-p521 = { version = "0.13", features = ["ecdsa", "pem", "ecdh"] }
-k256 = { version = "0.13", features = ["ecdsa", "pem", "ecdh"] }
+p256 = { version = "0.14", features = ["ecdsa", "pem", "ecdh", "getrandom"] }
+p384 = { version = "0.14", features = ["ecdsa", "pem", "ecdh", "getrandom"] }
+p521 = { version = "0.14", features = ["ecdsa", "pem", "ecdh", "getrandom"] }
+k256 = { version = "0.14", features = ["ecdsa", "pem", "ecdh", "getrandom"] }
 
 # Async runtime
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

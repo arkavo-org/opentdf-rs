@@ -4,22 +4,22 @@
 
 use opentdf_crypto::tdf::nanotdf::NanoTdfBuilder;
 use opentdf_protocol::nanotdf::header::EccMode;
+use p256::elliptic_curve::Generate;
 use p256::pkcs8::EncodePrivateKey;
-use p256::{EncodedPoint, SecretKey as P256SecretKey};
-use rand::rngs::OsRng;
+use p256::{Sec1Point, SecretKey as P256SecretKey};
 use std::fs;
 
 fn main() {
     println!("=== NanoTDF with Compressed Public Key ===\n");
 
     // Generate test keypair
-    let secret_key = P256SecretKey::random(&mut OsRng);
+    let secret_key = P256SecretKey::generate();
     let public_key = secret_key.public_key();
     let private_bytes = secret_key.to_pkcs8_der().unwrap().to_bytes().to_vec();
 
     // Get both compressed and uncompressed formats
     let uncompressed_bytes = public_key.to_sec1_bytes().to_vec();
-    let compressed_point = EncodedPoint::from(public_key).compress();
+    let compressed_point = Sec1Point::from(public_key).compress();
     let compressed_bytes = compressed_point.as_bytes().to_vec();
 
     println!("1. Key Generation:");

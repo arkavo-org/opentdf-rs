@@ -409,9 +409,8 @@ mod tests {
 #[cfg(all(feature = "rustcrypto-provider", not(feature = "aws-lc-provider")))]
 mod tests_rustcrypto {
     use super::*;
-    use pkcs8::EncodePrivateKey;
     use rand::rngs::OsRng;
-    use rsa::pkcs8::EncodePublicKey;
+    use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
     use rsa::{RsaPrivateKey, RsaPublicKey};
 
     fn generate_test_keypair() -> (String, String) {
@@ -419,8 +418,12 @@ mod tests_rustcrypto {
         let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
         let public_key = RsaPublicKey::from(&private_key);
 
-        let private_pem = private_key.to_pkcs8_pem(pkcs8::LineEnding::LF).unwrap();
-        let public_pem = public_key.to_public_key_pem(pkcs8::LineEnding::LF).unwrap();
+        let private_pem = private_key
+            .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
+            .unwrap();
+        let public_pem = public_key
+            .to_public_key_pem(rsa::pkcs8::LineEnding::LF)
+            .unwrap();
 
         (public_pem, private_pem.to_string())
     }

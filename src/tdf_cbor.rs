@@ -1644,10 +1644,10 @@ mod tests {
     /// Returns (private_key_pem, public_key_pem)
     fn generate_test_ec_key_pair() -> (String, String) {
         use p256::SecretKey;
+        use p256::elliptic_curve::Generate;
         use p256::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
-        use rand::rngs::OsRng;
 
-        let secret_key = SecretKey::random(&mut OsRng);
+        let secret_key = SecretKey::generate();
         let public_key = secret_key.public_key();
 
         let private_pem = secret_key
