@@ -212,7 +212,7 @@ fn expected_jwk(key: &CallerKey) -> Value {
             "x": B64URL.encode(k.verifying_key().to_bytes()),
         }),
         CallerKey::P256(k) => {
-            let point = k.verifying_key().to_encoded_point(false);
+            let point = k.verifying_key().to_sec1_point(false);
             json!({
                 "kty": "EC",
                 "crv": "P-256",

@@ -32,6 +32,7 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use opentdf_kas::{KasEcKeypair, custom_ecdh, rewrap_dek_simple};
+use p256::elliptic_curve::Generate;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -550,7 +551,7 @@ fn unwrap_rsa_wrapped_key(
     match parse_ec_public_key(client_public_key_pem) {
         Ok(client_public) => {
             // Generate a session key pair for re-wrapping to the client
-            let session_private = p256::SecretKey::random(&mut rand::rngs::OsRng);
+            let session_private = p256::SecretKey::generate();
             let session_public = session_private.public_key();
 
             // Compute session shared secret using kas crate's custom_ecdh
@@ -646,7 +647,7 @@ fn unwrap_ec_wrapped_key(
         .map_err(|e| format!("AES-GCM decryption failed: {}", e))?;
 
     // Generate session key pair for re-wrapping to client
-    let session_private = p256::SecretKey::random(&mut rand::rngs::OsRng);
+    let session_private = p256::SecretKey::generate();
     let session_public = session_private.public_key();
 
     // Parse client's public key

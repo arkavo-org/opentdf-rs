@@ -120,12 +120,12 @@ impl EphemeralKeyPair {
     ///
     /// Uses aws-lc-rs for RSA key generation (constant-time, FIPS validated).
     pub fn new(key_type: KeyType) -> Result<Self, KasError> {
-        use rand::rngs::OsRng;
+        use crate::p256::elliptic_curve::Generate;
 
         match key_type {
             KeyType::EC => {
                 // Generate EC P-256 key pair for NanoTDF
-                let private_key = SecretKey::random(&mut OsRng);
+                let private_key = SecretKey::generate();
                 let public_key = private_key.public_key();
 
                 let public_key_pem = public_key

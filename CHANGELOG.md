@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-10-30
+
+Moves the elliptic-curve crates to the RustCrypto 0.14 generation for RUSTSEC-2026-0387: crypto-bigint 0.5, which the 0.13 curves use for scalar arithmetic, has operations meant to be constant-time that can branch on secret values. The fix is only in crypto-bigint 0.7.6 and later, which only the 0.14 curves use. Encodings are unchanged: SEC1 points, PKCS#8 and SPKI documents, ECDH outputs and ES256 signatures are byte-for-byte the same for the same keys.
+
+### Changed
+
+- **Breaking:** `p256`, `p384`, `p521` and `k256` 0.13 → 0.14, and `pkcs8` 0.10 → 0.11. The re-exported `opentdf::p256` and `opentdf::pkcs8` (and the same names in `opentdf-crypto`), `CallerKey::P256` and `KasEcKeypair` now carry the 0.14 types.
+  - 0.14 renames `EncodedPoint`, `ToEncodedPoint` and `FromEncodedPoint` to `Sec1Point`, `ToSec1Point` and `FromSec1Point`.
+  - Keys are generated with the `Generate` trait (`SecretKey::generate()`), which draws from the operating system through getrandom 0.4, in place of `random(&mut OsRng)`.
+- The RustCrypto RSA path (`rustcrypto-provider`, `opentdf-kas` `rsa`) keeps `rsa` 0.9 and uses its own `rsa::pkcs8` re-export. `opentdf-kas` no longer depends on `pkcs8` directly, and `opentdf-crypto` no longer depends on `spki`.
+- `opentdf-wasm` enables getrandom 0.4's `wasm_js` backend, which the 0.14 curves need on `wasm32-unknown-unknown`.
+
 ## [0.16.1] — 2026-10-17
 
 Moves to zip 9 for RUSTSEC-2026-0367, RUSTSEC-2026-0368 and RUSTSEC-2026-0369, which zip 2.x has and zip 9.0 fixes: extraction kept SUID and SGID bits, created symlinks pointing outside the destination, and applied permissions through symlinks. opentdf never calls the affected `extract` functions, but every crate that depends on it inherits the vulnerable zip and fails `cargo audit` until it moves.

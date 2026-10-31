@@ -30,16 +30,16 @@ const PLATFORM_ENDPOINT: &str = "http://localhost:8080";
 /// Generate a test keypair for P-256
 fn generate_test_keypair() -> (Vec<u8>, Vec<u8>) {
     use p256::SecretKey as P256SecretKey;
-    use p256::elliptic_curve::sec1::ToEncodedPoint;
+    use p256::elliptic_curve::Generate;
+    use p256::elliptic_curve::sec1::ToSec1Point;
     use p256::pkcs8::EncodePrivateKey;
-    use rand::rngs::OsRng;
 
-    let secret_key = P256SecretKey::random(&mut OsRng);
+    let secret_key = P256SecretKey::generate();
     let public_key = secret_key.public_key();
     // Use PKCS#8 DER for private key
     let private_bytes = secret_key.to_pkcs8_der().unwrap().to_bytes().to_vec();
     // Use compressed SEC1 format (33 bytes)
-    let public_bytes = public_key.to_encoded_point(true).as_bytes().to_vec();
+    let public_bytes = public_key.to_sec1_point(true).as_bytes().to_vec();
     (private_bytes, public_bytes)
 }
 

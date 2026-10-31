@@ -159,7 +159,7 @@ impl CallerKey {
             CallerKey::P256(key) => {
                 // Uncompressed SEC1 is 0x04 || X || Y with 32-byte coordinates,
                 // so leading zero bytes survive as RFC 7518 §6.2.1.2 requires.
-                let point = key.verifying_key().to_encoded_point(false);
+                let point = key.verifying_key().to_sec1_point(false);
                 let bytes = point.as_bytes();
                 Jwk {
                     kty: "EC",
