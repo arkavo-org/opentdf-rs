@@ -6,7 +6,9 @@
 //!   cargo run --example cross_sdk_test --features cbor -- read-json <input>
 //!   cargo run --example cross_sdk_test --features cbor -- read-cbor <input>
 
+#[cfg(feature = "cbor")]
 use std::env;
+#[cfg(feature = "cbor")]
 use std::fs;
 
 #[cfg(feature = "cbor")]
