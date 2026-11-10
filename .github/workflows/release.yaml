@@ -83,11 +83,17 @@ jobs:
           toolchain: stable
           targets: wasm32-unknown-unknown
 
+      # Cargo.lock is not committed today, so resolve it here: the cache keys
+      # below then follow the dependency versions actually built. A committed
+      # Cargo.lock is used as is.
+      - name: resolve-lockfile
+        run: test -f Cargo.lock || cargo generate-lockfile
+
       - name: cache-registry
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-registry-
 
@@ -95,7 +101,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-git-
 
@@ -103,7 +109,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: target
-          key: ${{ runner.os }}-target-wasm-release-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-target-wasm-release-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-target-wasm-release-
 
