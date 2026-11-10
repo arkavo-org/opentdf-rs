@@ -26,7 +26,7 @@ sha2.workspace = true
 
 # Encoding
 base64.workspace = true
-pem = "3.0"
+pem = "4.0"
 
 # Error handling
 thiserror.workspace = true

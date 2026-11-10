@@ -51,7 +51,7 @@ pkcs8 = { workspace = true, optional = true }
 # Does NOT support wasm32 - use WebCrypto in browser environments
 aws-lc-rs = { version = "1.18", optional = true }
 # PEM parsing for aws-lc-rs (it only supports DER directly)
-pem = { version = "3.0", optional = true }
+pem = { version = "4.0", optional = true }
 
 # Legacy RustCrypto RSA (has RUSTSEC-2023-0071 timing vulnerability)
 # Only enable if you explicitly accept the timing attack risk
