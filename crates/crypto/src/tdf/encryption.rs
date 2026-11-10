@@ -410,24 +410,31 @@ impl TdfEncryption {
         let cipher = Aes256Gcm::new_from_slice(self.payload_key.as_slice())
             .map_err(|_| EncryptionError::InvalidKeyLength)?;
 
-        // Pre-allocate with expected capacity
-        let total_plaintext_size: usize = segments.iter().map(|(pt, _)| *pt as usize).sum();
-        let mut plaintext = Vec::with_capacity(total_plaintext_size);
+        // Pre-allocate with expected capacity. The declared sizes come from a
+        // manifest that is not authenticated yet, and plaintext is never
+        // longer than the ciphertext it is decrypted from, so the reservation
+        // is capped at the payload length: a hostile size cannot make this
+        // overflow or reserve more memory than the caller already holds.
+        let declared_plaintext_size = segments.iter().fold(0usize, |total, (pt, _)| {
+            total.saturating_add(usize::try_from(*pt).unwrap_or(usize::MAX))
+        });
+        let mut plaintext = Vec::with_capacity(declared_plaintext_size.min(payload.len()));
         let mut gmac_tags = Vec::with_capacity(segments.len());
-        let mut offset = 0;
+        let mut offset = 0usize;
 
         for (_plaintext_size, encrypted_size) in segments {
-            let encrypted_size = *encrypted_size as usize;
-
-            // Ensure we don't read past the payload
-            if offset + encrypted_size > payload.len() {
-                return Err(EncryptionError::SegmentError(
-                    "Segment extends beyond payload".to_string(),
-                ));
-            }
+            // Ensure we don't read past the payload. Checked arithmetic: an
+            // encrypted size near `u64::MAX` must fail here, not wrap.
+            let segment_end = usize::try_from(*encrypted_size)
+                .ok()
+                .and_then(|encrypted_size| offset.checked_add(encrypted_size))
+                .filter(|segment_end| *segment_end <= payload.len())
+                .ok_or_else(|| {
+                    EncryptionError::SegmentError("Segment extends beyond payload".to_string())
+                })?;
 
             // Extract segment data
-            let segment_data = &payload[offset..offset + encrypted_size];
+            let segment_data = &payload[offset..segment_end];
 
             // Parse segment: [IV (12)][Ciphertext + Tag]
             if segment_data.len() < GCM_IV_SIZE + GCM_TAG_SIZE {
@@ -450,7 +457,7 @@ impl TdfEncryption {
             gmac_tags.push(gmac_tag);
 
             plaintext.extend_from_slice(&decrypted);
-            offset += encrypted_size;
+            offset = segment_end;
         }
 
         Ok((plaintext, gmac_tags))
@@ -536,6 +543,40 @@ mod tests {
         assert_eq!(plaintext, decrypted.as_slice());
         assert_eq!(gmac_tags.len(), segmented.gmac_tags.len());
 
+        Ok(())
+    }
+
+    /// Segment sizes reach `decrypt_with_segments` from a manifest that has
+    /// not been authenticated. Hostile values must produce an error or be
+    /// ignored, never an overflow, a capacity panic or a huge reservation.
+    #[test]
+    fn decrypt_with_segments_survives_hostile_declared_sizes() -> Result<(), EncryptionError> {
+        let tdf = TdfEncryption::new()?;
+        let plaintext = b"sixteen byte msg";
+        let segmented = tdf.encrypt_with_segments(plaintext, plaintext.len())?;
+        let payload = segmented.segments.concat();
+        let encrypted_size = payload.len() as u64;
+
+        // A declared plaintext size is only a capacity hint.
+        for declared in [u64::MAX, 1 << 60] {
+            let (decrypted, tags) =
+                tdf.decrypt_with_segments(&payload, &[(declared, encrypted_size)])?;
+            assert_eq!(decrypted, plaintext);
+            assert_eq!(tags.len(), 1);
+        }
+
+        // An encrypted size past the payload, including one that would wrap
+        // the running offset, is a segment error.
+        for segments in [
+            vec![(0, u64::MAX)],
+            vec![(0, encrypted_size + 1)],
+            vec![(0, encrypted_size), (0, u64::MAX)],
+        ] {
+            let err = tdf
+                .decrypt_with_segments(&payload, &segments)
+                .expect_err("segment extends beyond the payload");
+            assert!(matches!(err, EncryptionError::SegmentError(_)), "{err:?}");
+        }
         Ok(())
     }
 }

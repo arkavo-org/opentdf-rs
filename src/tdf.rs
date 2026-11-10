@@ -9,7 +9,7 @@ use opentdf_crypto::TdfEncryption;
 use std::path::Path;
 
 #[cfg(feature = "kas-client")]
-use crate::archive::TdfArchive;
+use crate::archive::{DEFAULT_MAX_PAYLOAD_SIZE, TdfArchive};
 
 #[cfg(feature = "kas-client")]
 use crate::kas::KasClient;
@@ -382,6 +382,7 @@ impl TdfEncryptFileBuilder {
 pub struct TdfDecryptBuilder {
     data: Vec<u8>,
     kas_client: Option<KasClient>,
+    max_payload_size: u64,
 }
 
 #[cfg(feature = "kas-client")]
@@ -390,6 +391,7 @@ impl TdfDecryptBuilder {
         Self {
             data,
             kas_client: None,
+            max_payload_size: DEFAULT_MAX_PAYLOAD_SIZE,
         }
     }
 
@@ -397,6 +399,17 @@ impl TdfDecryptBuilder {
     #[must_use]
     pub fn kas_client(mut self, client: KasClient) -> Self {
         self.kas_client = Some(client);
+        self
+    }
+
+    /// Set the largest encrypted payload, in bytes, that will be read into
+    /// memory (default: [`DEFAULT_MAX_PAYLOAD_SIZE`]).
+    ///
+    /// A larger payload fails with [`TdfError::MemberTooLarge`] before any
+    /// KAS request is made. See [`TdfArchive::with_max_payload_size`].
+    #[must_use]
+    pub fn max_payload_size(mut self, limit: u64) -> Self {
+        self.max_payload_size = limit;
         self
     }
 
@@ -409,7 +422,7 @@ impl TdfDecryptBuilder {
             })?;
 
         let cursor = std::io::Cursor::new(self.data);
-        let mut archive = TdfArchive::new(cursor)?;
+        let mut archive = TdfArchive::new(cursor)?.with_max_payload_size(self.max_payload_size);
         let entry = archive.by_index()?;
         entry.decrypt_with_kas(&kas_client).await
     }
@@ -429,6 +442,7 @@ impl TdfDecryptBuilder {
 pub struct TdfDecryptFileBuilder {
     input_path: std::path::PathBuf,
     kas_client: Option<KasClient>,
+    max_payload_size: u64,
 }
 
 #[cfg(feature = "kas-client")]
@@ -437,6 +451,7 @@ impl TdfDecryptFileBuilder {
         Self {
             input_path,
             kas_client: None,
+            max_payload_size: DEFAULT_MAX_PAYLOAD_SIZE,
         }
     }
 
@@ -444,6 +459,17 @@ impl TdfDecryptFileBuilder {
     #[must_use]
     pub fn kas_client(mut self, client: KasClient) -> Self {
         self.kas_client = Some(client);
+        self
+    }
+
+    /// Set the largest encrypted payload, in bytes, that will be read into
+    /// memory (default: [`DEFAULT_MAX_PAYLOAD_SIZE`]).
+    ///
+    /// A larger payload fails with [`TdfError::MemberTooLarge`] before any
+    /// KAS request is made. See [`TdfArchive::with_max_payload_size`].
+    #[must_use]
+    pub fn max_payload_size(mut self, limit: u64) -> Self {
+        self.max_payload_size = limit;
         self
     }
 
@@ -455,7 +481,10 @@ impl TdfDecryptFileBuilder {
                 field: "kas_client",
             })?;
 
-        TdfArchive::open_and_decrypt(self.input_path, &kas_client).await
+        let mut archive =
+            TdfArchive::open(self.input_path)?.with_max_payload_size(self.max_payload_size);
+        let entry = archive.by_index()?;
+        entry.decrypt_with_kas(&kas_client).await
     }
 
     /// Decrypt and write plaintext to file
@@ -540,6 +569,51 @@ mod tests {
             .to_file(temp_file.path())?;
 
         assert!(temp_file.path().exists());
+        Ok(())
+    }
+
+    /// The decrypt builders pass their payload limit to the archive reader,
+    /// which refuses an oversized payload before any KAS request is made.
+    #[cfg(feature = "kas-client")]
+    #[tokio::test]
+    async fn decrypt_builders_honour_max_payload_size() -> Result<(), Box<dyn std::error::Error>> {
+        fn kas_client() -> KasClient {
+            let config = crate::kas_discovery::OpentdfConfiguration::for_kas_connect(
+                "https://kas.example.com",
+            );
+            match KasClient::new(&config, "token") {
+                Ok(client) => client,
+                Err(e) => panic!("KAS client: {e}"),
+            }
+        }
+
+        let encrypted = Tdf::encrypt(b"more than eight bytes of payload")
+            .kas_url("https://kas.example.com")
+            .to_bytes()?;
+
+        let err = Tdf::decrypt(encrypted.clone())
+            .kas_client(kas_client())
+            .max_payload_size(8)
+            .to_bytes()
+            .await
+            .expect_err("payload is over the limit");
+        assert!(
+            matches!(&err, TdfError::MemberTooLarge { limit: 8, .. }),
+            "{err:?}"
+        );
+
+        let temp_file = NamedTempFile::new()?;
+        std::fs::write(temp_file.path(), &encrypted)?;
+        let err = Tdf::decrypt_file(temp_file.path())
+            .kas_client(kas_client())
+            .max_payload_size(8)
+            .to_bytes()
+            .await
+            .expect_err("payload is over the limit");
+        assert!(
+            matches!(&err, TdfError::MemberTooLarge { limit: 8, .. }),
+            "{err:?}"
+        );
         Ok(())
     }
 }
