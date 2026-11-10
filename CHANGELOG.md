@@ -2,6 +2,53 @@
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-11-10
+
+A security release. The WASM decrypt function sent the caller's OAuth token to whatever KAS the TDF named, archive members were read with no size limit, and the optional RustCrypto RSA path was on a version with a timing side channel. All three are fixed; the first two change behaviour for existing callers.
+
+### Security
+
+- **WASM: `tdf_decrypt_with_kas` sent the caller's OAuth token to a KAS chosen by the TDF.** The KAS URL was read from the manifest of the TDF being decrypted and used without any check, so a crafted TDF could direct the bearer token to an attacker's host. The token is now sent only to a KAS whose origin the caller has allowlisted. The native client (`KasClient`) takes its KAS URL from caller configuration and was not affected.
+  - The rewrap request refuses redirects, so a KAS response cannot forward the token-carrying request to another host.
+  - A TDF with an empty `keyAccess` array is an error instead of an out-of-bounds panic.
+- **Bounded reads of TDF archive members.** `TdfArchive` read the manifest and payload of an untrusted archive into memory with no size limit, and accepts deflated ZIP members, so a small crafted TDF (about 260 KB) could inflate to hundreds of megabytes or more. Every member is now read under a limit enforced on the bytes produced, whatever the member declares: 16 MiB for a manifest (`DEFAULT_MAX_MANIFEST_SIZE`) and 1 GiB for a payload (`DEFAULT_MAX_PAYLOAD_SIZE`). An oversized member fails with `TdfError::MemberTooLarge`.
+  - `TdfMemberIndex::open` rejects a member whose central-directory size extends past the end of the archive, so a `TdfMemberLocation` can no longer make a caller allocate more than the archive holds.
+  - `TdfEncryption::decrypt_with_segments` no longer panics on hostile segment sizes: its up-front reservation is capped at the payload length and its offset arithmetic is checked.
+- **RUSTSEC-2023-0071 (the Marvin attack) in the optional RustCrypto RSA path.** `rsa` 0.9 leaks private-key information through timing. The path moves to `rsa` 0.10, the first release the advisory lists as patched. The default aws-lc-rs path was not affected and is unchanged.
+
+### Changed
+
+- **Breaking:** WASM `tdf_decrypt_with_kas(tdf_data, kas_token)` is now `tdf_decrypt_with_kas(tdf_data, kas_token, allowed_kas_urls)`. `allowed_kas_urls` is a required array of the KAS URLs you trust with the token. The TDF's KAS URL is accepted only if its parsed origin (scheme, host, port) equals that of an entry; an empty array rejects every TDF. The old two-argument call throws a `TypeError`.
+  - The TDF's KAS URL must be `https`; `http` is accepted only for loopback hosts (`localhost`, `127.0.0.0/8`, `[::1]`), even if allowlisted.
+  - A KAS URL containing userinfo, a query or a fragment is refused.
+  - Decryption fails if the KAS answers the rewrap request with a redirect.
+  - The WASM bundle grows from about 742 KB to 911 KB (314 KB to 387 KB gzipped) because the `url` crate is linked for allowlist matching.
+- **Breaking:** reading a payload larger than 1 GiB through `TdfArchive::by_index`, `get_entry`, `validate`, `open_and_decrypt` or the `Tdf::decrypt*` builders fails with `TdfError::MemberTooLarge` unless the limit is raised. `open_and_decrypt` always uses the default; use `TdfArchive::open` with `with_max_payload_size` for a different one.
+- **Breaking (opt-in features only):** `rsa` 0.9 → 0.10 in `opentdf-crypto` (`rustcrypto-provider`) and `opentdf-kas` (`rsa`). The re-exported `opentdf_crypto::rsa`, `opentdf_kas::rsa` and `opentdf::rsa` (`rustcrypto-rsa`), `KasRsaKeypair::private_key` and the key parameter of `rsa_unwrap` now carry the 0.10 types.
+  - 0.10 renames `RsaPrivateKey` and `RsaPublicKey` to `PrivateKey` and `PublicKey`, keeping the old names as deprecated aliases, and replaces `BigUint` with `BoxedUint`.
+  - 0.10 takes digest 0.11 hashes and rand_core 0.10 RNGs: use `rsa::sha2`, and `rand` 0.8's `OsRng` no longer works with it.
+  - 0.10 rejects RSA keys under 1024 bits and accepts up to 8192 (0.9: up to 4096, no minimum), and rejects unbalanced or malformed prime factors.
+  - Encodings are unchanged: RSA-OAEP with SHA-1 or SHA-256 wraps and unwraps against aws-lc-rs in both directions, with PKCS#8 and SPKI keys from either side.
+  - The rsa paths use `sha1` 0.11 and, in `opentdf-kas`, `getrandom` 0.4 for key generation. The workspace `sha1`, `sha2`, `hmac`, `hkdf`, `aes-gcm` and `rand`, and the re-exported `opentdf_crypto::sha1` and `sha2`, are unchanged.
+  - On `wasm32-unknown-unknown`, `rustcrypto-provider` needs getrandom 0.4's `wasm_js` backend, as the 0.14 curves do. `opentdf-wasm` does not use `rsa`.
+- `TdfError`, `EncryptionError` and `IntegrityError` gained variants; exhaustive matches need a new arm. `IntegrityInformationExt` gained a required method.
+- A manifest member that is not valid UTF-8 is reported as `TdfError::JsonError` instead of `TdfError::IoError`.
+
+### Added
+
+- `TdfArchive::with_max_payload_size` / `with_max_manifest_size` (and matching getters), plus `max_payload_size` on `TdfDecryptBuilder` and `TdfDecryptFileBuilder`, to raise or lower the read limits. `DEFAULT_MAX_MANIFEST_SIZE`, `DEFAULT_MAX_PAYLOAD_SIZE` and `TdfError::MemberTooLarge` (error code `OPENTDF_E_ARCHIVE_MEMBER_TOO_LARGE`).
+- Verify-side APIs for the multi-entry (gguf-tdf) profile (#100):
+  - `TdfEncryption::decrypt_segment_into_verified` decrypts a segment in place and compares its GCM tag with the manifest's segment hash in constant time, zeroizing the destination on failure. New `EncryptionError::SegmentHashMismatch`.
+  - `IntegrityInformationExt::verify_root_signature_from_rows` verifies the root signature from the manifest's own segment rows, rejecting any row that is not a 16-byte tag. New `IntegrityError::SegmentHashLength`.
+  - `TdfMemberIndex::read_member`, `read_into` and `read_manifest` read a member by name under a size limit (`with_max_member_size`, `with_max_manifest_size`); `read_manifest` looks for `manifest.json` and falls back to `0.manifest.json`.
+- `PolicyBinding::validate()` and `PolicyBindingError`: structural validation of `keyAccess.policyBinding` without key material. Accepts `alg` `HS256` with a hash that is Base64 of a 32-byte HMAC-SHA256 (spec form) or of its 64-digit hex encoding (legacy Go SDK form). Opt-in; parsing a manifest does not run it. (#76)
+- `Policy::has_attribute()` and `Policy::find_attribute()`: look up an `AttributeFqn` in a policy's attribute tree, including conditions nested in `AND`/`OR`/`NOT`. A value FQN matches an `Equals` condition with that string value; a namespace-only FQN matches any attribute in the namespace. (#77)
+- Cross-backend RSA-OAEP tests between the `rsa` path and aws-lc-rs in `opentdf-crypto` and `opentdf-kas`. `aws-lc-rs` is a dev-dependency of both for this.
+
+### Documentation
+
+- The `KasClient` EC rewrap HKDF salt, `SHA256("TDF")`, is documented against the `opentdf/platform` KAS and Go SDK source; the path was mislabelled as NanoTDF. (#69)
+
 ## [0.17.0] — 2026-10-30
 
 Moves the elliptic-curve crates to the RustCrypto 0.14 generation for RUSTSEC-2026-0387: crypto-bigint 0.5, which the 0.13 curves use for scalar arithmetic, has operations meant to be constant-time that can branch on secret values. The fix is only in crypto-bigint 0.7.6 and later, which only the 0.14 curves use. Encodings are unchanged: SEC1 points, PKCS#8 and SPKI documents, ECDH outputs and ES256 signatures are byte-for-byte the same for the same keys.
