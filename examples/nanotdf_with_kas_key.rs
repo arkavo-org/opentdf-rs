@@ -6,7 +6,7 @@
 use opentdf_crypto::tdf::nanotdf::NanoTdfBuilder;
 use opentdf_protocol::nanotdf::header::EccMode;
 use p256::PublicKey as P256PublicKey;
-use p256::elliptic_curve::sec1::ToEncodedPoint;
+use p256::elliptic_curve::sec1::ToSec1Point;
 use p256::pkcs8::DecodePublicKey;
 use std::fs;
 
@@ -24,7 +24,7 @@ cZiEMC62vIBEpi8wHRB+qlSGFFQhud5n0RlgTT6eqK6kdgtgOaEzEzJCEA==
         P256PublicKey::from_public_key_pem(kas_pem).expect("Failed to parse KAS public key");
 
     // Convert to compressed format (33 bytes) per NanoTDF spec
-    let public_bytes = public_key.to_encoded_point(true).as_bytes().to_vec();
+    let public_bytes = public_key.to_sec1_point(true).as_bytes().to_vec();
     println!("   ✓ KAS public key parsed");
     println!("   Key size: {} bytes (compressed)", public_bytes.len());
     println!(

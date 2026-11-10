@@ -6,7 +6,7 @@ use crate::manifest::TdfManifest;
 use std::fs::File;
 use std::io::{self, Read, Seek, Write};
 use std::path::Path;
-use zip::write::FileOptions;
+use zip::write::{FileOptions, SimpleFileOptions};
 use zip::{ZipArchive, ZipWriter};
 
 #[cfg(feature = "kas-client")]
@@ -456,12 +456,16 @@ impl<R: Read + Seek> TdfArchive<R> {
         let mut count = 0;
         let mut saw_index0 = false;
         for name in self.zip_archive.file_names() {
+            // A name that is not UTF-8 cannot be a manifest entry.
+            let Ok(name) = name else {
+                continue;
+            };
             if name == TDF_MANIFEST_FILE_NAME || name == LEGACY_TDF_MANIFEST_FILE_NAME {
                 if !saw_index0 {
                     saw_index0 = true;
                     count += 1;
                 }
-            } else if is_manifest_entry_name(name) {
+            } else if is_manifest_entry_name(&name) {
                 count += 1;
             }
         }
@@ -749,7 +753,7 @@ mod tests {
     fn names_of(bytes: &[u8]) -> Vec<String> {
         let mut z = ZipArchive::new(Cursor::new(bytes.to_vec())).unwrap();
         (0..z.len())
-            .map(|i| z.by_index(i).unwrap().name().to_string())
+            .map(|i| z.by_index(i).unwrap().name().unwrap().into_owned())
             .collect()
     }
 
@@ -1156,7 +1160,7 @@ impl TdfMultiEntryBuilder {
         })
     }
 
-    fn options(len: u64) -> FileOptions<'static, ()> {
+    fn options(len: u64) -> SimpleFileOptions {
         // `large_file` forces the ZIP64 extra field for a member's own sizes.
         // Local-header offsets past 4 GiB and a central directory past 4 GiB
         // are handled by the zip crate on their own: it adds the ZIP64
@@ -1213,16 +1217,25 @@ impl TdfMemberIndex {
         let mut entries = std::collections::HashMap::with_capacity(zip.len());
         for i in 0..zip.len() {
             let entry = zip.by_index(i)?;
+            let name = entry.name()?.into_owned();
             if entry.compression() != zip::CompressionMethod::Stored {
                 return Err(TdfError::InvalidStructure {
-                    reason: format!("member '{}' is not Stored", entry.name()),
+                    reason: format!("member '{name}' is not Stored"),
                     expected: Some("compression method 0".to_string()),
                 });
             }
+            // The zip crate records the offset when it reads the member's
+            // local header, which `by_index` does.
+            let data_start = entry
+                .data_start()
+                .ok_or_else(|| TdfError::InvalidStructure {
+                    reason: format!("member '{name}' has no data offset"),
+                    expected: Some("a readable local header".to_string()),
+                })?;
             entries.insert(
-                entry.name().to_string(),
+                name,
                 TdfMemberLocation {
-                    data_start: entry.data_start(),
+                    data_start,
                     size: entry.size(),
                 },
             );

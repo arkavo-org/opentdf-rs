@@ -212,19 +212,20 @@ fn test_platform_health() {
 /// Generate a test keypair for the given curve
 fn generate_test_keypair(curve: EcCurve) -> (Vec<u8>, Vec<u8>) {
     use p256::SecretKey as P256SecretKey;
-    use p256::elliptic_curve::sec1::ToEncodedPoint;
+    use p256::elliptic_curve::Generate;
+    use p256::elliptic_curve::sec1::ToSec1Point;
     use p256::pkcs8::EncodePrivateKey;
     use rand::rngs::OsRng;
 
     match curve {
         EcCurve::P256 => {
             // Use p256 crate for proper key generation
-            let secret_key = P256SecretKey::random(&mut OsRng);
+            let secret_key = P256SecretKey::generate();
             let public_key = secret_key.public_key();
             // Use PKCS#8 DER for private key (compatible with EC KEM)
             let private_bytes = secret_key.to_pkcs8_der().unwrap().to_bytes().to_vec();
             // Use compressed SEC1 format (33 bytes) per otdfctl gold standard
-            let public_bytes = public_key.to_encoded_point(true).as_bytes().to_vec();
+            let public_bytes = public_key.to_sec1_point(true).as_bytes().to_vec();
             (private_bytes, public_bytes)
         }
         EcCurve::P384 | EcCurve::P521 | EcCurve::Secp256k1 => {

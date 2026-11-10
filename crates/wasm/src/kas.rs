@@ -208,10 +208,10 @@ pub fn build_rewrap_request(
 /// The JWT includes the requestBody (as a JSON string), iat, and exp claims.
 pub fn create_signed_jwt(request: &UnsignedRewrapRequest) -> Result<String, String> {
     use p256::ecdsa::{SigningKey, signature::Signer};
-    use rand::rngs::OsRng;
+    use p256::elliptic_curve::Generate;
 
     // Generate ephemeral P-256 signing key
-    let signing_key = SigningKey::random(&mut OsRng);
+    let signing_key = SigningKey::generate();
 
     // Serialize request body to JSON
     let request_body = serde_json::to_string(request)

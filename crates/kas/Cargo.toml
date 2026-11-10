@@ -40,12 +40,11 @@ rand.workspace = true
 # RSA support (optional)
 rsa = { version = "0.9", features = ["sha2"], optional = true }
 sha1 = { workspace = true, optional = true }
-pkcs8 = { workspace = true, optional = true }
 
 [features]
 default = ["ec"]
 ec = []
-rsa = ["dep:rsa", "dep:sha1", "dep:pkcs8"]
+rsa = ["dep:rsa", "dep:sha1"]
 
 [dev-dependencies]
 tokio = { workspace = true }

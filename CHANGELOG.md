@@ -2,9 +2,64 @@
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-10-30
+
+Moves the elliptic-curve crates to the RustCrypto 0.14 generation for RUSTSEC-2026-0387: crypto-bigint 0.5, which the 0.13 curves use for scalar arithmetic, has operations meant to be constant-time that can branch on secret values. The fix is only in crypto-bigint 0.7.6 and later, which only the 0.14 curves use. Encodings are unchanged: SEC1 points, PKCS#8 and SPKI documents, ECDH outputs and ES256 signatures are byte-for-byte the same for the same keys.
+
+### Changed
+
+- **Breaking:** `p256`, `p384`, `p521` and `k256` 0.13 → 0.14, and `pkcs8` 0.10 → 0.11. The re-exported `opentdf::p256` and `opentdf::pkcs8` (and the same names in `opentdf-crypto`), `CallerKey::P256` and `KasEcKeypair` now carry the 0.14 types.
+  - 0.14 renames `EncodedPoint`, `ToEncodedPoint` and `FromEncodedPoint` to `Sec1Point`, `ToSec1Point` and `FromSec1Point`.
+  - Keys are generated with the `Generate` trait (`SecretKey::generate()`), which draws from the operating system through getrandom 0.4, in place of `random(&mut OsRng)`.
+- The RustCrypto RSA path (`rustcrypto-provider`, `opentdf-kas` `rsa`) keeps `rsa` 0.9 and uses its own `rsa::pkcs8` re-export. `opentdf-kas` no longer depends on `pkcs8` directly, and `opentdf-crypto` no longer depends on `spki`.
+- `opentdf-wasm` enables getrandom 0.4's `wasm_js` backend, which the 0.14 curves need on `wasm32-unknown-unknown`.
+
+## [0.16.1] — 2026-10-17
+
+Moves to zip 9 for RUSTSEC-2026-0367, RUSTSEC-2026-0368 and RUSTSEC-2026-0369, which zip 2.x has and zip 9.0 fixes: extraction kept SUID and SGID bits, created symlinks pointing outside the destination, and applied permissions through symlinks. opentdf never calls the affected `extract` functions, but every crate that depends on it inherits the vulnerable zip and fails `cargo audit` until it moves.
+
+### Changed
+
+- `zip` 2.2 → 9.0.4. zip 9 reports a member name that is not UTF-8 as an error rather than a lossy string:
+  - `TdfMemberIndex::open` fails on such a name.
+  - `TdfArchive::len` skips it, since it cannot be a manifest entry.
+
+## [0.16.0] — 2026-09-27
+
+Adds a caller-key mode to `KasClient`, so an agent whose access token is bound to its own key (`cnf`) can rewrap from the Arkavo platform KAS with proof of possession. It also releases four changes already on main since 0.15.0: the spec-compliant manifest entry name, per-segment integrity verification on decrypt, round-tripping of `keyAccess.sid` / manifest assertions, and the spec policy binding OpenTDFKit 5.0.0 writes.
+
+### Added
+
+- `kas::CallerKey` (`Ed25519(ed25519_dalek::SigningKey)` or `P256(p256::ecdsa::SigningKey)`) and `KasClient::with_caller_key`.
+  - Each rewrap sends `Authorization: DPoP <token>` and an RFC 9449 proof: `typ` `dpop+jwt`, `alg` `EdDSA`/`ES256`, and the public `jwk`, with claims `htm`, `htu`, `iat`, `jti` (128-bit random) and `ath`.
+  - It signs the signed request token with the same key and sends `Connect-Protocol-Version: 1`.
+  - `htu` is the Connect procedure `/kas.AccessService/Rewrap`.
+  - A configuration that resolved only to the legacy REST rewrap fails with `KasError::ConfigError` before anything is sent.
+  - Without a caller key, requests are unchanged.
+- `KasClient::set_access_token`: replaces the access token between requests. `ath` is computed at send time.
+- `CallerKey::dpop_proof`: a proof for another Connect procedure of the same platform.
+- `opentdf::ed25519_dalek`: re-exported under `kas-client`, matching `CallerKey::Ed25519`.
+- `tests/data/dpop_interop_vectors.json`: recorded Ed25519 and P-256 vectors, verified by the opentdf-platform fork's `validateDPoP` through `tests/interop/opentdf_platform_dpop_vectors_test.go`.
+- `KeyAccess.sid: Option<String>` and `TdfManifest.assertions: Vec<Assertion>`, so split ids and assertions survive a read/re-serialize round trip instead of being silently dropped; `statement.value` is now a JSON `Value` rather than a `String`, so a structured statement round-trips byte-for-byte and keeps its canonicalization hash stable across SDKs ([#107](https://github.com/arkavo-org/opentdf-rs/pull/107)). **Breaking:** code that builds `KeyAccess` or `TdfManifest` with a struct literal (rather than `..Default::default()` / a builder) needs updating for the new fields.
+- `EncryptionError::InvalidIvLength(usize)`, returned by the TDF-JSON, JSON-RPC and TDF-CBOR decrypt paths when a legacy `method.iv` decodes to fewer than 12 bytes ([#107](https://github.com/arkavo-org/opentdf-rs/pull/107)). **Breaking:** an exhaustive `match` over `EncryptionError` needs a new arm.
+
 ### Changed
 
 - TDF archives now write the manifest zip entry as `manifest.json` (spec-compliant) instead of `0.manifest.json`. Readers accept both names, and the payload entry is resolved from `manifest.payload.url` rather than assumed. `schemaVersion` is unchanged (still `4.3.0`); `tdf_spec_version` is now read at either its legacy or spec-conformant placement but never written. **Interop impact:** archives written by this version cannot be opened by released otdfctl, or the upstream opentdf/platform Go, Java, or JS SDKs until they add a `manifest.json` read fallback (an upstream reader-fallback PR is planned). Files written by older versions of this crate remain readable.
+- `method.iv` and `method.isStreamable` now default when absent on read, which every Java-written TDF requires; the TDF-JSON path takes its schema version from the crate constant instead of a hardcoded `"1.0.0"` ([#107](https://github.com/arkavo-org/opentdf-rs/pull/107)).
+- **Breaking (wire): spec policy binding.** `keyAccess.policyBinding.hash` is now `Base64(HMAC-SHA256(DEK, Base64(policy)))`, 44 characters, replacing the Go SDK's legacy `Base64(hex(HMAC))` (88 characters). This matches OpenTDFKit 5.0.0. **Interop impact:** rewrap needs a KAS with opentdf/platform#4081; platform.arkavo.net has it through arkavo-org/opentdf-platform#54, and no released upstream KAS accepts this form yet. TDFs written by older versions still rewrap, since a patched KAS accepts both forms. The `hex` dependency is dropped from `opentdf-crypto` ([#110](https://github.com/arkavo-org/opentdf-rs/pull/110)).
+
+### Fixed
+
+- Decrypt now compares every `integrityInformation.segments[i].hash` against the GMAC tag of that segment's ciphertext; previously only the root signature was checked, so a TDF with a tampered segment hash still decrypted successfully because the root signature is derived from the real ciphertext tags, not from the manifest hashes. A mismatch is now rejected ([#106](https://github.com/arkavo-org/opentdf-rs/pull/106)).
+- The legacy single-block decrypt branch returns an error for a wrong-length `method.iv` instead of panicking inside `Nonce::from_slice` (which previously aborted the process, including on wasm) ([#106](https://github.com/arkavo-org/opentdf-rs/pull/106)).
+- Omitted per-segment sizes (`segmentSize` / `encryptedSegmentSize`) now fall back to the manifest's `integrityInformation` defaults instead of `0` ([#106](https://github.com/arkavo-org/opentdf-rs/pull/106)).
+- The WebAssembly decrypt path now runs the same segment-hash and root-signature verification as the library path; previously it verified nothing ([#106](https://github.com/arkavo-org/opentdf-rs/pull/106)).
+- TDF-JSON (`TdfJson`, `TdfJsonRpc`) and TDF-CBOR (`TdfCbor`) builders, and the `xtest_cli` JSON/CBOR paths, computed the policy binding over the policy base64-encoded twice. A KAS that verifies the binding (`HMAC(DEK, manifest policy)`) refused to rewrap them. They now bind over the manifest's `policy` string, as ZIP TDFs already did ([#110](https://github.com/arkavo-org/opentdf-rs/pull/110)).
+
+### CI
+
+- X-Test pins the KAS to opentdf/platform#4081 (`ca178b05`) and the upstream Go peer to opentdf/platform#4063 (`29498d20`), as OpenTDFKit does, until upstream releases include both. The previous floating pins rejected the spec binding and could not read `manifest.json` ([#110](https://github.com/arkavo-org/opentdf-rs/pull/110)).
 
 ## [0.15.0] — 2026-08-30
 

@@ -31,12 +31,16 @@ on:
       platform-ref:
         required: false
         type: string
-        default: latest
+        # TODO: back to `latest` once a service/* release includes
+        # opentdf/platform#4081 (KAS accepts spec Base64(HMAC) policy bindings).
+        default: ca178b05ee15c0ba5b075f0a2b05d1da6dd585bc
         description: "opentdf/platform ref: 'latest'/'lts', branch, tag, or SHA"
       otdfctl-ref:
         required: false
         type: string
-        default: latest
+        # TODO: back to `latest` once an otdfctl/* release includes
+        # opentdf/platform#4063 (Go reads the spec manifest.json entry).
+        default: 29498d207c8b7b80ab820ba50b0f674026ab277f
         description: "go/otdfctl peer ref: 'latest'/'lts', branch, tag, or SHA"
 
 concurrency:
@@ -61,8 +65,14 @@ jobs:
       go-channel: ${{ steps.resolve.outputs.go-channel }}
     env:
       TESTS_REF_IN: ${{ inputs.tests-ref || 'latest' }}
-      PLATFORM_REF_IN: ${{ inputs.platform-ref || 'latest' }}
-      OTDFCTL_REF_IN: ${{ inputs.otdfctl-ref || 'latest' }}
+      # Pinned until a service/* release includes opentdf/platform#4081:
+      # this crate writes spec-form policy bindings, which released KAS
+      # versions reject.
+      PLATFORM_REF_IN: ${{ inputs.platform-ref || 'ca178b05ee15c0ba5b075f0a2b05d1da6dd585bc' }}
+      # Pinned until an otdfctl/* release includes opentdf/platform#4063:
+      # released go reads only 0.manifest.json; this crate writes the spec
+      # name manifest.json.
+      OTDFCTL_REF_IN: ${{ inputs.otdfctl-ref || '29498d207c8b7b80ab820ba50b0f674026ab277f' }}
       GH_TOKEN: ${{ github.token }}
       # Live main while community suite tracks Stage-1 rust ↔ go there.
       TESTS_FALLBACK_REF: main
@@ -117,6 +127,14 @@ jobs:
           else
             GO_REF="$OTDFCTL_REF_IN"
             GO_CHANNEL="$OTDFCTL_REF_IN"
+            # otdf-sdk-mgr builds PR heads from source under the tag pull-<n>
+            # (sdk/go/dist/pull-<n>). The default pin is PR #4063's head commit,
+            # which it resolves through refs/pull/4063/head.
+            if [[ "$OTDFCTL_REF_IN" == "29498d207c8b7b80ab820ba50b0f674026ab277f" ]]; then
+              GO_CHANNEL="pull-4063"
+            elif [[ "$OTDFCTL_REF_IN" =~ ^refs/pull/([0-9]+)/ ]]; then
+              GO_CHANNEL="pull-${BASH_REMATCH[1]}"
+            fi
           fi
 
           {
@@ -155,13 +173,13 @@ jobs:
       GO_CHANNEL: ${{ needs.resolve-refs.outputs.go-channel }}
     steps:
       - name: Checkout opentdf-rs
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           path: opentdf-rs
           persist-credentials: false
 
       - name: Checkout opentdf-tests
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: arkavo-org/opentdf-tests
           ref: ${{ env.TESTS_REF }}
@@ -192,14 +210,16 @@ jobs:
           log-type: json
           pqc-enabled: true
 
-      - uses: astral-sh/setup-uv@v6
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.14"
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: "1.24.x"
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
 
       - name: Capture platform otdfctl location
         id: platform-otdfctl
@@ -318,14 +338,14 @@ jobs:
 
       - name: Upload results
         if: success() || failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ job.status == 'success' && '✅' || '❌' }} opentdf-rs-xtest
           path: otdftests/xtest/test-results/**
 
       - name: Upload platform logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: opentdf-rs-xtest-platform-logs
           path: ${{ steps.run-platform.outputs.platform-log-file }}

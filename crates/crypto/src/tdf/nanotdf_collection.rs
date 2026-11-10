@@ -639,10 +639,10 @@ mod tests {
     #[cfg(feature = "kas")]
     fn generate_test_keypair() -> (Vec<u8>, Vec<u8>) {
         use p256::SecretKey;
+        use p256::elliptic_curve::Generate;
         use p256::pkcs8::EncodePrivateKey;
-        use rand::rngs::OsRng;
 
-        let secret = SecretKey::random(&mut OsRng);
+        let secret = SecretKey::generate();
         let public = secret.public_key().to_sec1_bytes().to_vec();
         let private = secret.to_pkcs8_der().unwrap().as_bytes().to_vec();
         (public, private)

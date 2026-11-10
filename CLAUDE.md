@@ -49,6 +49,7 @@ This is a Cargo workspace with the following crates:
   - `KasClient`: Async HTTP client using reqwest + tokio
   - JWT signing with RS256 for authentication
   - Full KAS v2 rewrap protocol implementation
+  - Caller-key mode (`with_caller_key`, `src/kas_dpop.rs`): RFC 9449 DPoP proof + EdDSA/ES256 signed request token by the agent's key; Connect rewrap only, `htu` = `/kas.AccessService/Rewrap`
 - **`src/manifest.rs`**: TDF manifest structure and serialization
   - `TdfManifest`: JSON manifest containing encryption metadata and policy
 - **`src/policy.rs`**: Attribute-Based Access Control (ABAC) policy system

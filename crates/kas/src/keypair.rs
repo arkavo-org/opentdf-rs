@@ -11,7 +11,7 @@
 //! format is used here for simplicity and direct compatibility with the p256 crate.
 
 use crate::error::KasServerError;
-use p256::elliptic_curve::sec1::ToEncodedPoint;
+use p256::elliptic_curve::sec1::ToSec1Point;
 use p256::{PublicKey as P256PublicKey, SecretKey as P256SecretKey};
 
 /// EC P-256 keypair for NanoTDF operations
@@ -39,8 +39,8 @@ impl KasEcKeypair {
 
     /// Generate a new random keypair
     pub fn generate() -> Result<Self, KasServerError> {
-        use rand::rngs::OsRng;
-        let private_key = P256SecretKey::random(&mut OsRng);
+        use p256::elliptic_curve::Generate;
+        let private_key = P256SecretKey::generate();
         let public_key = private_key.public_key();
         let public_key_pem = Self::encode_public_key_pem(&public_key)?;
 
@@ -68,7 +68,7 @@ impl KasEcKeypair {
 
     /// Encode public key to PEM format
     fn encode_public_key_pem(public_key: &P256PublicKey) -> Result<String, KasServerError> {
-        let encoded_point = public_key.to_encoded_point(false);
+        let encoded_point = public_key.to_sec1_point(false);
         let sec1_bytes = encoded_point.as_bytes();
         let pem_encoded = pem::Pem::new("PUBLIC KEY", sec1_bytes.to_vec());
         Ok(pem::encode(&pem_encoded))
@@ -94,7 +94,7 @@ pub struct KasRsaKeypair {
 impl KasRsaKeypair {
     /// Create from existing private key in PKCS#8 PEM format
     pub fn from_pkcs8_pem(pem_str: &str) -> Result<Self, KasServerError> {
-        use pkcs8::DecodePrivateKey;
+        use rsa::pkcs8::DecodePrivateKey;
         let private_key = rsa::RsaPrivateKey::from_pkcs8_pem(pem_str)
             .map_err(|e| KasServerError::InvalidPrivateKey(e.to_string()))?;
         let public_key_pem = Self::encode_public_key_pem(&private_key)?;
@@ -130,12 +130,12 @@ impl KasRsaKeypair {
 
     /// Encode public key to PEM format
     fn encode_public_key_pem(private_key: &rsa::RsaPrivateKey) -> Result<String, KasServerError> {
-        use pkcs8::EncodePublicKey;
         use rsa::RsaPublicKey;
+        use rsa::pkcs8::EncodePublicKey;
 
         let public_key = RsaPublicKey::from(private_key);
         public_key
-            .to_public_key_pem(pkcs8::LineEnding::LF)
+            .to_public_key_pem(rsa::pkcs8::LineEnding::LF)
             .map_err(|e| KasServerError::InvalidPublicKey(e.to_string()))
     }
 }

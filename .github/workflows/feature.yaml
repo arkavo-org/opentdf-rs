@@ -16,7 +16,7 @@ jobs:
   # Uses EmbarkStudios action with matrix strategy for optimal CI behavior
   cargo-deny:
     name: Dependency Audit (${{ matrix.checks }})
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -24,56 +24,73 @@ jobs:
           - advisories
           - bans licenses sources
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check ${{ matrix.checks }}
-          # Don't use --all-features since rustcrypto-provider has RUSTSEC-2023-0071
-          # The deny.toml already sets all-features = false
-          arguments: ""
+          # Every feature of every workspace crate, so optional dependencies
+          # are audited too. The one accepted advisory (RUSTSEC-2023-0071) is
+          # ignored by id in deny.toml.
+          arguments: --all-features
 
   lint:
     name: lint
     runs-on: ubuntu-latest
     steps:
       - name: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: setup-rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: stable
           components: clippy, rustfmt
 
       - name: format
         run: cargo fmt --all --check
 
       - name: clippy
-        run: cargo clippy --lib --all-features -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
   test:
     name: test
     runs-on: ubuntu-latest
     steps:
       - name: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: setup-rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
 
+      # Keep these two steps identical to the `verify-tests` job in release.yaml.
       - name: run-tests
         run: cargo test --verbose
+
+      - name: run-tests-all-features
+        run: cargo test --all-features --verbose
 
   build:
     name: build
     runs-on: ubuntu-latest
     steps:
       - name: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: setup-rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: stable
           targets: x86_64-unknown-linux-gnu
 
       - name: build-release
@@ -84,11 +101,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: setup-rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: stable
           targets: x86_64-unknown-linux-gnu
 
       - name: run-bench
@@ -100,39 +120,54 @@ jobs:
 
     steps:
       - name: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: setup-rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: stable
           targets: wasm32-unknown-unknown
 
+      # Cargo.lock is not committed today, so resolve it here: the cache keys
+      # below then follow the dependency versions actually built. A committed
+      # Cargo.lock is used as is.
+      - name: resolve-lockfile
+        run: test -f Cargo.lock || cargo generate-lockfile
+
       - name: cache-registry
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-registry-
 
       - name: cache-git
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-git-
 
       - name: cache-target
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: target
-          key: ${{ runner.os }}-target-wasm-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-target-wasm-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-target-wasm-
 
+      # Pinned release binary, checked against the SHA-256 recorded in the
+      # action's manifest at this commit. Keep the version in step with
+      # release.yaml.
       - name: install-wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: wasm-pack@0.13.1
+          fallback: none
 
       - name: build-web
         working-directory: crates/wasm
@@ -157,14 +192,14 @@ jobs:
         run: wasm-pack test --node
 
       - name: upload-web
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: wasm-web-${{ github.sha }}
           path: crates/wasm/pkg-web/
           retention-days: 7
 
       - name: upload-node
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: wasm-node-${{ github.sha }}
           path: crates/wasm/pkg-node/

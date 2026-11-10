@@ -29,6 +29,9 @@ pub enum EncryptionError {
     #[error("Invalid key length")]
     InvalidKeyLength,
 
+    #[error("Invalid IV length: {0} bytes, expected 12")]
+    InvalidIvLength(usize),
+
     #[error("Base64 decode error: {0}")]
     Base64Error(#[from] base64::DecodeError),
 

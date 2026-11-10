@@ -315,6 +315,8 @@ impl From<&KeyAccessObject> for KeyAccess {
             access_type: kao.key_type.clone(),
             url: kao.url.clone(),
             kid: kao.kid.clone(),
+            // KeyAccessObject (KAS rewrap wire type) carries no split id.
+            sid: None,
             protocol: kao.protocol.clone(),
             wrapped_key: kao.wrapped_key.clone(),
             policy_binding: kao.policy_binding.clone().into(),
@@ -331,6 +333,8 @@ impl From<KeyAccessObject> for KeyAccess {
             access_type: kao.key_type,
             url: kao.url,
             kid: kao.kid,
+            // KeyAccessObject (KAS rewrap wire type) carries no split id.
+            sid: None,
             protocol: kao.protocol,
             wrapped_key: kao.wrapped_key,
             policy_binding: kao.policy_binding.into(),

@@ -82,16 +82,16 @@ pub fn ec_unwrap(
 mod tests {
     use super::*;
     use p256::ecdh::EphemeralSecret;
-    use p256::elliptic_curve::sec1::ToEncodedPoint;
-    use rand::rngs::OsRng;
+    use p256::elliptic_curve::Generate;
+    use p256::elliptic_curve::sec1::ToSec1Point;
 
     #[test]
     fn test_custom_ecdh() {
         // Generate two keypairs
-        let private1 = SecretKey::random(&mut OsRng);
+        let private1 = SecretKey::generate();
         let public1 = private1.public_key();
 
-        let private2 = SecretKey::random(&mut OsRng);
+        let private2 = SecretKey::generate();
         let public2 = private2.public_key();
 
         // ECDH should produce same shared secret both ways
@@ -105,12 +105,12 @@ mod tests {
     #[test]
     fn test_ec_unwrap() {
         // Generate KAS keypair
-        let kas_private = SecretKey::random(&mut OsRng);
+        let kas_private = SecretKey::generate();
 
         // Generate ephemeral keypair (simulating TDF client)
-        let ephemeral = EphemeralSecret::random(&mut OsRng);
+        let ephemeral = EphemeralSecret::generate();
         let ephemeral_public = PublicKey::from(&ephemeral);
-        let ephemeral_public_bytes = ephemeral_public.to_encoded_point(true);
+        let ephemeral_public_bytes = ephemeral_public.to_sec1_point(true);
 
         // Generate session shared secret (simulating client-KAS session)
         let session_secret = b"test_session_shared_secret__32b!";
@@ -138,7 +138,7 @@ mod tests {
 
     #[test]
     fn test_ec_unwrap_invalid_key_size() {
-        let kas_private = SecretKey::random(&mut OsRng);
+        let kas_private = SecretKey::generate();
         let session_secret = b"test_session_shared_secret__32b!";
         let header = b"L1L\x00\x00";
 

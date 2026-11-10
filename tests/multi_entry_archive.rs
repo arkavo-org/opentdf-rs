@@ -32,7 +32,7 @@ fn multi_entry_archive_writes_manifest_last_and_indexes_members() {
     let mut file = File::open(&path).unwrap();
     let mut zip = zip::ZipArchive::new(&mut file).unwrap();
     let names: Vec<String> = (0..zip.len())
-        .map(|i| zip.by_index(i).unwrap().name().to_string())
+        .map(|i| zip.by_index(i).unwrap().name().unwrap().into_owned())
         .collect();
     assert_eq!(names, vec!["header", "s/1", "0.manifest.json"]);
 

@@ -183,7 +183,6 @@ mod kas_tests {
         println!("Fetching EC public key from {}...", kas_url);
 
         let client = Client::builder()
-            .danger_accept_invalid_certs(true) // For testing with self-signed certs
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .expect("Failed to build HTTP client");

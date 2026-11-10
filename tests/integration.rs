@@ -69,7 +69,7 @@ fn test_tdf_archive_structure() -> Result<(), Box<dyn std::error::Error>> {
     for i in 0..archive.len() {
         let file = archive.by_index(i)?;
         println!("\nFile Entry {}:", i);
-        println!("  Name: {}", file.name());
+        println!("  Name: {}", file.name().unwrap());
         println!("  Size: {} bytes", file.size());
         println!("  Compressed Size: {} bytes", file.compressed_size());
         println!("  Compression Method: {:?}", file.compression());

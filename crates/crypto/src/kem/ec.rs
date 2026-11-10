@@ -112,10 +112,10 @@ fn derive_key_from_shared_secret(shared_secret: &[u8]) -> Result<AesKey, KemErro
 mod p256_impl {
     use super::*;
     use p256::ecdh::EphemeralSecret;
-    use p256::elliptic_curve::sec1::ToEncodedPoint;
+    use p256::elliptic_curve::Generate;
+    use p256::elliptic_curve::sec1::ToSec1Point;
+    use p256::pkcs8::DecodePrivateKey;
     use p256::{PublicKey, SecretKey};
-    use pkcs8::DecodePrivateKey;
-    use rand::rngs::OsRng;
 
     pub fn derive_key_with_ephemeral(
         recipient_public_key: &[u8],
@@ -125,11 +125,11 @@ mod p256_impl {
             .map_err(|_| KemError::InvalidPublicKey)?;
 
         // Generate ephemeral secret
-        let ephemeral_secret = EphemeralSecret::random(&mut OsRng);
+        let ephemeral_secret = EphemeralSecret::generate();
 
         // Get ephemeral public key (compressed)
         let ephemeral_public = ephemeral_secret.public_key();
-        let ephemeral_public_bytes = ephemeral_public.to_encoded_point(true).as_bytes().to_vec();
+        let ephemeral_public_bytes = ephemeral_public.to_sec1_point(true).as_bytes().to_vec();
 
         // Perform ECDH
         let shared_secret = ephemeral_secret.diffie_hellman(&recipient_key);
@@ -167,10 +167,10 @@ mod p256_impl {
 mod p384_impl {
     use super::*;
     use p384::ecdh::EphemeralSecret;
-    use p384::elliptic_curve::sec1::ToEncodedPoint;
+    use p384::elliptic_curve::Generate;
+    use p384::elliptic_curve::sec1::ToSec1Point;
+    use p384::pkcs8::DecodePrivateKey;
     use p384::{PublicKey, SecretKey};
-    use pkcs8::DecodePrivateKey;
-    use rand::rngs::OsRng;
 
     pub fn derive_key_with_ephemeral(
         recipient_public_key: &[u8],
@@ -178,9 +178,9 @@ mod p384_impl {
         let recipient_key = PublicKey::from_sec1_bytes(recipient_public_key)
             .map_err(|_| KemError::InvalidPublicKey)?;
 
-        let ephemeral_secret = EphemeralSecret::random(&mut OsRng);
+        let ephemeral_secret = EphemeralSecret::generate();
         let ephemeral_public = ephemeral_secret.public_key();
-        let ephemeral_public_bytes = ephemeral_public.to_encoded_point(true).as_bytes().to_vec();
+        let ephemeral_public_bytes = ephemeral_public.to_sec1_point(true).as_bytes().to_vec();
 
         let shared_secret = ephemeral_secret.diffie_hellman(&recipient_key);
         let key = derive_key_from_shared_secret(shared_secret.raw_secret_bytes())?;
@@ -211,10 +211,10 @@ mod p384_impl {
 mod p521_impl {
     use super::*;
     use p521::ecdh::EphemeralSecret;
-    use p521::elliptic_curve::sec1::ToEncodedPoint;
+    use p521::elliptic_curve::Generate;
+    use p521::elliptic_curve::sec1::ToSec1Point;
+    use p521::pkcs8::DecodePrivateKey;
     use p521::{PublicKey, SecretKey};
-    use pkcs8::DecodePrivateKey;
-    use rand::rngs::OsRng;
 
     pub fn derive_key_with_ephemeral(
         recipient_public_key: &[u8],
@@ -222,9 +222,9 @@ mod p521_impl {
         let recipient_key = PublicKey::from_sec1_bytes(recipient_public_key)
             .map_err(|_| KemError::InvalidPublicKey)?;
 
-        let ephemeral_secret = EphemeralSecret::random(&mut OsRng);
+        let ephemeral_secret = EphemeralSecret::generate();
         let ephemeral_public = ephemeral_secret.public_key();
-        let ephemeral_public_bytes = ephemeral_public.to_encoded_point(true).as_bytes().to_vec();
+        let ephemeral_public_bytes = ephemeral_public.to_sec1_point(true).as_bytes().to_vec();
 
         let shared_secret = ephemeral_secret.diffie_hellman(&recipient_key);
         let key = derive_key_from_shared_secret(shared_secret.raw_secret_bytes())?;
@@ -255,10 +255,10 @@ mod p521_impl {
 mod k256_impl {
     use super::*;
     use k256::ecdh::EphemeralSecret;
-    use k256::elliptic_curve::sec1::ToEncodedPoint;
+    use k256::elliptic_curve::Generate;
+    use k256::elliptic_curve::sec1::ToSec1Point;
+    use k256::pkcs8::DecodePrivateKey;
     use k256::{PublicKey, SecretKey};
-    use pkcs8::DecodePrivateKey;
-    use rand::rngs::OsRng;
 
     pub fn derive_key_with_ephemeral(
         recipient_public_key: &[u8],
@@ -266,9 +266,9 @@ mod k256_impl {
         let recipient_key = PublicKey::from_sec1_bytes(recipient_public_key)
             .map_err(|_| KemError::InvalidPublicKey)?;
 
-        let ephemeral_secret = EphemeralSecret::random(&mut OsRng);
+        let ephemeral_secret = EphemeralSecret::generate();
         let ephemeral_public = ephemeral_secret.public_key();
-        let ephemeral_public_bytes = ephemeral_public.to_encoded_point(true).as_bytes().to_vec();
+        let ephemeral_public_bytes = ephemeral_public.to_sec1_point(true).as_bytes().to_vec();
 
         let shared_secret = ephemeral_secret.diffie_hellman(&recipient_key);
         let key = derive_key_from_shared_secret(shared_secret.raw_secret_bytes())?;
@@ -425,7 +425,8 @@ pub fn wrap_key_with_ec(
     use hkdf::Hkdf;
     use p256::PublicKey;
     use p256::ecdh::EphemeralSecret;
-    use p256::elliptic_curve::sec1::ToEncodedPoint;
+    use p256::elliptic_curve::Generate;
+    use p256::elliptic_curve::sec1::ToSec1Point;
     use rand::rngs::OsRng;
     use sha2::Sha256;
 
@@ -444,7 +445,7 @@ pub fn wrap_key_with_ec(
     let recipient_key = PublicKey::from_sec1_bytes(&der_bytes)
         .or_else(|_| {
             // Try parsing as SPKI (SubjectPublicKeyInfo) format using proper ASN.1 parsing
-            use spki::SubjectPublicKeyInfoRef;
+            use p256::pkcs8::spki::SubjectPublicKeyInfoRef;
             let spki = SubjectPublicKeyInfoRef::try_from(der_bytes.as_slice())
                 .map_err(|_| p256::elliptic_curve::Error)?;
             // Extract the raw public key bytes from the SPKI structure
@@ -453,7 +454,7 @@ pub fn wrap_key_with_ec(
         .map_err(|_| KemError::InvalidPublicKey)?;
 
     // Generate ephemeral key pair
-    let ephemeral_secret = EphemeralSecret::random(&mut OsRng);
+    let ephemeral_secret = EphemeralSecret::generate();
     let ephemeral_public = ephemeral_secret.public_key();
 
     // Perform ECDH
@@ -487,7 +488,7 @@ pub fn wrap_key_with_ec(
 
     // Convert ephemeral public key to compressed SEC1 format (33 bytes for P-256)
     // Much smaller than PEM (~140 bytes) or uncompressed (65 bytes)
-    let ephemeral_compressed = ephemeral_public.to_encoded_point(true);
+    let ephemeral_compressed = ephemeral_public.to_sec1_point(true);
     let ephemeral_b64 = BASE64.encode(ephemeral_compressed.as_bytes());
 
     Ok(EcWrappedKeyResult {
@@ -509,8 +510,8 @@ pub fn unwrap_key_with_ec(
     };
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use hkdf::Hkdf;
+    use p256::pkcs8::DecodePrivateKey;
     use p256::{PublicKey, SecretKey};
-    use pkcs8::DecodePrivateKey;
     use sha2::Sha256;
 
     // Parse private key from PEM
@@ -592,13 +593,13 @@ pub fn unwrap_key_with_ec(
 mod tests {
     use super::*;
     use p256::SecretKey;
+    use p256::elliptic_curve::Generate;
     use p256::pkcs8::EncodePrivateKey;
-    use rand::rngs::OsRng;
 
     #[test]
     fn test_p256_key_derivation_roundtrip() {
         // Generate a recipient key pair
-        let recipient_secret = SecretKey::random(&mut OsRng);
+        let recipient_secret = SecretKey::generate();
         let recipient_public = recipient_secret.public_key();
         let recipient_public_bytes = recipient_public.to_sec1_bytes();
 
@@ -647,25 +648,25 @@ mod tests {
             // (In real usage, this would be a proper recipient public key)
             let (_, dummy_pubkey) = match curve {
                 EcCurve::P256 => {
-                    let secret = p256::SecretKey::random(&mut OsRng);
+                    let secret = p256::SecretKey::generate();
                     let pubkey = secret.public_key().to_sec1_bytes().to_vec();
                     let private = secret.to_pkcs8_der().unwrap();
                     (private.to_bytes().to_vec(), pubkey)
                 }
                 EcCurve::P384 => {
-                    let secret = p384::SecretKey::random(&mut OsRng);
+                    let secret = p384::SecretKey::generate();
                     let pubkey = secret.public_key().to_sec1_bytes().to_vec();
                     let private = secret.to_pkcs8_der().unwrap();
                     (private.to_bytes().to_vec(), pubkey)
                 }
                 EcCurve::P521 => {
-                    let secret = p521::SecretKey::random(&mut OsRng);
+                    let secret = p521::SecretKey::generate();
                     let pubkey = secret.public_key().to_sec1_bytes().to_vec();
                     let private = secret.to_pkcs8_der().unwrap();
                     (private.to_bytes().to_vec(), pubkey)
                 }
                 EcCurve::Secp256k1 => {
-                    let secret = k256::SecretKey::random(&mut OsRng);
+                    let secret = k256::SecretKey::generate();
                     let pubkey = secret.public_key().to_sec1_bytes().to_vec();
                     let private = secret.to_pkcs8_der().unwrap();
                     (private.to_bytes().to_vec(), pubkey)

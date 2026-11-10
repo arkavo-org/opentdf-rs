@@ -75,18 +75,18 @@ pub fn create_test_manifest_with_policy(kas_url: String) -> TdfManifest {
 /// Returns (private_key_pkcs8_der, public_key_sec1_compressed)
 #[cfg(feature = "kas-client")]
 pub fn generate_p256_keypair() -> (Vec<u8>, Vec<u8>) {
-    use p256::elliptic_curve::sec1::ToEncodedPoint;
+    use p256::elliptic_curve::sec1::ToSec1Point;
     use p256::pkcs8::EncodePrivateKey;
     use p256::SecretKey;
-    use rand::rngs::OsRng;
+    use p256::elliptic_curve::Generate;
 
-    let secret_key = SecretKey::random(&mut OsRng);
+    let secret_key = SecretKey::generate();
     let public_key = secret_key.public_key();
 
     // Use PKCS#8 DER for private key (compatible with EC KEM)
     let private_bytes = secret_key.to_pkcs8_der().unwrap().to_bytes().to_vec();
     // Use compressed SEC1 format (33 bytes) per otdfctl gold standard
-    let public_bytes = public_key.to_encoded_point(true).as_bytes().to_vec();
+    let public_bytes = public_key.to_sec1_point(true).as_bytes().to_vec();
 
     (private_bytes, public_bytes)
 }

@@ -1,0 +1,23 @@
+# Weekly dependency updates, one grouped pull request per ecosystem.
+version: 2
+updates:
+  # Workspace crates (root manifest plus crates/*).
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      cargo:
+        patterns:
+          - "*"
+
+  # Actions are pinned by commit SHA; Dependabot moves the SHA and the
+  # trailing version comment together.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"

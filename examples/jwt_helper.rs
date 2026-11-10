@@ -25,6 +25,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use opentdf_protocol::UnsignedRewrapRequest;
 use p256::ecdsa::{SigningKey, signature::Signer};
+use p256::elliptic_curve::Generate;
 use serde_json::json;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -108,7 +109,7 @@ fn base64url_encode(data: &[u8]) -> String {
 /// let signing_key = generate_signing_key();
 /// ```
 pub fn generate_signing_key() -> SigningKey {
-    SigningKey::random(&mut rand::rngs::OsRng)
+    SigningKey::generate()
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

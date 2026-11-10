@@ -48,13 +48,17 @@
 #![allow(deprecated)]
 
 use crate::manifest::{
-    EncryptionInformation, EncryptionMethod, IntegrityInformation, IntegrityInformationExt,
-    KeyAccess, Payload, RootSignature, Segment, TdfManifest,
+    Assertion, EncryptionInformation, EncryptionMethod, IntegrityInformation,
+    IntegrityInformationExt, KeyAccess, Payload, RootSignature, Segment, TDF_SPEC_VERSION,
+    TdfManifest,
 };
 use crate::policy::Policy;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use opentdf_crypto::{EncryptionError, TdfEncryption, calculate_policy_binding};
 use serde::{Deserialize, Serialize};
+
+/// AES-256-GCM nonce length in bytes; `method.iv` must carry at least this many.
+const GCM_NONCE_LENGTH: usize = 12;
 
 // ============================================================================
 // TDF-JSON Spec-Compliant Types (per TDF-JSON specification draft-00)
@@ -106,9 +110,10 @@ pub struct TdfJsonManifest {
     #[serde(rename = "encryptionInformation")]
     pub encryption_information: EncryptionInformation,
 
-    /// Optional assertions for additional metadata
+    /// Optional assertions (spec: assertion.md), same shape as
+    /// `TdfManifest::assertions`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub assertions: Option<Vec<serde_json::Value>>,
+    pub assertions: Option<Vec<Assertion>>,
 }
 
 /// JSON payload for TDF-JSON transport
@@ -308,11 +313,13 @@ impl TdfJson {
         let iv_bytes = BASE64.decode(&self.manifest.encryption_information.method.iv)?;
 
         // Extract just the payload IV (first 12 bytes)
-        let payload_iv = if iv_bytes.len() >= 12 {
-            &iv_bytes[0..12]
-        } else {
-            &iv_bytes[..]
-        };
+        // `method.iv` defaults to empty on read (Java omits it), so a short IV
+        // must be rejected here: `Nonce::from_slice` asserts the length and
+        // would abort the process.
+        if iv_bytes.len() < GCM_NONCE_LENGTH {
+            return Err(EncryptionError::InvalidIvLength(iv_bytes.len()));
+        }
+        let payload_iv = &iv_bytes[0..GCM_NONCE_LENGTH];
 
         // Create cipher with payload key
         let cipher = Aes256Gcm::new_from_slice(payload_key)
@@ -340,9 +347,12 @@ impl TdfJson {
                 tdf_spec_version: None,
             },
             encryption_information: self.manifest.encryption_information.clone(),
-            schema_version: Some("1.0.0".to_string()),
+            // Same source as the zip writer (`TdfManifest::new`): the TDF spec
+            // version, not the TDF-JSON container `version` ("1.0.0").
+            schema_version: Some(TDF_SPEC_VERSION.to_string()),
             tdf_spec_version: None,
             gguf: None,
+            assertions: self.manifest.assertions.clone().unwrap_or_default(),
         }
     }
 
@@ -418,7 +428,7 @@ impl TdfJsonBuilder {
         let policy_b64 = BASE64.encode(policy_json.as_bytes());
 
         // Calculate policy binding hash
-        let policy_hash = calculate_policy_binding(&policy_b64, payload_key)
+        let policy_hash = calculate_policy_binding(&policy_json, payload_key)
             .map_err(|_| EncryptionError::KeyGenerationError)?;
 
         // Wrap key using EC (ECDH + HKDF + AES-GCM) - KAS public key is required
@@ -436,6 +446,7 @@ impl TdfJsonBuilder {
             access_type: "wrapped".to_string(),
             url: kas_url,
             kid: None,
+            sid: None,
             protocol: "kas".to_string(),
             wrapped_key,
             policy_binding: crate::manifest::PolicyBinding {
@@ -606,11 +617,13 @@ impl TdfJsonRpc {
         let iv_bytes = BASE64.decode(&self.manifest.encryption_information.method.iv)?;
 
         // Extract just the payload IV (first 12 bytes)
-        let payload_iv = if iv_bytes.len() >= 12 {
-            &iv_bytes[0..12]
-        } else {
-            &iv_bytes[..]
-        };
+        // `method.iv` defaults to empty on read (Java omits it), so a short IV
+        // must be rejected here: `Nonce::from_slice` asserts the length and
+        // would abort the process.
+        if iv_bytes.len() < GCM_NONCE_LENGTH {
+            return Err(EncryptionError::InvalidIvLength(iv_bytes.len()));
+        }
+        let payload_iv = &iv_bytes[0..GCM_NONCE_LENGTH];
 
         // Create cipher with payload key
         let cipher = Aes256Gcm::new_from_slice(payload_key)
@@ -644,6 +657,7 @@ impl TdfJsonRpc {
             schema_version: self.manifest.schema_version.clone(),
             tdf_spec_version: None,
             gguf: None,
+            assertions: Vec::new(),
         }
     }
 }
@@ -715,6 +729,7 @@ impl From<&TdfManifestInline> for TdfManifest {
             schema_version: inline.schema_version.clone(),
             tdf_spec_version: None,
             gguf: None,
+            assertions: Vec::new(),
         }
     }
 }
@@ -735,6 +750,7 @@ impl From<TdfManifestInline> for TdfManifest {
             schema_version: inline.schema_version,
             tdf_spec_version: None,
             gguf: None,
+            assertions: Vec::new(),
         }
     }
 }
@@ -812,7 +828,7 @@ impl TdfJsonRpcBuilder {
         let policy_b64 = BASE64.encode(policy_json.as_bytes());
 
         // Calculate policy binding hash
-        let policy_hash = calculate_policy_binding(&policy_b64, payload_key)
+        let policy_hash = calculate_policy_binding(&policy_json, payload_key)
             .map_err(|_| EncryptionError::KeyGenerationError)?;
 
         // Create key access object
@@ -820,6 +836,7 @@ impl TdfJsonRpcBuilder {
             access_type: "wrapped".to_string(),
             url: kas_url,
             kid: None,
+            sid: None,
             protocol: "kas".to_string(),
             wrapped_key: encrypted_payload.encrypted_key.clone(),
             policy_binding: crate::manifest::PolicyBinding {
@@ -914,10 +931,10 @@ mod tests {
     /// Returns (private_key_pem, public_key_pem)
     fn generate_test_ec_key_pair() -> (String, String) {
         use p256::SecretKey;
+        use p256::elliptic_curve::Generate;
         use p256::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
-        use rand::rngs::OsRng;
 
-        let secret_key = SecretKey::random(&mut OsRng);
+        let secret_key = SecretKey::generate();
         let public_key = secret_key.public_key();
 
         let private_pem = secret_key
@@ -1003,7 +1020,7 @@ mod tests {
         // Create policy binding
         let policy_json = serde_json::to_string(&policy).expect("Failed to serialize policy");
         let policy_b64 = BASE64.encode(policy_json.as_bytes());
-        let policy_hash = calculate_policy_binding(&policy_b64, &payload_key)
+        let policy_hash = calculate_policy_binding(&policy_json, &payload_key)
             .expect("Failed to calculate policy binding");
 
         // Create key access object
@@ -1011,6 +1028,7 @@ mod tests {
             access_type: "wrapped".to_string(),
             url: test_kas_url(),
             kid: None,
+            sid: None,
             protocol: "kas".to_string(),
             wrapped_key: encrypted_payload.encrypted_key.clone(),
             policy_binding: crate::manifest::PolicyBinding {
@@ -1288,6 +1306,38 @@ mod tests {
         assert!(envelope.payload.length.is_some());
     }
 
+    /// The KAS checks the binding as `HMAC-SHA256(DEK, manifest policy)`, where
+    /// the manifest policy is the base64 string itself.
+    #[cfg(feature = "kas-client")]
+    #[test]
+    fn test_tdf_json_policy_binding_matches_manifest_policy() {
+        let policy = Policy::new(
+            "test-policy".to_string(),
+            vec![],
+            vec!["user@example.com".to_string()],
+        );
+        let (private_pem, public_pem) = generate_test_ec_key_pair();
+
+        let envelope = TdfJson::encrypt(b"binding")
+            .kas_url(&test_kas_url())
+            .kas_public_key(&public_pem)
+            .policy(policy)
+            .build()
+            .expect("Failed to create envelope");
+
+        let info = &envelope.manifest.encryption_information;
+        let kao = &info.key_access[0];
+        let dek = opentdf_crypto::unwrap_key_with_ec(
+            &private_pem,
+            &kao.wrapped_key,
+            kao.ephemeral_public_key.as_deref().unwrap(),
+        )
+        .unwrap();
+        let expected =
+            BASE64.encode(opentdf_crypto::calculate_hmac(&dek, info.policy.as_bytes()).unwrap());
+        assert_eq!(kao.policy_binding.hash, expected);
+    }
+
     #[cfg(feature = "kas-client")]
     #[test]
     fn test_tdf_json_serialize_deserialize() {
@@ -1345,7 +1395,7 @@ mod tests {
         // Create policy binding
         let policy_json = serde_json::to_string(&policy).expect("Failed to serialize policy");
         let policy_b64 = BASE64.encode(policy_json.as_bytes());
-        let policy_hash = calculate_policy_binding(&policy_b64, &payload_key)
+        let policy_hash = calculate_policy_binding(&policy_json, &payload_key)
             .expect("Failed to calculate policy binding");
 
         // Create key access object
@@ -1353,6 +1403,7 @@ mod tests {
             access_type: "wrapped".to_string(),
             url: test_kas_url(),
             kid: None,
+            sid: None,
             protocol: "kas".to_string(),
             wrapped_key: encrypted_payload.encrypted_key.clone(),
             policy_binding: crate::manifest::PolicyBinding {
@@ -1523,5 +1574,139 @@ mod tests {
         assert_eq!(manifest.payload.url, "inline");
         assert_eq!(manifest.payload.protocol, "base64");
         assert!(manifest.payload.is_encrypted);
+    }
+
+    /// A TDF-JSON document whose manifest carries `keyAccess[].sid` and an
+    /// assertion, parsed straight from the wire (no KAS key needed).
+    const TDF_JSON_WITH_SID_AND_ASSERTION: &str = r#"{
+        "tdf": "json",
+        "version": "1.0.0",
+        "manifest": {
+            "encryptionInformation": {
+                "type": "split",
+                "keyAccess": [{
+                    "type": "wrapped",
+                    "url": "https://kas.example.com",
+                    "sid": "split-id-1",
+                    "protocol": "kas",
+                    "wrappedKey": "AAAA",
+                    "policyBinding": {"alg": "HS256", "hash": "BBBB"}
+                }],
+                "method": {"algorithm": "AES-256-GCM", "isStreamable": true, "iv": ""},
+                "integrityInformation": {
+                    "rootSignature": {"alg": "HS256", "sig": ""},
+                    "segmentHashAlg": "GMAC",
+                    "segments": [],
+                    "segmentSizeDefault": 0,
+                    "encryptedSegmentSizeDefault": 0
+                },
+                "policy": ""
+            },
+            "assertions": [{
+                "id": "a1",
+                "type": "handling",
+                "scope": "payload",
+                "appliesToState": "encrypted",
+                "statement": {"format": "json-structured", "value": {"k": ["v", 1]}},
+                "binding": {"method": "jws", "signature": "x.y.z"}
+            }]
+        },
+        "payload": {"type": "inline", "protocol": "base64", "isEncrypted": true, "value": ""}
+    }"#;
+
+    #[test]
+    fn test_tdf_json_to_standard_manifest_uses_spec_version_and_keeps_sid_and_assertions() {
+        let envelope: TdfJson = serde_json::from_str(TDF_JSON_WITH_SID_AND_ASSERTION).unwrap();
+        // The TDF-JSON envelope version is the container format version, not the TDF spec.
+        assert_eq!(envelope.version, "1.0.0");
+
+        let manifest = envelope.to_standard_manifest();
+
+        // schemaVersion must come from the same source as the zip writer (TdfManifest::new).
+        assert_eq!(manifest.schema_version.as_deref(), Some(TDF_SPEC_VERSION));
+        assert_eq!(manifest.spec_version(), Some(TDF_SPEC_VERSION));
+
+        // sid and assertions survive the conversion.
+        assert_eq!(
+            manifest.encryption_information.key_access[0].sid.as_deref(),
+            Some("split-id-1")
+        );
+        assert_eq!(manifest.assertions.len(), 1);
+        assert_eq!(manifest.assertions[0].id, "a1");
+        assert_eq!(
+            manifest.assertions[0].statement.value,
+            serde_json::json!({"k": ["v", 1]})
+        );
+
+        // And the envelope itself re-serializes without dropping either.
+        let input: serde_json::Value =
+            serde_json::from_str(TDF_JSON_WITH_SID_AND_ASSERTION).unwrap();
+        let output = serde_json::to_value(&envelope).unwrap();
+        assert_eq!(output, input);
+    }
+
+    /// Java-written manifests omit `method.iv`. Since `iv` now defaults to
+    /// empty on read, decrypt must reject it as an error instead of reaching
+    /// `Nonce::from_slice` with 0 bytes and aborting the process.
+    #[test]
+    fn tdf_json_decrypt_with_key_rejects_missing_iv_instead_of_panicking() {
+        let doc = r#"{
+            "tdf": "json",
+            "version": "1.0.0",
+            "manifest": {
+                "encryptionInformation": {
+                    "type": "split",
+                    "keyAccess": [],
+                    "method": {"algorithm": "AES-256-GCM"},
+                    "integrityInformation": {
+                        "rootSignature": {"alg": "HS256", "sig": ""},
+                        "segmentHashAlg": "GMAC",
+                        "segments": [],
+                        "segmentSizeDefault": 0,
+                        "encryptedSegmentSizeDefault": 0
+                    },
+                    "policy": ""
+                }
+            },
+            "payload": {"type": "inline", "protocol": "base64", "isEncrypted": true, "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}
+        }"#;
+        let envelope: TdfJson = serde_json::from_str(doc).unwrap();
+        assert_eq!(envelope.manifest.encryption_information.method.iv, "");
+
+        let result = envelope.decrypt_with_key(TdfEncryption::new().unwrap().payload_key());
+        assert!(
+            matches!(result, Err(EncryptionError::InvalidIvLength(0))),
+            "expected InvalidIvLength(0), got {result:?}"
+        );
+    }
+
+    #[test]
+    fn tdf_json_rpc_decrypt_with_key_rejects_missing_iv_instead_of_panicking() {
+        let doc = r#"{
+            "version": "3.0.0",
+            "manifest": {
+                "payload": {"type": "inline", "mimeType": "text/plain", "protocol": "base64", "isEncrypted": true, "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="},
+                "encryptionInformation": {
+                    "type": "split",
+                    "keyAccess": [],
+                    "method": {"algorithm": "AES-256-GCM"},
+                    "integrityInformation": {
+                        "rootSignature": {"alg": "HS256", "sig": ""},
+                        "segmentHashAlg": "GMAC",
+                        "segments": [],
+                        "segmentSizeDefault": 0,
+                        "encryptedSegmentSizeDefault": 0
+                    },
+                    "policy": ""
+                }
+            }
+        }"#;
+        let envelope: TdfJsonRpc = serde_json::from_str(doc).unwrap();
+
+        let result = envelope.decrypt_with_key(TdfEncryption::new().unwrap().payload_key());
+        assert!(
+            matches!(result, Err(EncryptionError::InvalidIvLength(0))),
+            "expected InvalidIvLength(0), got {result:?}"
+        );
     }
 }
