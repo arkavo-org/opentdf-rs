@@ -180,6 +180,8 @@ fn rewrap_endpoint(kas_url: &Url) -> String {
     endpoint.into()
 }
 
+// Each test carries both attributes so it runs under `cargo test` on the host
+// and under `wasm-pack test`, which only collects `wasm_bindgen_test`s.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,7 +217,8 @@ mod tests {
         );
     }
 
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn exact_origin_match_is_trusted() {
         assert_eq!(
             resolve("https://kas.example.com", &[KAS]).unwrap(),
@@ -223,7 +226,8 @@ mod tests {
         );
     }
 
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn rewrap_path_is_appended_to_the_manifest_path() {
         for (kas_url, expected) in [
             (
@@ -247,7 +251,8 @@ mod tests {
         }
     }
 
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn allowlist_entry_path_is_ignored() {
         assert_eq!(
             resolve(
@@ -259,7 +264,8 @@ mod tests {
         );
     }
 
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn any_allowlist_entry_may_match() {
         assert_eq!(
             resolve(
@@ -271,7 +277,8 @@ mod tests {
         );
     }
 
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn default_ports_are_normalized() {
         assert!(resolve("https://kas.example.com:443/kas", &[KAS]).is_ok());
         assert!(
@@ -284,7 +291,8 @@ mod tests {
         assert!(resolve("http://localhost:80", &["http://localhost"]).is_ok());
     }
 
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn port_mismatch_is_untrusted() {
         assert_untrusted("https://kas.example.com:8443/kas", &[KAS]);
         assert_untrusted(
@@ -294,7 +302,8 @@ mod tests {
         assert_untrusted("http://localhost:8081", &["http://localhost:8080"]);
     }
 
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn scheme_mismatch_is_untrusted() {
         assert_untrusted("http://localhost:8080", &["https://localhost:8080"]);
         assert_untrusted("https://localhost:8080", &["http://localhost:8080"]);
@@ -302,7 +311,8 @@ mod tests {
         assert_untrusted("https://localhost", &["http://localhost"]);
     }
 
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn lookalike_hosts_are_untrusted() {
         for kas_url in [
             // The allowlisted origin as a string prefix of the attacker's host.
@@ -322,7 +332,8 @@ mod tests {
         }
     }
 
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn userinfo_cannot_disguise_the_host() {
         // The host here is evil.com; everything before '@' is userinfo.
         assert_invalid_manifest_url("https://kas.example.com@evil.com", &[KAS]);
@@ -330,13 +341,15 @@ mod tests {
         assert_invalid_manifest_url("https://kas.example.com%2Fkas@evil.com", &[KAS]);
     }
 
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn userinfo_is_rejected_even_on_an_allowlisted_origin() {
         assert_invalid_manifest_url("https://user@kas.example.com", &[KAS]);
         assert_invalid_manifest_url("https://user:pass@kas.example.com/kas", &[KAS]);
     }
 
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn backslash_and_control_characters_do_not_confuse_the_host() {
         // A backslash is a path separator in http(s) URLs, so the host is
         // kas.example.com and the rest is path.
@@ -351,7 +364,8 @@ mod tests {
         assert_untrusted("https://kas.example.com\n.evil.com", &[KAS]);
     }
 
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn dot_segments_cannot_escape_the_origin() {
         assert_eq!(
             resolve("https://kas.example.com/a/../../kas", &[KAS]).unwrap(),
@@ -359,7 +373,8 @@ mod tests {
         );
     }
 
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn host_comparison_is_case_insensitive() {
         assert_eq!(
             resolve("HTTPS://KAS.Example.COM/kas", &[KAS]).unwrap(),
@@ -368,7 +383,8 @@ mod tests {
         assert!(resolve("https://kas.example.com/kas", &["https://KAS.EXAMPLE.COM"]).is_ok());
     }
 
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn non_loopback_http_is_rejected() {
         assert_invalid_manifest_url("http://kas.example.com", &[KAS]);
         assert_invalid_manifest_url("http://192.168.1.10:8080", &[KAS]);
@@ -376,7 +392,8 @@ mod tests {
         assert_invalid_manifest_url("http://localhost.", &["http://localhost"]);
     }
 
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn non_loopback_http_cannot_be_allowlisted() {
         let result = resolve("http://kas.example.com", &["http://kas.example.com"]);
         assert!(
@@ -385,7 +402,8 @@ mod tests {
         );
     }
 
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn loopback_http_is_allowed_when_allowlisted() {
         for kas_url in [
             "http://localhost:8080/kas",
@@ -400,19 +418,22 @@ mod tests {
         }
     }
 
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn loopback_hosts_are_distinct_origins() {
         assert_untrusted("http://127.0.0.1:8080", &["http://localhost:8080"]);
         assert_untrusted("http://[::1]:8080", &["http://127.0.0.1:8080"]);
     }
 
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn loopback_is_not_trusted_unless_allowlisted() {
         assert_untrusted("http://localhost:8080/kas", &[KAS]);
         assert_untrusted("http://127.0.0.1:8080/kas", &[KAS]);
     }
 
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn alternate_ipv4_spellings_are_normalized() {
         // All of these are 127.0.0.1 once parsed.
         for kas_url in [
@@ -427,7 +448,8 @@ mod tests {
         }
     }
 
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn unsupported_schemes_are_rejected() {
         for kas_url in [
             "ftp://kas.example.com",
@@ -441,7 +463,8 @@ mod tests {
         }
     }
 
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn unparseable_manifest_urls_are_rejected() {
         for kas_url in [
             "",
@@ -454,14 +477,16 @@ mod tests {
         }
     }
 
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn query_and_fragment_are_rejected() {
         assert_invalid_manifest_url("https://kas.example.com/kas?next=", &[KAS]);
         assert_invalid_manifest_url("https://kas.example.com/kas#", &[KAS]);
         assert_invalid_manifest_url("https://kas.example.com?", &[KAS]);
     }
 
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn empty_allowlist_rejects_everything() {
         assert_eq!(
             resolve("https://kas.example.com", &[]),
@@ -473,7 +498,8 @@ mod tests {
         );
     }
 
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn invalid_allowlist_entries_are_errors() {
         for entry in [
             "",
@@ -491,7 +517,8 @@ mod tests {
         }
     }
 
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn empty_key_access_is_an_error() {
         let mut manifest = manifest_for(KAS);
         manifest.encryption_information.key_access.clear();
@@ -501,7 +528,8 @@ mod tests {
         );
     }
 
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn only_the_first_key_access_entry_selects_the_kas() {
         use opentdf::manifest::KeyAccess;
 
@@ -516,7 +544,8 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
     fn untrusted_error_names_the_parsed_origin() {
         assert_eq!(
             resolve("https://kas.example.com.evil.com/kas", &[KAS]),

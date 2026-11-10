@@ -480,11 +480,17 @@ mod tests {
 
     /// Build a base64 TDF whose manifest names `kas_url` as its KAS
     fn tdf_naming_kas(kas_url: &str) -> String {
+        tdf_with_manifest(&TdfManifest::new(
+            "0.payload".to_string(),
+            kas_url.to_string(),
+        ))
+    }
+
+    fn tdf_with_manifest(manifest: &TdfManifest) -> String {
         use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
-        let manifest = TdfManifest::new("0.payload".to_string(), kas_url.to_string());
         let mut builder = TdfArchiveMemoryBuilder::new();
-        builder.add_entry(&manifest, b"ciphertext", 0).unwrap();
+        builder.add_entry(manifest, b"ciphertext", 0).unwrap();
         BASE64.encode(builder.finish().unwrap())
     }
 
@@ -494,6 +500,28 @@ mod tests {
         kas_trust::trusted_rewrap_endpoint(&manifest, allowed)
             .unwrap_err()
             .to_string()
+    }
+
+    #[wasm_bindgen_test]
+    async fn test_decrypt_rejects_empty_key_access() {
+        let mut manifest = TdfManifest::new(
+            "0.payload".to_string(),
+            "https://kas.example.com".to_string(),
+        );
+        manifest.encryption_information.key_access.clear();
+
+        let result = tdf_decrypt_with_kas(
+            tdf_with_manifest(&manifest),
+            "token".to_string(),
+            vec!["https://kas.example.com".to_string()],
+        )
+        .await;
+
+        assert!(!result.success());
+        assert_eq!(
+            result.error(),
+            Some(kas_trust::KasTrustError::NoKeyAccess.to_string())
+        );
     }
 
     // The three tests below run where no KAS is reachable. They pass only if
