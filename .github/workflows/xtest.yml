@@ -214,9 +214,12 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.14"
+      # Latest stable Go: the Go peer's go.work sets its own minimum (1.25.5 at
+      # the pinned otdfctl ref), and setup-go v6+ exports GOTOOLCHAIN=local, so
+      # an older Go no longer downloads the toolchain the peer asks for.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.24.x"
+          go-version: stable
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
