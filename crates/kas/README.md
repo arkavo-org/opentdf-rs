@@ -4,7 +4,7 @@ Server-side cryptographic operations for OpenTDF Key Access Service (KAS) implem
 
 ## Overview
 
-This crate provides the cryptographic primitives needed to implement a KAS server that can handle both NanoTDF (EC-based) and Standard TDF (RSA-based) key unwrap and rewrap operations.
+This crate provides the cryptographic primitives needed to implement a KAS server that can handle both NanoTDF (EC-based) and ZIP-based TDF (RSA-based) key unwrap and rewrap operations.
 
 ## Features
 
@@ -13,7 +13,7 @@ This crate provides the cryptographic primitives needed to implement a KAS serve
   - NanoTDF version detection and salt computation
   - HKDF + AES-GCM key rewrapping
 
-- **`rsa`**: RSA-2048 support for Standard TDF
+- **`rsa`**: RSA-2048 support for TDF (ZIP-based)
   - RSA-OAEP decryption (SHA-1 for OpenTDF compatibility)
   - AES-GCM key rewrapping
 
