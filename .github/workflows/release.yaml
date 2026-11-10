@@ -11,12 +11,66 @@ on:
       - 'Cargo.lock'
       - '.github/workflows/release.yaml'
 
+# Jobs get a read-only token unless they ask for more below.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Release gates. `build` (tag, npm publish, GitHub release) and, through it,
+  # the crates.io dispatch only run when both `verify-*` jobs are green. They
+  # run on every push that triggers this workflow, not only on version bumps.
+
+  # Same steps as the `test` job in feature.yaml; keep them identical.
+  verify-tests:
+    name: verify-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: setup-rust
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+
+      - name: run-tests
+        run: cargo test --verbose
+
+      - name: run-tests-all-features
+        run: cargo test --all-features --verbose
+
+  # Same check as the `advisories` leg of the cargo-deny job in feature.yaml.
+  # Dependencies are resolved fresh here, so an advisory published after the
+  # last PR still blocks the release.
+  verify-advisories:
+    name: verify-advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: audit-advisories
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check advisories
+          arguments: --all-features
+
   build:
     name: build
+    needs: [verify-tests, verify-advisories]
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -27,48 +81,61 @@ jobs:
 
     steps:
       - name: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
       - name: setup-rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: stable
           targets: wasm32-unknown-unknown
 
+      # Cargo.lock is not committed today, so resolve it here: the cache keys
+      # below then follow the dependency versions actually built. A committed
+      # Cargo.lock is used as is.
+      - name: resolve-lockfile
+        run: test -f Cargo.lock || cargo generate-lockfile
+
       - name: cache-registry
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-registry-
 
       - name: cache-git
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-git-
 
       - name: cache-target
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: target
-          key: ${{ runner.os }}-target-wasm-release-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-target-wasm-release-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-target-wasm-release-
 
       - name: setup-node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
           registry-url: 'https://npm.pkg.github.com'
           scope: '@arkavo-org'
 
+      # Pinned release binary, checked against the SHA-256 recorded in the
+      # action's manifest at this commit. Keep the version in step with
+      # feature.yaml.
       - name: install-wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: wasm-pack@0.13.1
+          fallback: none
 
       - name: build-wasm
         working-directory: crates/wasm
@@ -135,7 +202,7 @@ jobs:
 
       - name: create-release
         if: steps.check_tag.outputs.exists == 'false'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           tag_name: ${{ steps.version.outputs.version }}
           name: OpenTDF WASM ${{ steps.version.outputs.version }}
@@ -172,7 +239,7 @@ jobs:
 
       - name: upload-artifacts
         if: steps.check_tag.outputs.exists == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: opentdf-wasm-latest
           path: |
