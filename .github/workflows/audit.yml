@@ -1,0 +1,35 @@
+# Daily RustSec advisory scan of the default branch.
+#
+# Pull requests and releases already run this check, but an advisory can be
+# published against a dependency while no PR is open. A red run here is the
+# signal to bump the dependency (or, with a written reason, add a targeted
+# ignore to deny.toml).
+name: Audit
+
+on:
+  schedule:
+    # 06:17 UTC daily; scheduled runs always use the default branch.
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  advisories:
+    name: advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # Same check as the `advisories` leg of the cargo-deny job in
+      # feature.yaml: all features, ignores taken from deny.toml.
+      - name: audit-advisories
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check advisories
+          arguments: --all-features
