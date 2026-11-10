@@ -7,6 +7,7 @@
 #![allow(deprecated)]
 
 use crate::helpers::{generate_key_32, generate_nonce};
+use crate::hmac::{HmacError, verify_segment_hash};
 use crate::types::{PayloadKey, PolicyKey};
 use aes_gcm::{
     Aes256Gcm, Nonce, Tag,
@@ -37,6 +38,12 @@ pub enum EncryptionError {
 
     #[error("Segment error: {0}")]
     SegmentError(String),
+
+    /// A segment decrypted under the payload key, but its GCM tag is not the
+    /// one the manifest lists for it: the segment was swapped, reordered or
+    /// replaced, or the manifest's segment hash was edited.
+    #[error("Segment integrity check failed: GMAC tag does not match the expected segment hash")]
+    SegmentHashMismatch,
 }
 
 /// One encrypted OpenTDF segment: `IV[12] || ciphertext || tag[16]`.
@@ -315,6 +322,55 @@ impl TdfEncryption {
         let mut tag_bytes = [0u8; GCM_TAG_SIZE];
         tag_bytes.copy_from_slice(&member[member.len() - GCM_TAG_SIZE..]);
         Ok(tag_bytes)
+    }
+
+    /// Decrypt one segment member into `dest` in place and check it against
+    /// the manifest's hash for that segment.
+    ///
+    /// This is [`decrypt_segment_into`](Self::decrypt_segment_into) followed
+    /// by the comparison its caller must otherwise remember to make:
+    /// `expected_hash_b64` is the manifest's
+    /// `integrityInformation.segments[i].hash`, `base64(raw 16-byte GMAC
+    /// tag)`, and it is compared with the member's verified tag in constant
+    /// time. The GCM tag alone proves the member was written under this
+    /// payload key; the manifest hash is what proves it is the member that
+    /// belongs at this position, so a reader that skips the comparison
+    /// accepts segments swapped within, or spliced between, archives sharing
+    /// a key.
+    ///
+    /// `dest.len()` must equal `member.len() - 28`, as for
+    /// `decrypt_segment_into`.
+    ///
+    /// # Errors
+    ///
+    /// - [`EncryptionError::AeadError`] if the GCM tag does not verify.
+    /// - [`EncryptionError::Base64Error`] if `expected_hash_b64` is not
+    ///   valid base64.
+    /// - [`EncryptionError::SegmentHashMismatch`] if the tag differs from the
+    ///   expected hash, including an expected hash that is not 16 bytes.
+    /// - [`EncryptionError::SegmentError`] for a member or destination of the
+    ///   wrong length.
+    ///
+    /// In the first three cases `dest` is zeroized before the error is
+    /// returned, so plaintext that failed either check never reaches the
+    /// caller.
+    pub fn decrypt_segment_into_verified(
+        &self,
+        member: &[u8],
+        dest: &mut [u8],
+        expected_hash_b64: &str,
+    ) -> Result<(), EncryptionError> {
+        let tag = self.decrypt_segment_into(member, dest)?;
+
+        verify_segment_hash(expected_hash_b64, &tag).map_err(|e| {
+            dest.zeroize();
+            match e {
+                HmacError::Base64Error(source) => EncryptionError::Base64Error(source),
+                HmacError::InitFailed | HmacError::VerificationFailed => {
+                    EncryptionError::SegmentHashMismatch
+                }
+            }
+        })
     }
 
     /// Encrypt data using segment-based encryption for OpenTDF compatibility
@@ -674,6 +730,132 @@ mod single_segment_tests {
             dest.iter().all(|b| *b == 0),
             "dest must be zeroized after a failed decrypt, not left holding partial/garbage plaintext"
         );
+    }
+
+    #[test]
+    fn decrypt_segment_into_verified_accepts_the_manifest_hash() {
+        let enc = TdfEncryption::new().unwrap();
+        let plaintext = vec![0x5Au8; 300];
+        let seg = enc.encrypt_segment(&plaintext).unwrap();
+
+        // The hash a writer puts in the manifest: base64 of the raw tag,
+        // which is also what `encrypt_with_segments` records.
+        let manifest_hash = BASE64.encode(seg.tag);
+        let streamed = enc
+            .encrypt_with_segments(&plaintext, plaintext.len())
+            .unwrap();
+
+        let mut dest = vec![0u8; plaintext.len()];
+        enc.decrypt_segment_into_verified(&seg.bytes, &mut dest, &manifest_hash)
+            .unwrap();
+        assert_eq!(dest, plaintext);
+
+        let mut dest = vec![0u8; plaintext.len()];
+        enc.decrypt_segment_into_verified(
+            &streamed.segments[0],
+            &mut dest,
+            &streamed.segment_info[0].hash,
+        )
+        .unwrap();
+        assert_eq!(dest, plaintext);
+    }
+
+    /// Two segments under one payload key both pass GCM. Only the manifest
+    /// hash tells them apart, so a swapped member must be refused and its
+    /// plaintext must not be left in `dest`.
+    #[test]
+    fn decrypt_segment_into_verified_rejects_a_swapped_segment() {
+        let enc = TdfEncryption::new().unwrap();
+        let first = enc.encrypt_segment(&[0x11u8; 64]).unwrap();
+        let second = enc.encrypt_segment(&[0x22u8; 64]).unwrap();
+        let first_hash = BASE64.encode(first.tag);
+
+        let mut dest = vec![0xAAu8; 64];
+        let err = enc
+            .decrypt_segment_into_verified(&second.bytes, &mut dest, &first_hash)
+            .unwrap_err();
+        assert!(
+            matches!(err, EncryptionError::SegmentHashMismatch),
+            "{err:?}"
+        );
+        assert!(
+            dest.iter().all(|b| *b == 0),
+            "dest must be zeroized when the segment is not the one the manifest names"
+        );
+
+        // A single flipped bit anywhere in the expected tag is a mismatch.
+        for position in [0, 7, 15] {
+            let mut wrong = first.tag;
+            wrong[position] ^= 0x01;
+            let mut dest = vec![0u8; 64];
+            let err = enc
+                .decrypt_segment_into_verified(&first.bytes, &mut dest, &BASE64.encode(wrong))
+                .unwrap_err();
+            assert!(
+                matches!(err, EncryptionError::SegmentHashMismatch),
+                "position {position}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn decrypt_segment_into_verified_rejects_malformed_expected_hashes() {
+        let enc = TdfEncryption::new().unwrap();
+        let plaintext = [0x33u8; 48];
+        let seg = enc.encrypt_segment(&plaintext).unwrap();
+
+        // Not base64 at all.
+        let mut dest = vec![0xAAu8; plaintext.len()];
+        let err = enc
+            .decrypt_segment_into_verified(&seg.bytes, &mut dest, "not base64!")
+            .unwrap_err();
+        assert!(matches!(err, EncryptionError::Base64Error(_)), "{err:?}");
+        assert!(dest.iter().all(|b| *b == 0), "dest must be zeroized");
+
+        // Valid base64 of the wrong length: a truncated tag, an over-long
+        // one that starts with the real tag, and the empty string.
+        let mut long = seg.tag.to_vec();
+        long.push(0);
+        for wrong_length in [
+            BASE64.encode(&seg.tag[..15]),
+            BASE64.encode(&long),
+            String::new(),
+        ] {
+            let mut dest = vec![0xAAu8; plaintext.len()];
+            let err = enc
+                .decrypt_segment_into_verified(&seg.bytes, &mut dest, &wrong_length)
+                .unwrap_err();
+            assert!(
+                matches!(err, EncryptionError::SegmentHashMismatch),
+                "{wrong_length:?}: {err:?}"
+            );
+            assert!(dest.iter().all(|b| *b == 0), "dest must be zeroized");
+        }
+    }
+
+    /// The GCM check still comes first: a tampered member fails as an AEAD
+    /// error even when the expected hash is the tampered member's own tag.
+    #[test]
+    fn decrypt_segment_into_verified_keeps_the_gcm_check() {
+        let enc = TdfEncryption::new().unwrap();
+        let seg = enc.encrypt_segment(&[0x44u8; 32]).unwrap();
+        let hash = BASE64.encode(seg.tag);
+
+        let mut tampered = seg.bytes.clone();
+        tampered[12] ^= 0x01;
+        let mut dest = vec![0xAAu8; 32];
+        let err = enc
+            .decrypt_segment_into_verified(&tampered, &mut dest, &hash)
+            .unwrap_err();
+        assert!(matches!(err, EncryptionError::AeadError(_)), "{err:?}");
+        assert!(dest.iter().all(|b| *b == 0));
+
+        // Length errors are reported as for `decrypt_segment_into`.
+        let mut wrong = vec![0u8; 31];
+        let err = enc
+            .decrypt_segment_into_verified(&seg.bytes, &mut wrong, &hash)
+            .unwrap_err();
+        assert!(matches!(err, EncryptionError::SegmentError(_)), "{err:?}");
     }
 
     #[test]

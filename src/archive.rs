@@ -357,8 +357,9 @@ pub enum TdfError {
 
     /// An archive member is larger than the reader's limit for it. `limit`
     /// is the cap, in bytes, that the member exceeded; see
-    /// [`TdfArchive::with_max_manifest_size`] and
-    /// [`TdfArchive::with_max_payload_size`].
+    /// [`TdfArchive::with_max_manifest_size`],
+    /// [`TdfArchive::with_max_payload_size`] and
+    /// [`TdfMemberIndex::with_max_member_size`].
     #[error("TDF archive member '{member}' exceeds the {limit}-byte size limit")]
     MemberTooLarge { member: String, limit: u64 },
 
@@ -1572,9 +1573,28 @@ impl TdfMultiEntryBuilder {
 ///
 /// Random access is then a hash lookup plus a `seek`, with no scan of the
 /// preceding members.
-#[derive(Debug, Clone, Default)]
+///
+/// [`read_member`](Self::read_member), [`read_into`](Self::read_into) and
+/// [`read_manifest`](Self::read_manifest) read a member's bytes through the
+/// index under a size limit; see
+/// [`with_max_member_size`](Self::with_max_member_size) and
+/// [`with_max_manifest_size`](Self::with_max_manifest_size).
+#[derive(Debug, Clone)]
 pub struct TdfMemberIndex {
     entries: std::collections::HashMap<String, TdfMemberLocation>,
+    max_member_size: u64,
+    max_manifest_size: u64,
+}
+
+impl Default for TdfMemberIndex {
+    /// An index with no members and the default read limits.
+    fn default() -> Self {
+        Self {
+            entries: std::collections::HashMap::new(),
+            max_member_size: DEFAULT_MAX_PAYLOAD_SIZE,
+            max_manifest_size: DEFAULT_MAX_MANIFEST_SIZE,
+        }
+    }
 }
 
 impl TdfMemberIndex {
@@ -1622,7 +1642,146 @@ impl TdfMemberIndex {
             }
             entries.insert(name, TdfMemberLocation { data_start, size });
         }
-        Ok(Self { entries })
+        Ok(Self {
+            entries,
+            ..Self::default()
+        })
+    }
+
+    /// Sets the largest member, in bytes, that [`read_member`](Self::read_member)
+    /// and [`read_into`](Self::read_into) will load.
+    ///
+    /// A larger member fails with [`TdfError::MemberTooLarge`] before
+    /// anything is allocated or read; one of exactly `limit` bytes is read.
+    /// Defaults to [`DEFAULT_MAX_PAYLOAD_SIZE`]. A reader of fixed-size
+    /// segments should set this to its encrypted segment size.
+    #[must_use]
+    pub fn with_max_member_size(mut self, limit: u64) -> Self {
+        self.max_member_size = limit;
+        self
+    }
+
+    /// Sets the largest manifest, in bytes, that
+    /// [`read_manifest`](Self::read_manifest) will load. Defaults to
+    /// [`DEFAULT_MAX_MANIFEST_SIZE`].
+    #[must_use]
+    pub fn with_max_manifest_size(mut self, limit: u64) -> Self {
+        self.max_manifest_size = limit;
+        self
+    }
+
+    /// The member size limit in bytes.
+    pub fn max_member_size(&self) -> u64 {
+        self.max_member_size
+    }
+
+    /// The manifest size limit in bytes.
+    pub fn max_manifest_size(&self) -> u64 {
+        self.max_manifest_size
+    }
+
+    /// Reads the member `name` into a new buffer.
+    ///
+    /// `reader` is the archive this index was opened from; it is left
+    /// positioned just past the member. See [`read_into`](Self::read_into)
+    /// to reuse a buffer across reads.
+    ///
+    /// # Errors
+    ///
+    /// - [`TdfError::InvalidStructure`] if no member has this exact name.
+    /// - [`TdfError::MemberTooLarge`] if the member is larger than
+    ///   [`max_member_size`](Self::max_member_size).
+    /// - [`TdfError::IoError`] if the seek or read fails, including an
+    ///   archive shorter than the one the index was built from.
+    pub fn read_member<R: Read + Seek>(
+        &self,
+        reader: &mut R,
+        name: &str,
+    ) -> Result<Vec<u8>, TdfError> {
+        let mut buf = Vec::new();
+        self.read_into(reader, name, &mut buf)?;
+        Ok(buf)
+    }
+
+    /// Reads the member `name` into `buf`, replacing its contents and
+    /// reusing its allocation.
+    ///
+    /// On success `buf` holds exactly the member's bytes. On error `buf` is
+    /// left empty, so stale bytes from an earlier member are never mistaken
+    /// for this one. Errors are those of [`read_member`](Self::read_member).
+    pub fn read_into<R: Read + Seek>(
+        &self,
+        reader: &mut R,
+        name: &str,
+        buf: &mut Vec<u8>,
+    ) -> Result<(), TdfError> {
+        self.read_bounded_into(reader, name, self.max_member_size, buf)
+    }
+
+    /// Reads and parses the manifest member.
+    ///
+    /// Looks for [`TDF_MANIFEST_FILE_NAME`] (`manifest.json`) and falls back
+    /// to [`LEGACY_TDF_MANIFEST_FILE_NAME`] (`0.manifest.json`), the same
+    /// precedence [`TdfArchive`] uses. The member is read under
+    /// [`max_manifest_size`](Self::max_manifest_size), not the member limit.
+    ///
+    /// # Errors
+    ///
+    /// - [`TdfError::InvalidStructure`] if neither manifest member exists.
+    /// - [`TdfError::MemberTooLarge`] if the manifest is over its limit.
+    /// - [`TdfError::JsonError`] if it is not a valid manifest.
+    /// - [`TdfError::IoError`] if the seek or read fails.
+    pub fn read_manifest<R: Read + Seek>(&self, reader: &mut R) -> Result<TdfManifest, TdfError> {
+        let name = [TDF_MANIFEST_FILE_NAME, LEGACY_TDF_MANIFEST_FILE_NAME]
+            .into_iter()
+            .find(|name| self.contains(name))
+            .ok_or_else(|| TdfError::InvalidStructure {
+                reason: format!("Missing manifest file: {TDF_MANIFEST_FILE_NAME}"),
+                expected: Some(format!(
+                    "TDF archive should contain {TDF_MANIFEST_FILE_NAME} (or legacy {LEGACY_TDF_MANIFEST_FILE_NAME})"
+                )),
+            })?;
+        let mut bytes = Vec::new();
+        self.read_bounded_into(reader, name, self.max_manifest_size, &mut bytes)?;
+        Ok(serde_json::from_slice(&bytes)?)
+    }
+
+    /// Reads the member `name` into `buf` if it is at most `limit` bytes.
+    ///
+    /// The limit is checked against the indexed size before the buffer is
+    /// sized from it. That size was itself checked in [`open`](Self::open)
+    /// against the length of the archive the index was built from, so the
+    /// allocation is bounded by both, and `read_exact` then holds `reader`
+    /// to delivering every byte of it.
+    fn read_bounded_into<R: Read + Seek>(
+        &self,
+        reader: &mut R,
+        name: &str,
+        limit: u64,
+        buf: &mut Vec<u8>,
+    ) -> Result<(), TdfError> {
+        buf.clear();
+        let location = self.get(name).ok_or_else(|| TdfError::InvalidStructure {
+            reason: format!("Missing member: {name:?}"),
+            expected: Some("a member with this exact name in the archive".to_string()),
+        })?;
+        let too_large = || TdfError::MemberTooLarge {
+            member: name.to_string(),
+            limit,
+        };
+        if location.size > limit {
+            return Err(too_large());
+        }
+        // A size that does not fit `usize` cannot be buffered on this target.
+        let len = usize::try_from(location.size).map_err(|_| too_large())?;
+
+        reader.seek(io::SeekFrom::Start(location.data_start))?;
+        buf.resize(len, 0);
+        if let Err(e) = reader.read_exact(buf) {
+            buf.clear();
+            return Err(e.into());
+        }
+        Ok(())
     }
 
     /// Looks up a member by its exact UTF-8 name.
