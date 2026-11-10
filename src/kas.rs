@@ -774,8 +774,8 @@ impl KasClient {
 
         let wrapped_key = BASE64.decode(wrapped_key_b64)?;
 
-        // Session public key is required for EC rewrap (NanoTDF) but optional for
-        // Standard TDF RSA rewrap: KAS returns the DEK encrypted to the client's
+        // Session public key is required for EC rewrap (EC client key) but optional
+        // for Standard TDF RSA rewrap: KAS returns the DEK encrypted to the client's
         // RSA public key with no ECDH session material.
         let session_public_key = response.session_public_key.clone().unwrap_or_default();
 
@@ -791,10 +791,26 @@ impl KasClient {
     /// 2. Decrypt using client's RSA private key with OAEP padding (SHA-1)
     /// 3. Return the unwrapped payload key
     ///
-    /// ## For EC rewrap (NanoTDF):
+    /// ## For EC rewrap (Standard TDF with an EC client key):
     /// 1. ECDH: client_private × session_public → shared_secret
-    /// 2. HKDF: salt=SHA256("TDF"), shared_secret → symmetric_key
-    /// 3. AES-GCM decrypt: wrapped_key → payload_key
+    /// 2. HKDF-SHA256: salt=SHA256("TDF"), empty info, shared_secret → symmetric_key
+    /// 3. AES-256-GCM decrypt: wrapped_key (nonce ‖ ciphertext ‖ tag) → payload_key
+    ///
+    /// This is the session key the OpenTDF platform derives when a TDF3 rewrap
+    /// request carries an EC `clientPublicKey`. In `opentdf/platform`:
+    /// - KAS: `Provider.tdf3Rewrap` (`service/kas/access/rewrap.go`) wraps with
+    ///   `ocrypto.FromPublicPEMWithSalt(clientPublicKey, security.TDFSalt(), nil)`;
+    ///   `TDFSalt` (`service/internal/security/standard_crypto.go`) is
+    ///   SHA256("TDF"), and `ECEncryptor.Encrypt` (`lib/ocrypto/asym_encryption.go`)
+    ///   is the ECDH + HKDF + AES-GCM above.
+    /// - Go SDK: `KASClient.handleECKeyResponse` (`sdk/kas_client.go`) derives
+    ///   the same key with `ocrypto.CalculateHKDF(SHA256("TDF"), ecdhKey)`.
+    ///
+    /// It is **not** the NanoTDF derivation. NanoTDF rewrap salted the session
+    /// key with SHA256("L1L") (`nanoUnwrap` / `versionSalt` in the Go SDK, until
+    /// NanoTDF was removed in opentdf/platform#3013); `opentdf_kas::ec_unwrap`
+    /// implements that one. [`KasClient::rewrap_nanotdf`] does not call this
+    /// function.
     ///
     /// Uses aws-lc-rs for constant-time RSA operations (FIPS validated).
     fn unwrap_key(
@@ -842,7 +858,7 @@ impl KasClient {
                 Ok(plaintext_slice.to_vec())
             }
             EphemeralKeyPair::EC { private_key, .. } => {
-                // EC/ECDH unwrap for NanoTDF — sessionPublicKey is required.
+                // EC/ECDH unwrap (EC client key) — sessionPublicKey is required.
                 // (RSA/Standard TDF may pass empty string; EC must not.)
                 if session_public_key_pem.trim().is_empty() {
                     return Err(KasError::InvalidResponse {
@@ -863,7 +879,11 @@ impl KasClient {
                     session_public_key.as_affine(),
                 );
 
-                // Derive symmetric key using HKDF with salt = SHA256("TDF")
+                // Derive the session key: HKDF-SHA256, salt = SHA256("TDF"), empty info.
+                // Same salt as opentdf/platform `security.TDFSalt()` (KAS,
+                // `Provider.tdf3Rewrap`) and `KASClient.handleECKeyResponse` (Go SDK).
+                // The NanoTDF salts SHA256("L1L"/"L1M") belong to a different
+                // derivation; see the doc comment on this function.
                 let mut salt_hasher = Sha256::new();
                 salt_hasher.update(b"TDF");
                 let salt = salt_hasher.finalize();
