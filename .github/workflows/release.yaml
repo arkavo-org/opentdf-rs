@@ -15,8 +15,52 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Release gates. `build` (tag, npm publish, GitHub release) and, through it,
+  # the crates.io dispatch only run when both `verify-*` jobs are green. They
+  # run on every push that triggers this workflow, not only on version bumps.
+
+  # Same steps as the `test` job in feature.yaml; keep them identical.
+  verify-tests:
+    name: verify-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: setup-rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: run-tests
+        run: cargo test --verbose
+
+      - name: run-tests-all-features
+        run: cargo test --all-features --verbose
+
+  # Same check as the `advisories` leg of the cargo-deny job in feature.yaml.
+  # Dependencies are resolved fresh here, so an advisory published after the
+  # last PR still blocks the release.
+  verify-advisories:
+    name: verify-advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: audit-advisories
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories
+          arguments: --all-features
+
   build:
     name: build
+    needs: [verify-tests, verify-advisories]
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
