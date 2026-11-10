@@ -40,7 +40,7 @@ pub use crate::tdf::{TdfDecryptBuilder, TdfDecryptFileBuilder};
 pub use opentdf_protocol::{
     Assertion, AssertionBinding, AssertionStatement, EncryptionInformation, EncryptionMethod,
     GGUF_TDF_PROFILE_V1, GgufIndex, GgufSegment, GgufSegmentKind, GgufTensor, IntegrityInformation,
-    KeyAccess, Payload, PolicyBinding, RootSignature, Segment, TdfManifest,
+    KeyAccess, Payload, PolicyBinding, PolicyBindingError, RootSignature, Segment, TdfManifest,
 };
 
 // Re-export crypto types
