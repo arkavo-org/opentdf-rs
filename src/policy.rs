@@ -820,6 +820,131 @@ impl Policy {
 
         Ok(true)
     }
+
+    /// Returns true if the policy contains an attribute condition matching the
+    /// given FQN.
+    ///
+    /// Equivalent to `self.find_attribute(fqn).is_some()`; see
+    /// [`Policy::find_attribute`] for the matching rules and their limits.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use opentdf::prelude::*;
+    ///
+    /// let policy = PolicyBuilder::new()
+    ///     .id_auto()
+    ///     .dissem("user@example.com")
+    ///     .attribute_fqn("https://example.com/attr/storage/value/permanent")?
+    ///     .build()?;
+    ///
+    /// let required = AttributeFqn::parse("https://example.com/attr/storage/value/permanent")?;
+    /// assert!(policy.has_attribute(&required));
+    ///
+    /// let other = AttributeFqn::parse("https://example.com/attr/storage/value/temporary")?;
+    /// assert!(!policy.has_attribute(&other));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn has_attribute(&self, fqn: &crate::fqn::AttributeFqn) -> bool {
+        self.find_attribute(fqn).is_some()
+    }
+
+    /// Finds the first attribute condition matching the given FQN.
+    ///
+    /// Every condition in `body.attributes` is visited in document order,
+    /// including those nested inside `AND`, `OR` and `NOT`. A condition
+    /// matches when it agrees with each component the FQN carries:
+    ///
+    /// - **Namespace** (`https://<namespace>`): compared case-insensitively,
+    ///   as [`AttributeFqn`](crate::fqn::AttributeFqn) lowercases it. An FQN
+    ///   with only a namespace matches any condition in that namespace.
+    /// - **Name** (`/attr/<name>`): compared exactly. An FQN without a value
+    ///   matches any condition on that attribute, whatever its operator.
+    /// - **Value** (`/value/<value>`): matches only a condition that requires
+    ///   exactly that value, i.e. [`Operator::Equals`] with an
+    ///   [`AttributeValue::String`] equal to it. This is the condition
+    ///   [`PolicyBuilder::attribute_fqn`] builds from the same FQN. Conditions
+    ///   that merely mention the value (`NotEquals`, `In`, `AnyOf`,
+    ///   `MinimumOf`, ...) are not matched; look them up with the value-less
+    ///   FQN and inspect the returned condition.
+    ///
+    /// The lookup is structural: it reports that a condition is present, not
+    /// that the policy as a whole requires it. A condition inside an `OR` or
+    /// under a `NOT` is found like any other.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use opentdf::prelude::*;
+    ///
+    /// let policy = PolicyBuilder::new()
+    ///     .id_auto()
+    ///     .dissem("user@example.com")
+    ///     .attribute_fqn("https://example.com/attr/storage/value/permanent")?
+    ///     .build()?;
+    ///
+    /// // Look the attribute up by name, then inspect what the policy requires.
+    /// let storage = AttributeFqn::parse("https://example.com/attr/storage")?;
+    /// let condition = policy.find_attribute(&storage).expect("storage condition");
+    /// assert_eq!(condition.operator, Operator::Equals);
+    /// assert_eq!(
+    ///     condition.value,
+    ///     Some(AttributeValue::String("permanent".to_string()))
+    /// );
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn find_attribute(&self, fqn: &crate::fqn::AttributeFqn) -> Option<&AttributeCondition> {
+        // Explicit stack rather than recursion: policies come from untrusted
+        // manifests and may nest deeply. Children are pushed in reverse so
+        // they pop in document order.
+        let mut pending: Vec<&AttributePolicy> = self.body.attributes.iter().rev().collect();
+
+        while let Some(node) = pending.pop() {
+            match node {
+                AttributePolicy::Condition(condition) => {
+                    if condition_matches_fqn(condition, fqn) {
+                        return Some(condition);
+                    }
+                }
+                AttributePolicy::Logical(
+                    LogicalOperator::AND { conditions } | LogicalOperator::OR { conditions },
+                ) => pending.extend(conditions.iter().rev()),
+                AttributePolicy::Logical(LogicalOperator::NOT { condition }) => {
+                    pending.push(condition);
+                }
+            }
+        }
+
+        None
+    }
+}
+
+/// Whether `condition` agrees with every component `fqn` carries.
+///
+/// See [`Policy::find_attribute`] for the rules.
+fn condition_matches_fqn(condition: &AttributeCondition, fqn: &crate::fqn::AttributeFqn) -> bool {
+    // `AttributeFqn` stores its namespace lowercased; normalize the same way.
+    if condition.attribute.namespace.to_lowercase() != fqn.get_namespace() {
+        return false;
+    }
+
+    let wanted_value = fqn.get_value();
+
+    // Namespace-only FQN: any attribute in the namespace matches.
+    if fqn.get_name().is_empty() && wanted_value.is_none() {
+        return true;
+    }
+    if condition.attribute.name != fqn.get_name() {
+        return false;
+    }
+
+    match wanted_value {
+        None => true,
+        Some(wanted) => {
+            condition.operator == Operator::Equals
+                && matches!(&condition.value, Some(AttributeValue::String(value)) if value == wanted)
+        }
+    }
 }
 
 /// Builder for creating Policy instances with ergonomic defaults
@@ -1847,5 +1972,269 @@ fn test_policy_validate_multiple_errors() {
         assert!(errors.iter().any(|e| e.field == "time_window"));
     } else {
         panic!("Expected ValidationFailed error");
+    }
+}
+
+#[cfg(test)]
+mod attribute_lookup_tests {
+    use super::*;
+    use crate::fqn::AttributeFqn;
+
+    const NS: &str = "example.com";
+
+    fn string(value: &str) -> AttributeValue {
+        AttributeValue::String(value.to_string())
+    }
+
+    fn equals(name: &str, value: &str) -> AttributeCondition {
+        AttributeCondition::equals(AttributeIdentifier::new(NS, name), string(value))
+    }
+
+    fn policy(attributes: Vec<AttributePolicy>) -> Policy {
+        Policy::new(
+            "00000000-0000-0000-0000-000000000000".to_string(),
+            attributes,
+            vec![],
+        )
+    }
+
+    fn fqn(url: &str) -> AttributeFqn {
+        AttributeFqn::parse(url).unwrap()
+    }
+
+    #[test]
+    fn finds_condition_built_from_the_same_fqn() {
+        let url = "https://example.com/attr/storage/value/permanent";
+        let policy = PolicyBuilder::new()
+            .id_auto()
+            .dissem("user@example.com")
+            .attribute_fqn(url)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        assert!(policy.has_attribute(&fqn(url)));
+        assert_eq!(
+            policy.find_attribute(&fqn(url)),
+            Some(&equals("storage", "permanent"))
+        );
+
+        // Any differing component is a miss.
+        for miss in [
+            "https://example.com/attr/storage/value/temporary",
+            "https://example.com/attr/retention/value/permanent",
+            "https://other.example.com/attr/storage/value/permanent",
+            "https://example.com/attr/Storage/value/permanent",
+            "https://example.com/attr/storage/value/Permanent",
+        ] {
+            assert!(!policy.has_attribute(&fqn(miss)), "{miss}");
+            assert_eq!(policy.find_attribute(&fqn(miss)), None, "{miss}");
+        }
+    }
+
+    #[test]
+    fn empty_policy_has_no_attributes() {
+        let policy = policy(vec![]);
+        assert!(!policy.has_attribute(&fqn("https://example.com")));
+        assert_eq!(
+            policy.find_attribute(&fqn("https://example.com/attr/storage")),
+            None
+        );
+    }
+
+    #[test]
+    fn attribute_fqn_without_value_matches_any_operator() {
+        let id = AttributeIdentifier::new(NS, "storage");
+        let conditions = [
+            AttributeCondition::present(id.clone()),
+            AttributeCondition::new(id.clone(), Operator::NotPresent, None),
+            AttributeCondition::new(id.clone(), Operator::NotEquals, Some(string("permanent"))),
+            AttributeCondition::new(
+                id.clone(),
+                Operator::In,
+                Some(AttributeValue::StringArray(vec!["permanent".to_string()])),
+            ),
+            AttributeCondition::new(id, Operator::GreaterThan, Some(AttributeValue::Number(1.0))),
+        ];
+
+        for condition in conditions {
+            let policy = policy(vec![AttributePolicy::Condition(condition.clone())]);
+            assert_eq!(
+                policy.find_attribute(&fqn("https://example.com/attr/storage")),
+                Some(&condition),
+                "{condition:?}"
+            );
+            // A different attribute in the same namespace is not a match.
+            assert!(!policy.has_attribute(&fqn("https://example.com/attr/retention")));
+        }
+    }
+
+    #[test]
+    fn value_fqn_matches_only_string_equality() {
+        let id = AttributeIdentifier::new(NS, "storage");
+        let wanted = fqn("https://example.com/attr/storage/value/permanent");
+        let mentions_but_does_not_require = [
+            AttributeCondition::present(id.clone()),
+            AttributeCondition::new(id.clone(), Operator::NotEquals, Some(string("permanent"))),
+            AttributeCondition::new(id.clone(), Operator::MinimumOf, Some(string("permanent"))),
+            AttributeCondition::new(id.clone(), Operator::Contains, Some(string("permanent"))),
+            AttributeCondition::new(
+                id.clone(),
+                Operator::In,
+                Some(AttributeValue::StringArray(vec!["permanent".to_string()])),
+            ),
+            AttributeCondition::new(
+                id.clone(),
+                Operator::AnyOf,
+                Some(AttributeValue::StringArray(vec!["permanent".to_string()])),
+            ),
+            // Equals, but not a string value.
+            AttributeCondition::new(
+                id.clone(),
+                Operator::Equals,
+                Some(AttributeValue::StringArray(vec!["permanent".to_string()])),
+            ),
+            AttributeCondition::new(id.clone(), Operator::Equals, None),
+        ];
+
+        for condition in mentions_but_does_not_require {
+            let policy = policy(vec![AttributePolicy::Condition(condition.clone())]);
+            assert!(!policy.has_attribute(&wanted), "{condition:?}");
+        }
+
+        // Numbers and booleans are not compared with the FQN's string value.
+        let numeric = policy(vec![AttributePolicy::Condition(
+            AttributeCondition::equals(id, AttributeValue::Number(5.0)),
+        )]);
+        assert!(!numeric.has_attribute(&fqn("https://example.com/attr/storage/value/5")));
+    }
+
+    #[test]
+    fn namespace_fqn_matches_any_attribute_in_the_namespace() {
+        let policy = policy(vec![
+            AttributePolicy::Condition(equals("storage", "permanent")),
+            AttributePolicy::Condition(equals("retention", "7y")),
+        ]);
+
+        // First condition in the namespace, in document order.
+        assert_eq!(
+            policy.find_attribute(&fqn("https://example.com")),
+            Some(&equals("storage", "permanent"))
+        );
+        assert_eq!(
+            policy.find_attribute(&AttributeFqn::namespace(NS)),
+            Some(&equals("storage", "permanent"))
+        );
+        assert!(!policy.has_attribute(&fqn("https://other.example.com")));
+        // A namespace is matched whole, not as a prefix or substring.
+        assert!(!policy.has_attribute(&fqn("https://example.co")));
+        assert!(!policy.has_attribute(&fqn("https://sub.example.com")));
+        // Only a bare namespace is a wildcard; a value with no name is not.
+        assert!(!policy.has_attribute(&AttributeFqn::with_value(NS, "", "permanent")));
+    }
+
+    #[test]
+    fn namespace_is_compared_case_insensitively() {
+        // An identifier built by hand keeps its case; the FQN is lowercased.
+        let condition = AttributeCondition::equals(
+            AttributeIdentifier::new("Example.COM", "storage"),
+            string("permanent"),
+        );
+        let policy = policy(vec![AttributePolicy::Condition(condition.clone())]);
+
+        for url in [
+            "https://example.com",
+            "https://EXAMPLE.com/attr/storage",
+            "https://example.com/attr/storage/value/permanent",
+        ] {
+            assert_eq!(policy.find_attribute(&fqn(url)), Some(&condition), "{url}");
+        }
+    }
+
+    #[test]
+    fn finds_conditions_nested_in_logical_operators() {
+        let policy = policy(vec![
+            AttributePolicy::Condition(equals("top", "1")),
+            AttributePolicy::and(vec![
+                AttributePolicy::or(vec![
+                    AttributePolicy::Condition(equals("in-or", "2")),
+                    AttributePolicy::create_not(AttributePolicy::Condition(equals("in-not", "3"))),
+                ]),
+                AttributePolicy::Condition(equals("in-and", "4")),
+            ]),
+        ]);
+
+        for (name, value) in [
+            ("top", "1"),
+            ("in-or", "2"),
+            ("in-not", "3"),
+            ("in-and", "4"),
+        ] {
+            let url = format!("https://example.com/attr/{name}/value/{value}");
+            assert_eq!(
+                policy.find_attribute(&fqn(&url)),
+                Some(&equals(name, value)),
+                "{url}"
+            );
+        }
+        assert!(!policy.has_attribute(&fqn("https://example.com/attr/absent")));
+    }
+
+    #[test]
+    fn returns_the_first_match_in_document_order() {
+        let policy = policy(vec![
+            AttributePolicy::or(vec![
+                AttributePolicy::Condition(equals("other", "x")),
+                AttributePolicy::and(vec![AttributePolicy::Condition(equals(
+                    "storage", "nested",
+                ))]),
+                AttributePolicy::Condition(equals("storage", "sibling")),
+            ]),
+            AttributePolicy::Condition(equals("storage", "top-level")),
+        ]);
+
+        assert_eq!(
+            policy.find_attribute(&fqn("https://example.com/attr/storage")),
+            Some(&equals("storage", "nested"))
+        );
+        // A value FQN skips earlier conditions on the same attribute.
+        assert_eq!(
+            policy.find_attribute(&fqn("https://example.com/attr/storage/value/top-level")),
+            Some(&equals("storage", "top-level"))
+        );
+    }
+
+    #[test]
+    fn finds_attribute_in_policy_parsed_from_manifest_json() {
+        let json = r#"{
+            "uuid": "00000000-0000-0000-0000-000000000000",
+            "body": {
+                "dataAttributes": [{
+                    "type": "AND",
+                    "conditions": [{
+                        "attribute": {"namespace": "example.com", "name": "storage"},
+                        "operator": "equals",
+                        "value": "permanent"
+                    }]
+                }],
+                "dissem": null
+            }
+        }"#;
+        let policy = Policy::from_json(json).unwrap();
+
+        assert!(policy.has_attribute(&fqn("https://example.com/attr/storage/value/permanent")));
+        assert!(!policy.has_attribute(&fqn("https://example.com/attr/storage/value/other")));
+    }
+
+    #[test]
+    fn deeply_nested_policy_is_searched_without_recursion() {
+        let mut nested = AttributePolicy::Condition(equals("storage", "permanent"));
+        for _ in 0..2_000 {
+            nested = AttributePolicy::create_not(nested);
+        }
+        let policy = policy(vec![nested]);
+
+        assert!(policy.has_attribute(&fqn("https://example.com/attr/storage/value/permanent")));
+        assert!(!policy.has_attribute(&fqn("https://example.com/attr/absent")));
     }
 }
