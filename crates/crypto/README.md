@@ -36,7 +36,7 @@ let decrypted = TdfEncryption::decrypt_legacy(tdf.policy_key(), &encrypted)?;
 ## Feature Flags
 
 - `aws-lc-provider` - Use aws-lc-rs for RSA (FIPS validated, recommended)
-- `rustcrypto-provider` - Use RustCrypto RSA (has timing vulnerability)
+- `rustcrypto-provider` - Use RustCrypto RSA (pure Rust, `rsa` 0.10 with the RUSTSEC-2023-0071 fix; not FIPS validated)
 - `kem-rsa` - RSA key encapsulation
 - `kem-ec` - EC key encapsulation (P-256, P-384, P-521, secp256k1)
 - `nanotdf` - NanoTDF support (requires `kem-ec`)

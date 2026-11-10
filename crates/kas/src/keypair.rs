@@ -86,7 +86,7 @@ impl KasEcKeypair {
 /// RSA keypair for Standard TDF operations
 #[cfg(feature = "rsa")]
 pub struct KasRsaKeypair {
-    private_key: rsa::RsaPrivateKey,
+    private_key: rsa::PrivateKey,
     public_key_pem: String,
 }
 
@@ -95,7 +95,7 @@ impl KasRsaKeypair {
     /// Create from existing private key in PKCS#8 PEM format
     pub fn from_pkcs8_pem(pem_str: &str) -> Result<Self, KasServerError> {
         use rsa::pkcs8::DecodePrivateKey;
-        let private_key = rsa::RsaPrivateKey::from_pkcs8_pem(pem_str)
+        let private_key = rsa::PrivateKey::from_pkcs8_pem(pem_str)
             .map_err(|e| KasServerError::InvalidPrivateKey(e.to_string()))?;
         let public_key_pem = Self::encode_public_key_pem(&private_key)?;
 
@@ -107,8 +107,8 @@ impl KasRsaKeypair {
 
     /// Generate a new random 2048-bit RSA keypair
     pub fn generate() -> Result<Self, KasServerError> {
-        use rand::rngs::OsRng;
-        let private_key = rsa::RsaPrivateKey::new(&mut OsRng, 2048)
+        // Not `rsa::Generate`: that makes 3072-bit keys, and `rsa_unwrap` takes RSA-2048
+        let private_key = rsa::PrivateKey::new(&mut getrandom::SysRng, 2048)
             .map_err(|e| KasServerError::InvalidPrivateKey(e.to_string()))?;
         let public_key_pem = Self::encode_public_key_pem(&private_key)?;
 
@@ -119,7 +119,7 @@ impl KasRsaKeypair {
     }
 
     /// Get the private key
-    pub fn private_key(&self) -> &rsa::RsaPrivateKey {
+    pub fn private_key(&self) -> &rsa::PrivateKey {
         &self.private_key
     }
 
@@ -129,12 +129,11 @@ impl KasRsaKeypair {
     }
 
     /// Encode public key to PEM format
-    fn encode_public_key_pem(private_key: &rsa::RsaPrivateKey) -> Result<String, KasServerError> {
-        use rsa::RsaPublicKey;
+    fn encode_public_key_pem(private_key: &rsa::PrivateKey) -> Result<String, KasServerError> {
         use rsa::pkcs8::EncodePublicKey;
 
-        let public_key = RsaPublicKey::from(private_key);
-        public_key
+        private_key
+            .as_public_key()
             .to_public_key_pem(rsa::pkcs8::LineEnding::LF)
             .map_err(|e| KasServerError::InvalidPublicKey(e.to_string()))
     }

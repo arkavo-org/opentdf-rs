@@ -86,7 +86,7 @@ pub use sha1;
 #[cfg(feature = "kem-ec")]
 pub use sha2;
 
-// Re-export rsa crate only for rustcrypto-provider feature (has RUSTSEC-2023-0071)
+// Re-export rsa crate only for rustcrypto-provider feature (rsa 0.10, pure Rust)
 #[cfg(feature = "rustcrypto-provider")]
 pub use rsa;
 
