@@ -38,14 +38,24 @@ serde.workspace = true
 rand.workspace = true
 
 # RSA support (optional)
-rsa = { version = "0.9", features = ["sha2"], optional = true }
-sha1 = { workspace = true, optional = true }
+# rsa 0.10 is the first release with the fix for RUSTSEC-2023-0071 (Marvin attack)
+rsa = { version = "0.10", optional = true }
+# SHA-1 for RSA-OAEP. rsa 0.10 takes digest 0.11 hashes, so this is 0.11 rather than
+# the workspace 0.10; nothing else in this crate uses or re-exports sha1.
+sha1 = { version = "0.11", optional = true }
+# System RNG (rand_core 0.10) for RSA key generation; the workspace `rand` 0.8 RNGs
+# do not implement the traits rsa 0.10 takes
+getrandom = { version = "0.4", features = ["sys_rng"], optional = true }
 
 [features]
 default = ["ec"]
 ec = []
-rsa = ["dep:rsa", "dep:sha1"]
+rsa = ["dep:rsa", "dep:sha1", "dep:getrandom"]
 
 [dev-dependencies]
 tokio = { workspace = true }
 hex = "0.4"
+
+# The default client-side RSA backend, for the cross-backend test of `rsa_unwrap`
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+aws-lc-rs = "1.18"
