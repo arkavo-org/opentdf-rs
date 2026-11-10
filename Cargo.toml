@@ -15,8 +15,8 @@ readme = "README.md"
 
 [dependencies]
 # New modular crates
-opentdf-protocol = { path = "crates/protocol", version = "0.17.0" }
-opentdf-crypto = { path = "crates/crypto", version = "0.17.0", default-features = false }
+opentdf-protocol = { path = "crates/protocol", version = "0.18.0" }
+opentdf-crypto = { path = "crates/crypto", version = "0.18.0", default-features = false }
 
 # Core dependencies (using workspace versions)
 zip = { version = "9.0.4", default-features = false, features = ["deflate"] }
@@ -70,7 +70,7 @@ ciborium = "0.2"
 members = ["crates/protocol", "crates/crypto", "crates/kas", "crates/wasm"]
 
 [workspace.package]
-version = "0.17.0"
+version = "0.18.0"
 
 [workspace.dependencies]
 # Core serialization
@@ -119,7 +119,7 @@ default = ["kas-client"]
 kas-client = ["_kas-client-base", "dep:aws-lc-rs", "dep:pem", "opentdf-crypto/aws-lc-provider"]
 
 # KAS client with pure Rust backend (RustCrypto)
-# WARNING: Has RUSTSEC-2023-0071 timing vulnerability - only use if aws-lc-rs cannot be built
+# Uses rsa 0.10, which has the fix for RUSTSEC-2023-0071. Not FIPS validated - for builds where aws-lc-rs cannot be built
 kas-client-rustcrypto = ["_kas-client-base", "opentdf-crypto/rustcrypto-provider"]
 
 # Internal: shared KAS client dependencies (do not use directly)

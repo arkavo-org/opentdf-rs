@@ -33,21 +33,17 @@ Include what you can of:
 - Fixes are published as a new release together with a GitHub security
   advisory. Reporters are credited unless they ask not to be.
 
-## Known advisory in an opt-in feature
+## The pure-Rust RSA backend
 
 [RUSTSEC-2023-0071](https://rustsec.org/advisories/RUSTSEC-2023-0071) (the
-"Marvin attack", a timing side channel in the `rsa` crate before 0.10) applies
-only when the pure-Rust RSA backend is enabled:
+"Marvin attack", a timing side channel in the `rsa` crate before 0.10) affected
+the opt-in pure-Rust RSA backend in releases up to 0.17:
 
 - `opentdf`: features `kas-client-rustcrypto` and `rustcrypto-rsa`
 - `opentdf-crypto`: features `rustcrypto-provider` and `rustcrypto-rsa`
 - `opentdf-kas`: feature `rsa`
 
-None of these are enabled by default. Default builds use `aws-lc-rs` for RSA,
-and the browser WASM build uses WebCrypto; neither depends on the `rsa` crate.
-Avoid the features above where an attacker can measure the timing of RSA
-private-key operations.
-
-The advisory is ignored by id in [`deny.toml`](deny.toml) so that CI can audit
-every other optional dependency. The ignore is to be removed once the
-workspace moves to `rsa` 0.10.
+From 0.18.0 these features use `rsa` 0.10, the first release the advisory lists
+as patched. None of them are enabled by default: default builds use `aws-lc-rs`
+for RSA, which remains the recommended backend, and the browser WASM build uses
+WebCrypto.

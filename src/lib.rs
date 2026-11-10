@@ -75,7 +75,7 @@ pub mod prelude;
 pub use opentdf_protocol::{
     Assertion, AssertionBinding, AssertionStatement, EncryptionInformation, EncryptionMethod,
     GGUF_TDF_PROFILE_V1, GgufIndex, GgufSegment, GgufSegmentKind, GgufTensor, IntegrityInformation,
-    KeyAccess, Payload, PolicyBinding, RootSignature, Segment, TdfManifest,
+    KeyAccess, Payload, PolicyBinding, PolicyBindingError, RootSignature, Segment, TdfManifest,
 };
 
 // Re-export crypto types
@@ -102,7 +102,7 @@ pub use opentdf_crypto::{hkdf, p256, pkcs8, sha1, sha2};
 #[cfg(feature = "kas-client")]
 pub use ed25519_dalek;
 
-// Re-export rsa crate only for rustcrypto-rsa feature (legacy, has RUSTSEC-2023-0071)
+// Re-export rsa crate only for rustcrypto-rsa feature (rsa 0.10, pure Rust)
 #[cfg(feature = "rustcrypto-rsa")]
 pub use opentdf_crypto::rsa;
 
@@ -114,9 +114,9 @@ pub use tdf::{TdfDecryptBuilder, TdfDecryptFileBuilder};
 
 // Core types
 pub use archive::{
-    LEGACY_TDF_MANIFEST_FILE_NAME, TDF_MANIFEST_FILE_NAME, TDF_PAYLOAD_FILE_NAME, TdfArchive,
-    TdfArchiveBuilder, TdfArchiveMemoryBuilder, TdfError, TdfMemberIndex, TdfMemberLocation,
-    TdfMultiEntryBuilder,
+    DEFAULT_MAX_MANIFEST_SIZE, DEFAULT_MAX_PAYLOAD_SIZE, LEGACY_TDF_MANIFEST_FILE_NAME,
+    TDF_MANIFEST_FILE_NAME, TDF_PAYLOAD_FILE_NAME, TdfArchive, TdfArchiveBuilder,
+    TdfArchiveMemoryBuilder, TdfError, TdfMemberIndex, TdfMemberLocation, TdfMultiEntryBuilder,
 };
 
 // Unified error type for SDK consumers

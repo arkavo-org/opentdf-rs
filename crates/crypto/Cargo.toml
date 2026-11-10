@@ -35,7 +35,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 # Protocol types (for NanoTDF)
-opentdf-protocol = { path = "../protocol", version = "0.17.0" }
+opentdf-protocol = { path = "../protocol", version = "0.18.0" }
 
 # KAS feature dependencies (EC, HKDF)
 p256 = { workspace = true, optional = true }
@@ -53,10 +53,13 @@ aws-lc-rs = { version = "1.18", optional = true }
 # PEM parsing for aws-lc-rs (it only supports DER directly)
 pem = { version = "3.0", optional = true }
 
-# Legacy RustCrypto RSA (has RUSTSEC-2023-0071 timing vulnerability)
-# Only enable if you explicitly accept the timing attack risk
+# RustCrypto RSA (pure Rust). 0.10 is the first release with the fix for
+# RUSTSEC-2023-0071 (Marvin attack): constant-time arithmetic on crypto-bigint.
 # See: https://rustsec.org/advisories/RUSTSEC-2023-0071
-rsa = { version = "0.9", features = ["sha2"], optional = true }
+rsa = { version = "0.10", optional = true }
+# SHA-1 for RSA-OAEP on the rsa 0.10 path, which takes digest 0.11 hashes. The
+# workspace `sha1` above stays on 0.10 because `opentdf_crypto::sha1` re-exports it.
+sha1_011 = { package = "sha1", version = "0.11", optional = true }
 
 # Mbed TLS for full GCM tag size support (including 64-bit tags - NanoTDF default)
 # TODO: Complete Mbed TLS integration - currently under development
@@ -70,9 +73,9 @@ default = []
 aws-lc-provider = ["dep:aws-lc-rs", "dep:pem"]
 
 # RSA backend: RustCrypto (pure Rust, portable)
-# WARNING: Has RUSTSEC-2023-0071 timing vulnerability
-# Only use if aws-lc-rs build requirements cannot be met
-rustcrypto-provider = ["dep:rsa"]
+# Uses rsa 0.10, which has the fix for RUSTSEC-2023-0071. It is not FIPS validated;
+# aws-lc-provider stays the recommended backend where aws-lc-rs can be built.
+rustcrypto-provider = ["dep:rsa", "dep:sha1_011"]
 
 # KEM implementations
 kem-rsa = ["sha1", "pkcs8"]
@@ -90,3 +93,11 @@ kas = ["aws-lc-provider", "kem-rsa", "kem-ec"]
 rustcrypto-rsa = ["rustcrypto-provider"]
 
 [dev-dependencies]
+# System RNG (rand_core 0.10) for generating 2048-bit test keys on the rsa 0.10 path
+getrandom = { version = "0.4", features = ["sys_rng"] }
+
+# The other side of the cross-backend RSA-OAEP tests for `rustcrypto-provider`.
+# A dev-dependency does not turn on `aws-lc-provider`, so the rsa path stays the one under test.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+aws-lc-rs = "1.18"
+pem = "3.0"

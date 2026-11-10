@@ -12,8 +12,9 @@ use opentdf_protocol::kas::*;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{CryptoKey, Request, RequestInit, RequestMode, Response};
+use web_sys::{CryptoKey, Request, RequestInit, RequestMode, RequestRedirect, Response};
 
+use crate::kas_trust::TrustedRewrapEndpoint;
 use crate::webcrypto;
 
 /// KAS public key response structure
@@ -267,24 +268,15 @@ pub struct UnwrappedResponse {
 ///
 /// Sends the signed JWT rewrap request to KAS and handles the response.
 /// Requires a valid OAuth bearer token for authentication.
+///
+/// The endpoint must have passed the caller's KAS allowlist, because the
+/// bearer token is sent to it. Redirects are refused, so a 3xx from the KAS
+/// cannot forward the token-carrying request to another host.
 pub async fn post_rewrap_request(
-    kas_url: &str,
+    endpoint: &TrustedRewrapEndpoint,
     oauth_token: &str,
     signed_token: &str,
 ) -> Result<UnwrappedResponse, String> {
-    use wasm_bindgen::JsCast;
-    use wasm_bindgen_futures::JsFuture;
-    use web_sys::{Request, RequestInit, RequestMode, Response};
-
-    // Construct /v2/rewrap endpoint
-    let endpoint = if kas_url.ends_with("/kas") {
-        format!("{}/v2/rewrap", kas_url)
-    } else if kas_url.ends_with('/') {
-        format!("{}v2/rewrap", kas_url)
-    } else {
-        format!("{}/v2/rewrap", kas_url)
-    };
-
     // Build request body
     let request_body = serde_json::json!({
         "signedRequestToken": signed_token
@@ -296,9 +288,10 @@ pub async fn post_rewrap_request(
     let opts = RequestInit::new();
     opts.set_method("POST");
     opts.set_mode(RequestMode::Cors);
+    opts.set_redirect(RequestRedirect::Error);
     opts.set_body(&wasm_bindgen::JsValue::from_str(&body_str));
 
-    let request = Request::new_with_str_and_init(&endpoint, &opts)
+    let request = Request::new_with_str_and_init(endpoint.as_str(), &opts)
         .map_err(|e| format!("Failed to create request: {:?}", e))?;
 
     // Set headers

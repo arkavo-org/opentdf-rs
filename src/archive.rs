@@ -18,9 +18,70 @@ use crate::kas::KasClient;
 use crate::TdfEncryption;
 use crate::manifest::IntegrityInformationExt;
 
+/// Reader for a TDF ZIP archive.
+///
+/// Every member is read under a size limit, because a ZIP member may be
+/// deflated: a few hundred kilobytes of archive can inflate to gigabytes, and
+/// the size a member declares for itself is chosen by whoever wrote the
+/// archive. The limits are enforced on the bytes actually produced while
+/// reading, for Stored and compressed members alike. See
+/// [`DEFAULT_MAX_MANIFEST_SIZE`], [`DEFAULT_MAX_PAYLOAD_SIZE`],
+/// [`TdfArchive::with_max_manifest_size`] and
+/// [`TdfArchive::with_max_payload_size`].
 #[derive(Debug)]
 pub struct TdfArchive<R: Read + Seek> {
     zip_archive: ZipArchive<R>,
+    max_manifest_size: u64,
+    max_payload_size: u64,
+}
+
+/// Default cap on the size of a manifest member once read into memory: 16 MiB.
+///
+/// A manifest is JSON whose size grows with the policy and with the number of
+/// segments (roughly 85 bytes per segment), so 16 MiB describes on the order
+/// of 190,000 segments, several hundred gigabytes of payload at 2 MiB
+/// segments. A reader that expects larger manifests raises the cap with
+/// [`TdfArchive::with_max_manifest_size`].
+pub const DEFAULT_MAX_MANIFEST_SIZE: u64 = 16 * 1024 * 1024;
+
+/// Default cap on the size of a payload member once read into memory: 1 GiB.
+///
+/// [`TdfArchive::by_index`] and [`TdfArchive::get_entry`] buffer the whole
+/// payload, and decrypting it allocates the plaintext as well, so this is a
+/// bound on memory and not on what the TDF format can carry. Raise it with
+/// [`TdfArchive::with_max_payload_size`] to buffer a larger payload, lower it
+/// when reading archives from an untrusted source on a small host, or read
+/// large payloads member by member through [`TdfMemberIndex`] instead.
+pub const DEFAULT_MAX_PAYLOAD_SIZE: u64 = 1024 * 1024 * 1024;
+
+/// Reads one archive member into memory, failing once it yields more than
+/// `limit` bytes.
+///
+/// `declared_size` is only a fast path that rejects an honest oversized
+/// member before any byte is read. The bound that holds for a dishonest one
+/// is the `take`: at most `limit + 1` bytes are ever buffered, whatever the
+/// member's headers claim and however well it compresses.
+fn read_member_bounded<M: Read>(
+    member: M,
+    name: &str,
+    declared_size: u64,
+    limit: u64,
+) -> Result<Vec<u8>, TdfError> {
+    let too_large = || TdfError::MemberTooLarge {
+        member: name.to_string(),
+        limit,
+    };
+    if declared_size > limit {
+        return Err(too_large());
+    }
+    let mut bytes = Vec::new();
+    member
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
+        return Err(too_large());
+    }
+    Ok(bytes)
 }
 
 /// Spec (opentdf/spec schema/OpenTDF/README.md): the manifest entry MUST be
@@ -294,6 +355,14 @@ pub enum TdfError {
         expected: Option<String>,
     },
 
+    /// An archive member is larger than the reader's limit for it. `limit`
+    /// is the cap, in bytes, that the member exceeded; see
+    /// [`TdfArchive::with_max_manifest_size`],
+    /// [`TdfArchive::with_max_payload_size`] and
+    /// [`TdfMemberIndex::with_max_member_size`].
+    #[error("TDF archive member '{member}' exceeds the {limit}-byte size limit")]
+    MemberTooLarge { member: String, limit: u64 },
+
     #[error("Missing required field: {field}")]
     MissingRequiredField { field: &'static str },
 
@@ -392,6 +461,7 @@ impl TdfError {
             TdfError::IoError(_) => "OPENTDF_E_IO",
             TdfError::InvalidManifest { .. } => "OPENTDF_E_MANIFEST_INVALID",
             TdfError::InvalidStructure { .. } => "OPENTDF_E_STRUCTURE_INVALID",
+            TdfError::MemberTooLarge { .. } => "OPENTDF_E_ARCHIVE_MEMBER_TOO_LARGE",
             TdfError::MissingRequiredField { .. } => "OPENTDF_E_FIELD_REQUIRED",
             TdfError::InvalidKasUrl { .. } => "OPENTDF_E_KAS_URL_INVALID",
             TdfError::CryptoError { .. } => "OPENTDF_E_CRYPTO",
@@ -406,9 +476,7 @@ impl TdfError {
 impl TdfArchive<File> {
     /// Opens a TDF archive from a file path
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, TdfError> {
-        let file = File::open(path)?;
-        let zip_archive = ZipArchive::new(file)?;
-        Ok(Self { zip_archive })
+        Self::new(File::open(path)?)
     }
 
     /// Open a TDF archive and decrypt its contents using KAS
@@ -419,6 +487,12 @@ impl TdfArchive<File> {
     /// 3. Decrypts the payload using KAS
     ///
     /// Returns the decrypted plaintext directly.
+    ///
+    /// The archive is read under the default size limits
+    /// ([`DEFAULT_MAX_MANIFEST_SIZE`], [`DEFAULT_MAX_PAYLOAD_SIZE`]). To use
+    /// other limits, call [`TdfArchive::open`], set them with
+    /// [`TdfArchive::with_max_payload_size`], and decrypt the entry from
+    /// [`TdfArchive::by_index`] with its `decrypt_with_kas` method.
     ///
     /// # Example
     ///
@@ -446,9 +520,65 @@ impl TdfArchive<File> {
 
 impl<R: Read + Seek> TdfArchive<R> {
     /// Creates a new TDF archive from a reader that implements Read + Seek
+    ///
+    /// Members are read under [`DEFAULT_MAX_MANIFEST_SIZE`] and
+    /// [`DEFAULT_MAX_PAYLOAD_SIZE`] unless changed with
+    /// [`with_max_manifest_size`](Self::with_max_manifest_size) or
+    /// [`with_max_payload_size`](Self::with_max_payload_size).
     pub fn new(reader: R) -> Result<Self, TdfError> {
         let zip_archive = ZipArchive::new(reader)?;
-        Ok(Self { zip_archive })
+        Ok(Self {
+            zip_archive,
+            max_manifest_size: DEFAULT_MAX_MANIFEST_SIZE,
+            max_payload_size: DEFAULT_MAX_PAYLOAD_SIZE,
+        })
+    }
+
+    /// Sets the largest manifest member, in bytes, this reader will load.
+    ///
+    /// A manifest that yields more than `limit` bytes fails with
+    /// [`TdfError::MemberTooLarge`]. Defaults to
+    /// [`DEFAULT_MAX_MANIFEST_SIZE`].
+    #[must_use]
+    pub fn with_max_manifest_size(mut self, limit: u64) -> Self {
+        self.max_manifest_size = limit;
+        self
+    }
+
+    /// Sets the largest payload member, in bytes, this reader will load.
+    ///
+    /// A payload that yields more than `limit` bytes fails with
+    /// [`TdfError::MemberTooLarge`]; one of exactly `limit` bytes is read.
+    /// The limit counts the bytes held in memory after any ZIP decompression,
+    /// so it bounds what a small crafted archive can make the reader
+    /// allocate. Defaults to [`DEFAULT_MAX_PAYLOAD_SIZE`]; `u64::MAX` removes
+    /// the bound.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use opentdf::TdfArchive;
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// // Accept payloads up to 8 GiB from a trusted local file.
+    /// let mut archive = TdfArchive::open("large.tdf")?.with_max_payload_size(8 << 30);
+    /// let entry = archive.by_index()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_max_payload_size(mut self, limit: u64) -> Self {
+        self.max_payload_size = limit;
+        self
+    }
+
+    /// The manifest size limit in bytes.
+    pub fn max_manifest_size(&self) -> u64 {
+        self.max_manifest_size
+    }
+
+    /// The payload size limit in bytes.
+    pub fn max_payload_size(&self) -> u64 {
+        self.max_payload_size
     }
 
     /// Returns the number of TDF entries in the archive (one per manifest member).
@@ -486,7 +616,11 @@ impl<R: Read + Seek> TdfArchive<R> {
         self.zip_archive.index_for_name(name).is_some()
     }
 
-    /// Gets a specific TDF entry by index
+    /// Gets a specific TDF entry by index, reading its manifest and its whole
+    /// payload into memory.
+    ///
+    /// Fails with [`TdfError::MemberTooLarge`] if the manifest or the payload
+    /// member exceeds this reader's limit for it.
     pub fn get_entry(&mut self, index: usize) -> Result<TdfEntry<'_>, TdfError> {
         let (primary, legacy) = manifest_entry_name_for_index(index);
         let manifest_name = if self.has_member(&primary) {
@@ -503,18 +637,25 @@ impl<R: Read + Seek> TdfArchive<R> {
             });
         };
 
-        // Read manifest
-        let manifest = {
-            let mut manifest_file = self.zip_archive.by_name(&manifest_name)?;
-            let mut manifest_contents = String::new();
-            manifest_file.read_to_string(&mut manifest_contents)?;
-            TdfManifest::from_json(&manifest_contents)?
+        // Read manifest. The bytes are bounded first and decoded second, so
+        // an oversized member is reported as such and not as a UTF-8 or JSON
+        // error at wherever the cap happened to cut it.
+        let manifest: TdfManifest = {
+            let manifest_file = self.zip_archive.by_name(&manifest_name)?;
+            let declared_size = manifest_file.size();
+            let manifest_bytes = read_member_bounded(
+                manifest_file,
+                &manifest_name,
+                declared_size,
+                self.max_manifest_size,
+            )?;
+            serde_json::from_slice(&manifest_bytes)?
         };
 
         // Read payload, named by manifest.payload.url
         let payload_name = payload_entry_name_for(&manifest, index)?;
         let payload = {
-            let mut payload_file = self.zip_archive.by_name(&payload_name).map_err(|_| {
+            let payload_file = self.zip_archive.by_name(&payload_name).map_err(|_| {
                 TdfError::InvalidStructure {
                     reason: format!("Missing payload file: {payload_name:?}"),
                     expected: Some(
@@ -523,9 +664,13 @@ impl<R: Read + Seek> TdfArchive<R> {
                     ),
                 }
             })?;
-            let mut payload = Vec::new();
-            payload_file.read_to_end(&mut payload)?;
-            payload
+            let declared_size = payload_file.size();
+            read_member_bounded(
+                payload_file,
+                &payload_name,
+                declared_size,
+                self.max_payload_size,
+            )?
         };
 
         Ok(TdfEntry {
@@ -1131,6 +1276,230 @@ mod tests {
             "{msg}"
         );
     }
+
+    /// Hand-build a zip choosing each member's compression method.
+    fn zip_with_methods(members: &[(&str, &[u8], zip::CompressionMethod)]) -> Vec<u8> {
+        let mut w = ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, data, method) in members {
+            w.start_file::<_, ()>(*name, FileOptions::default().compression_method(*method))
+                .unwrap();
+            w.write_all(data).unwrap();
+        }
+        w.finish().unwrap().into_inner()
+    }
+
+    fn by_index_error(
+        bytes: Vec<u8>,
+        configure: impl FnOnce(TdfArchive<Cursor<Vec<u8>>>) -> TdfArchive<Cursor<Vec<u8>>>,
+    ) -> TdfError {
+        let mut archive = configure(TdfArchive::new(Cursor::new(bytes)).expect("open archive"));
+        archive
+            .by_index()
+            .expect_err("the entry must be refused, not read")
+    }
+
+    const DEFLATED: zip::CompressionMethod = zip::CompressionMethod::Deflated;
+    const STORED: zip::CompressionMethod = zip::CompressionMethod::Stored;
+
+    #[test]
+    fn new_reader_uses_the_documented_default_limits() -> Result<(), TdfError> {
+        let archive = TdfArchive::new(Cursor::new(create_test_archive()?))?;
+        assert_eq!(archive.max_manifest_size(), DEFAULT_MAX_MANIFEST_SIZE);
+        assert_eq!(archive.max_payload_size(), DEFAULT_MAX_PAYLOAD_SIZE);
+
+        let archive = archive
+            .with_max_manifest_size(1234)
+            .with_max_payload_size(5678);
+        assert_eq!(archive.max_manifest_size(), 1234);
+        assert_eq!(archive.max_payload_size(), 5678);
+        Ok(())
+    }
+
+    /// The amplification this guards against: a deflated manifest that is
+    /// valid JSON (a manifest followed by whitespace) and a few kilobytes on
+    /// the wire, but one byte past the default cap once inflated.
+    #[test]
+    fn deflated_manifest_over_the_default_limit_is_refused() -> Result<(), TdfError> {
+        let mut manifest = manifest_with_url("0.payload").to_json()?.into_bytes();
+        manifest.resize(DEFAULT_MAX_MANIFEST_SIZE as usize + 1, b' ');
+        let bytes = zip_with_methods(&[
+            ("manifest.json", &manifest, DEFLATED),
+            ("0.payload", b"x", STORED),
+        ]);
+        assert!(
+            (bytes.len() as u64) < DEFAULT_MAX_MANIFEST_SIZE / 100,
+            "the archive must be tiny next to what it inflates to: {} bytes",
+            bytes.len()
+        );
+
+        let err = by_index_error(bytes, |archive| archive);
+        assert!(
+            matches!(
+                &err,
+                TdfError::MemberTooLarge { member, limit }
+                    if member == "manifest.json" && *limit == DEFAULT_MAX_MANIFEST_SIZE
+            ),
+            "{err:?}"
+        );
+        assert_eq!(err.error_code(), "OPENTDF_E_ARCHIVE_MEMBER_TOO_LARGE");
+        assert!(!err.is_retryable());
+        Ok(())
+    }
+
+    #[test]
+    fn manifest_limit_is_inclusive() -> Result<(), TdfError> {
+        let manifest = manifest_with_url("0.payload").to_json()?;
+        let exact = manifest.len() as u64;
+        for method in [STORED, DEFLATED] {
+            let bytes = zip_with_methods(&[
+                ("manifest.json", manifest.as_bytes(), method),
+                ("0.payload", b"payload", STORED),
+            ]);
+
+            let mut at_limit =
+                TdfArchive::new(Cursor::new(bytes.clone()))?.with_max_manifest_size(exact);
+            assert_eq!(at_limit.by_index()?.payload, b"payload");
+
+            let err = by_index_error(bytes, |archive| archive.with_max_manifest_size(exact - 1));
+            assert!(
+                matches!(
+                    &err,
+                    TdfError::MemberTooLarge { member, limit }
+                        if member == "manifest.json" && *limit == exact - 1
+                ),
+                "{method:?}: {err:?}"
+            );
+        }
+        Ok(())
+    }
+
+    /// A deflated payload of zeros: about a kilobyte of archive per megabyte
+    /// held in memory. The custom limit is what refuses it, since it is far
+    /// below the default.
+    #[test]
+    fn deflated_payload_over_a_custom_limit_is_refused() -> Result<(), TdfError> {
+        const PAYLOAD: usize = 1024 * 1024;
+        let manifest = manifest_with_url("0.payload").to_json()?;
+        let payload = vec![0u8; PAYLOAD];
+        let bytes = zip_with_methods(&[
+            ("manifest.json", manifest.as_bytes(), STORED),
+            ("0.payload", &payload, DEFLATED),
+        ]);
+        assert!(bytes.len() < PAYLOAD / 100, "{} bytes", bytes.len());
+
+        let limit = PAYLOAD as u64 - 1;
+        let err = by_index_error(bytes.clone(), |archive| {
+            archive.with_max_payload_size(limit)
+        });
+        assert!(
+            matches!(
+                &err,
+                TdfError::MemberTooLarge { member, limit: reported }
+                    if member == "0.payload" && *reported == limit
+            ),
+            "{err:?}"
+        );
+
+        // Exactly at the limit is read in full, and so is the same archive
+        // under the default limit.
+        let mut at_limit =
+            TdfArchive::new(Cursor::new(bytes.clone()))?.with_max_payload_size(PAYLOAD as u64);
+        assert_eq!(at_limit.by_index()?.payload, payload);
+        let mut default_limit = TdfArchive::new(Cursor::new(bytes))?;
+        assert_eq!(default_limit.by_index()?.payload, payload);
+        Ok(())
+    }
+
+    /// The limit is on bytes in memory, so it applies to Stored members too,
+    /// and a Stored member within it reads exactly as before.
+    #[test]
+    fn stored_payload_honours_the_limit_and_still_reads() -> Result<(), TdfError> {
+        let manifest = manifest_with_url("0.payload").to_json()?;
+        let payload = b"stored payload bytes".to_vec();
+        let bytes = raw_zip(&[
+            ("manifest.json", manifest.as_bytes()),
+            ("0.payload", &payload),
+        ]);
+        let exact = payload.len() as u64;
+
+        let mut at_limit =
+            TdfArchive::new(Cursor::new(bytes.clone()))?.with_max_payload_size(exact);
+        assert_eq!(at_limit.by_index()?.payload, payload);
+
+        let err = by_index_error(bytes.clone(), |archive| {
+            archive.with_max_payload_size(exact - 1)
+        });
+        assert!(
+            matches!(&err, TdfError::MemberTooLarge { member, .. } if member == "0.payload"),
+            "{err:?}"
+        );
+
+        // `validate` reads every entry through the same bounded path.
+        let mut archive = TdfArchive::new(Cursor::new(bytes))?.with_max_payload_size(exact - 1);
+        assert!(matches!(
+            archive.validate(),
+            Err(TdfError::MemberTooLarge { .. })
+        ));
+        Ok(())
+    }
+
+    /// The declared size is only a fast path. A member that claims to be
+    /// empty and then yields more than the limit is still cut off, having
+    /// buffered at most `limit + 1` bytes.
+    #[test]
+    fn bounded_read_does_not_trust_the_declared_size() {
+        let endless = io::repeat(0xAB);
+        let err = read_member_bounded(endless, "liar", 0, 4096)
+            .expect_err("an endless member must be refused");
+        assert!(
+            matches!(&err, TdfError::MemberTooLarge { member, limit } if member == "liar" && *limit == 4096),
+            "{err:?}"
+        );
+
+        // A truthful oversized declaration is refused before any read.
+        struct MustNotRead;
+        impl Read for MustNotRead {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                panic!("an over-limit declared size must be refused without reading");
+            }
+        }
+        assert!(matches!(
+            read_member_bounded(MustNotRead, "big", 4097, 4096),
+            Err(TdfError::MemberTooLarge { .. })
+        ));
+
+        // No limit at all must not overflow the `limit + 1` read window.
+        let all = read_member_bounded(&b"abc"[..], "small", 3, u64::MAX).expect("unbounded read");
+        assert_eq!(all, b"abc");
+    }
+
+    /// Rewrites the first central-directory header's compressed and
+    /// uncompressed sizes, as an archive author can.
+    fn forge_central_directory_sizes(archive: &mut [u8], size: u32) {
+        const CENTRAL_HEADER_SIGNATURE: &[u8] = b"PK\x01\x02";
+        let header = archive
+            .windows(CENTRAL_HEADER_SIGNATURE.len())
+            .position(|window| window == CENTRAL_HEADER_SIGNATURE)
+            .expect("central directory header");
+        // APPNOTE 4.3.12: compressed size at +20, uncompressed size at +24.
+        archive[header + 20..header + 24].copy_from_slice(&size.to_le_bytes());
+        archive[header + 24..header + 28].copy_from_slice(&size.to_le_bytes());
+    }
+
+    /// A Stored member's size comes from the central directory. One that
+    /// claims more bytes than the archive holds must not reach a caller that
+    /// sizes a buffer from it.
+    #[test]
+    fn member_index_rejects_a_member_larger_than_the_archive() {
+        let mut bytes = raw_zip(&[("header", &[7u8; 64])]);
+        let index = TdfMemberIndex::open(Cursor::new(bytes.clone())).expect("honest archive");
+        assert_eq!(index.get("header").map(|loc| loc.size), Some(64));
+
+        forge_central_directory_sizes(&mut bytes, 0x7FFF_FFFF);
+        let err = TdfMemberIndex::open(Cursor::new(bytes))
+            .expect_err("a member range past the end of the archive must be refused");
+        assert!(matches!(err, TdfError::InvalidStructure { .. }), "{err:?}");
+    }
 }
 
 /// Byte range of a Stored zip member's data, for `read_at`-style access.
@@ -1204,15 +1573,41 @@ impl TdfMultiEntryBuilder {
 ///
 /// Random access is then a hash lookup plus a `seek`, with no scan of the
 /// preceding members.
-#[derive(Debug, Clone, Default)]
+///
+/// [`read_member`](Self::read_member), [`read_into`](Self::read_into) and
+/// [`read_manifest`](Self::read_manifest) read a member's bytes through the
+/// index under a size limit; see
+/// [`with_max_member_size`](Self::with_max_member_size) and
+/// [`with_max_manifest_size`](Self::with_max_manifest_size).
+#[derive(Debug, Clone)]
 pub struct TdfMemberIndex {
     entries: std::collections::HashMap<String, TdfMemberLocation>,
+    max_member_size: u64,
+    max_manifest_size: u64,
+}
+
+impl Default for TdfMemberIndex {
+    /// An index with no members and the default read limits.
+    fn default() -> Self {
+        Self {
+            entries: std::collections::HashMap::new(),
+            max_member_size: DEFAULT_MAX_PAYLOAD_SIZE,
+            max_manifest_size: DEFAULT_MAX_MANIFEST_SIZE,
+        }
+    }
 }
 
 impl TdfMemberIndex {
     /// Scans the central directory. Every member must be Stored, so a
     /// member's on-disk length equals its logical length.
-    pub fn open<R: Read + Seek>(reader: R) -> Result<Self, TdfError> {
+    ///
+    /// Every member's byte range must also lie inside the archive. The size
+    /// in a [`TdfMemberLocation`] comes from the central directory, which the
+    /// archive's author controls, and callers size their read buffers from
+    /// it; a range checked against the real archive length cannot make a
+    /// reader allocate more than the archive holds.
+    pub fn open<R: Read + Seek>(mut reader: R) -> Result<Self, TdfError> {
+        let archive_len = reader.seek(io::SeekFrom::End(0))?;
         let mut zip = ZipArchive::new(reader)?;
         let mut entries = std::collections::HashMap::with_capacity(zip.len());
         for i in 0..zip.len() {
@@ -1232,15 +1627,161 @@ impl TdfMemberIndex {
                     reason: format!("member '{name}' has no data offset"),
                     expected: Some("a readable local header".to_string()),
                 })?;
-            entries.insert(
-                name,
-                TdfMemberLocation {
-                    data_start,
-                    size: entry.size(),
-                },
-            );
+            let size = entry.size();
+            let in_archive = data_start
+                .checked_add(size)
+                .is_some_and(|data_end| data_end <= archive_len);
+            if !in_archive {
+                return Err(TdfError::InvalidStructure {
+                    reason: format!(
+                        "member '{name}' declares {size} bytes at offset {data_start}, \
+                         past the end of the {archive_len}-byte archive"
+                    ),
+                    expected: Some("a member whose data lies inside the archive".to_string()),
+                });
+            }
+            entries.insert(name, TdfMemberLocation { data_start, size });
         }
-        Ok(Self { entries })
+        Ok(Self {
+            entries,
+            ..Self::default()
+        })
+    }
+
+    /// Sets the largest member, in bytes, that [`read_member`](Self::read_member)
+    /// and [`read_into`](Self::read_into) will load.
+    ///
+    /// A larger member fails with [`TdfError::MemberTooLarge`] before
+    /// anything is allocated or read; one of exactly `limit` bytes is read.
+    /// Defaults to [`DEFAULT_MAX_PAYLOAD_SIZE`]. A reader of fixed-size
+    /// segments should set this to its encrypted segment size.
+    #[must_use]
+    pub fn with_max_member_size(mut self, limit: u64) -> Self {
+        self.max_member_size = limit;
+        self
+    }
+
+    /// Sets the largest manifest, in bytes, that
+    /// [`read_manifest`](Self::read_manifest) will load. Defaults to
+    /// [`DEFAULT_MAX_MANIFEST_SIZE`].
+    #[must_use]
+    pub fn with_max_manifest_size(mut self, limit: u64) -> Self {
+        self.max_manifest_size = limit;
+        self
+    }
+
+    /// The member size limit in bytes.
+    pub fn max_member_size(&self) -> u64 {
+        self.max_member_size
+    }
+
+    /// The manifest size limit in bytes.
+    pub fn max_manifest_size(&self) -> u64 {
+        self.max_manifest_size
+    }
+
+    /// Reads the member `name` into a new buffer.
+    ///
+    /// `reader` is the archive this index was opened from; it is left
+    /// positioned just past the member. See [`read_into`](Self::read_into)
+    /// to reuse a buffer across reads.
+    ///
+    /// # Errors
+    ///
+    /// - [`TdfError::InvalidStructure`] if no member has this exact name.
+    /// - [`TdfError::MemberTooLarge`] if the member is larger than
+    ///   [`max_member_size`](Self::max_member_size).
+    /// - [`TdfError::IoError`] if the seek or read fails, including an
+    ///   archive shorter than the one the index was built from.
+    pub fn read_member<R: Read + Seek>(
+        &self,
+        reader: &mut R,
+        name: &str,
+    ) -> Result<Vec<u8>, TdfError> {
+        let mut buf = Vec::new();
+        self.read_into(reader, name, &mut buf)?;
+        Ok(buf)
+    }
+
+    /// Reads the member `name` into `buf`, replacing its contents and
+    /// reusing its allocation.
+    ///
+    /// On success `buf` holds exactly the member's bytes. On error `buf` is
+    /// left empty, so stale bytes from an earlier member are never mistaken
+    /// for this one. Errors are those of [`read_member`](Self::read_member).
+    pub fn read_into<R: Read + Seek>(
+        &self,
+        reader: &mut R,
+        name: &str,
+        buf: &mut Vec<u8>,
+    ) -> Result<(), TdfError> {
+        self.read_bounded_into(reader, name, self.max_member_size, buf)
+    }
+
+    /// Reads and parses the manifest member.
+    ///
+    /// Looks for [`TDF_MANIFEST_FILE_NAME`] (`manifest.json`) and falls back
+    /// to [`LEGACY_TDF_MANIFEST_FILE_NAME`] (`0.manifest.json`), the same
+    /// precedence [`TdfArchive`] uses. The member is read under
+    /// [`max_manifest_size`](Self::max_manifest_size), not the member limit.
+    ///
+    /// # Errors
+    ///
+    /// - [`TdfError::InvalidStructure`] if neither manifest member exists.
+    /// - [`TdfError::MemberTooLarge`] if the manifest is over its limit.
+    /// - [`TdfError::JsonError`] if it is not a valid manifest.
+    /// - [`TdfError::IoError`] if the seek or read fails.
+    pub fn read_manifest<R: Read + Seek>(&self, reader: &mut R) -> Result<TdfManifest, TdfError> {
+        let name = [TDF_MANIFEST_FILE_NAME, LEGACY_TDF_MANIFEST_FILE_NAME]
+            .into_iter()
+            .find(|name| self.contains(name))
+            .ok_or_else(|| TdfError::InvalidStructure {
+                reason: format!("Missing manifest file: {TDF_MANIFEST_FILE_NAME}"),
+                expected: Some(format!(
+                    "TDF archive should contain {TDF_MANIFEST_FILE_NAME} (or legacy {LEGACY_TDF_MANIFEST_FILE_NAME})"
+                )),
+            })?;
+        let mut bytes = Vec::new();
+        self.read_bounded_into(reader, name, self.max_manifest_size, &mut bytes)?;
+        Ok(serde_json::from_slice(&bytes)?)
+    }
+
+    /// Reads the member `name` into `buf` if it is at most `limit` bytes.
+    ///
+    /// The limit is checked against the indexed size before the buffer is
+    /// sized from it. That size was itself checked in [`open`](Self::open)
+    /// against the length of the archive the index was built from, so the
+    /// allocation is bounded by both, and `read_exact` then holds `reader`
+    /// to delivering every byte of it.
+    fn read_bounded_into<R: Read + Seek>(
+        &self,
+        reader: &mut R,
+        name: &str,
+        limit: u64,
+        buf: &mut Vec<u8>,
+    ) -> Result<(), TdfError> {
+        buf.clear();
+        let location = self.get(name).ok_or_else(|| TdfError::InvalidStructure {
+            reason: format!("Missing member: {name:?}"),
+            expected: Some("a member with this exact name in the archive".to_string()),
+        })?;
+        let too_large = || TdfError::MemberTooLarge {
+            member: name.to_string(),
+            limit,
+        };
+        if location.size > limit {
+            return Err(too_large());
+        }
+        // A size that does not fit `usize` cannot be buffered on this target.
+        let len = usize::try_from(location.size).map_err(|_| too_large())?;
+
+        reader.seek(io::SeekFrom::Start(location.data_start))?;
+        buf.resize(len, 0);
+        if let Err(e) = reader.read_exact(buf) {
+            buf.clear();
+            return Err(e.into());
+        }
+        Ok(())
     }
 
     /// Looks up a member by its exact UTF-8 name.

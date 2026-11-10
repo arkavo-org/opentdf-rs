@@ -666,7 +666,7 @@ opentdf = "0.16"
 | Provider | Timing-Safe | FIPS | Portable | WASM |
 |----------|-------------|------|----------|------|
 | **aws-lc-rs** (default) | ✅ | ✅ | Needs C compiler | ❌ |
-| **rustcrypto** | ❌ [RUSTSEC-2023-0071](https://rustsec.org/advisories/RUSTSEC-2023-0071) | ❌ | ✅ Pure Rust | ❌ |
+| **rustcrypto** | Patched in `rsa` 0.10 ([RUSTSEC-2023-0071](https://rustsec.org/advisories/RUSTSEC-2023-0071)) | ❌ | ✅ Pure Rust | ❌ |
 | **WebCrypto** (WASM only) | ✅ | Browser-dependent | N/A | ✅ |
 
 #### Common Configurations
@@ -675,7 +675,7 @@ opentdf = "0.16"
 # Recommended: Secure defaults (aws-lc-rs + rustls)
 opentdf = "0.16"
 
-# Pure Rust: No C compiler needed (accepts timing vulnerability)
+# Pure Rust: No C compiler needed (not FIPS validated)
 opentdf = { version = "0.16", default-features = false, features = ["kas-client-rustcrypto"] }
 
 # Native TLS: Use system TLS (OpenSSL on Linux, SecureTransport on macOS)

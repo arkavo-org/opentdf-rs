@@ -426,3 +426,28 @@ fn test_policy_binding_verification() -> Result<(), Box<dyn std::error::Error>> 
 
     Ok(())
 }
+
+/// What this crate writes must pass its own structural check.
+#[test]
+fn test_generated_policy_binding_passes_structural_validation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let policy = Policy::new(Uuid::new_v4().to_string(), vec![], vec![]);
+    let encryption = TdfEncryption::new()?;
+    let mut manifest = TdfManifest::new(
+        "0.payload".to_string(),
+        "https://kas.example.com".to_string(),
+    );
+    manifest.set_policy(&policy)?;
+
+    let key_access = &mut manifest.encryption_information.key_access[0];
+    // No binding yet: the hash is empty.
+    assert_eq!(
+        key_access.policy_binding.validate(),
+        Err(opentdf::PolicyBindingError::EmptyHash)
+    );
+
+    key_access.generate_policy_binding(&policy, encryption.policy_key())?;
+    assert_eq!(key_access.policy_binding.validate(), Ok(()));
+
+    Ok(())
+}

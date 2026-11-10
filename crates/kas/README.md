@@ -16,6 +16,7 @@ This crate provides the cryptographic primitives needed to implement a KAS serve
 - **`rsa`**: RSA-2048 support for TDF (ZIP-based)
   - RSA-OAEP decryption (SHA-1 for OpenTDF compatibility)
   - AES-GCM key rewrapping
+  - Uses the RustCrypto `rsa` crate 0.10, the first release with the fix for [RUSTSEC-2023-0071](https://rustsec.org/advisories/RUSTSEC-2023-0071); `opentdf_kas::rsa` re-exports it
 
 ## Usage
 

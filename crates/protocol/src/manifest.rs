@@ -156,6 +156,111 @@ pub struct PolicyBinding {
     pub hash: String,
 }
 
+/// HMAC-SHA256: the policy binding algorithm the OpenTDF spec names, and the
+/// one this crate, the Go SDK and the platform KAS implement.
+const POLICY_BINDING_ALG_HS256: &str = "HS256";
+
+/// Length in bytes of an HMAC-SHA256 digest.
+const HMAC_SHA256_LEN: usize = 32;
+
+/// Why [`PolicyBinding::validate`] rejected a policy binding.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum PolicyBindingError {
+    /// `alg` is not a recognized policy binding algorithm (only `HS256` is).
+    #[error("unrecognized policy binding algorithm {alg:?}, expected \"HS256\"")]
+    UnsupportedAlgorithm {
+        /// The `alg` value found in the binding.
+        alg: String,
+    },
+    /// `hash` is the empty string.
+    #[error("policy binding hash is empty")]
+    EmptyHash,
+    /// `hash` is not padded standard-alphabet base64.
+    #[error("policy binding hash is not valid base64: {0}")]
+    InvalidBase64(#[from] base64::DecodeError),
+    /// `hash` is base64, but of neither a 32-byte HMAC-SHA256 nor its
+    /// 64-character hex encoding.
+    #[error(
+        "policy binding hash decodes to {actual} bytes, expected 32 (HMAC-SHA256) or 64 (hex of HMAC-SHA256)"
+    )]
+    InvalidHashLength {
+        /// Number of bytes `hash` decoded to.
+        actual: usize,
+    },
+    /// `hash` decodes to 64 bytes that are not all hexadecimal digits, so it
+    /// is not the legacy `Base64(hex(HMAC-SHA256))` form.
+    #[error("policy binding hash decodes to 64 bytes that are not hexadecimal digits")]
+    InvalidHexHash,
+}
+
+impl PolicyBinding {
+    /// Check that the binding is structurally sound, without any key material.
+    ///
+    /// A binding passes when:
+    /// - `alg` is exactly `"HS256"` (HMAC-SHA256), the algorithm the spec names
+    ///   for `keyAccess.policyBinding` and the one this crate and the Go SDK
+    ///   write;
+    /// - `hash` is non-empty, padded standard base64, and decodes to either
+    ///   - 32 bytes: the spec form `Base64(HMAC-SHA256(..))`, 44 characters,
+    ///     which this crate writes; or
+    ///   - 64 hexadecimal digits (either case): the legacy
+    ///     `Base64(hex(HMAC-SHA256(..)))` form, 88 characters, which the Go
+    ///     SDK writes and earlier releases of this crate wrote.
+    ///
+    /// These are the two encodings the OpenTDF platform KAS accepts on rewrap
+    /// (`decodePolicyBinding` in `opentdf/platform`
+    /// `service/kas/access/rewrap.go`). The KAS does not look at `alg`: it
+    /// always verifies an HMAC-SHA256, so any other `alg` is rejected here.
+    ///
+    /// This is a shape check only. It does **not** show that the binding
+    /// matches the policy: that needs the payload key, and is done by the KAS.
+    /// It is never run implicitly; deserializing a manifest does not call it.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use opentdf_protocol::manifest::{PolicyBinding, PolicyBindingError};
+    ///
+    /// let binding = PolicyBinding {
+    ///     alg: "HS256".to_string(),
+    ///     hash: "03yakXSzXkEvVt/Om8VVgFBWI3a+vYCxqtK4Ki80sbo=".to_string(),
+    /// };
+    /// assert!(binding.validate().is_ok());
+    ///
+    /// let empty = PolicyBinding {
+    ///     alg: "HS256".to_string(),
+    ///     hash: String::new(),
+    /// };
+    /// assert_eq!(empty.validate(), Err(PolicyBindingError::EmptyHash));
+    /// ```
+    pub fn validate(&self) -> Result<(), PolicyBindingError> {
+        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+
+        if self.alg != POLICY_BINDING_ALG_HS256 {
+            return Err(PolicyBindingError::UnsupportedAlgorithm {
+                alg: self.alg.clone(),
+            });
+        }
+        if self.hash.is_empty() {
+            return Err(PolicyBindingError::EmptyHash);
+        }
+
+        let decoded = BASE64.decode(&self.hash)?;
+        match decoded.len() {
+            HMAC_SHA256_LEN => Ok(()),
+            len if len == HMAC_SHA256_LEN * 2 => {
+                if decoded.iter().all(u8::is_ascii_hexdigit) {
+                    Ok(())
+                } else {
+                    Err(PolicyBindingError::InvalidHexHash)
+                }
+            }
+            actual => Err(PolicyBindingError::InvalidHashLength { actual }),
+        }
+    }
+}
+
 /// Key access type constants for TDF3
 pub mod key_access_type {
     /// Standard RSA-wrapped key (RSA-OAEP)
@@ -758,6 +863,139 @@ mod sid_and_assertion_tests {
         assert_eq!(
             out,
             serde_json::from_str::<serde_json::Value>(json).unwrap()
+        );
+    }
+}
+
+#[cfg(test)]
+mod policy_binding_validate_tests {
+    use super::*;
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+
+    /// `Base64(HMAC-SHA256(key, Base64(policy)))`: the known answer pinned by
+    /// `opentdf_crypto::calculate_policy_binding`'s own test.
+    const SPEC_HASH: &str = "03yakXSzXkEvVt/Om8VVgFBWI3a+vYCxqtK4Ki80sbo=";
+
+    fn binding(alg: &str, hash: &str) -> PolicyBinding {
+        PolicyBinding {
+            alg: alg.to_string(),
+            hash: hash.to_string(),
+        }
+    }
+
+    /// Lowercase hex of the 32 bytes behind `SPEC_HASH`.
+    fn spec_hash_hex() -> String {
+        BASE64
+            .decode(SPEC_HASH)
+            .unwrap()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+
+    #[test]
+    fn accepts_spec_base64_of_raw_hmac() {
+        assert_eq!(SPEC_HASH.len(), 44);
+        assert_eq!(binding("HS256", SPEC_HASH).validate(), Ok(()));
+        // Any 32 bytes are structurally fine; only a KAS can check the HMAC.
+        assert_eq!(
+            binding("HS256", &BASE64.encode([0u8; 32])).validate(),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn accepts_legacy_base64_of_hex_hmac() {
+        let hex = spec_hash_hex();
+        let legacy = BASE64.encode(&hex);
+        assert_eq!(legacy.len(), 88);
+        assert_eq!(binding("HS256", &legacy).validate(), Ok(()));
+
+        // The KAS hex decoder takes either case.
+        let upper = BASE64.encode(hex.to_uppercase());
+        assert_eq!(binding("HS256", &upper).validate(), Ok(()));
+    }
+
+    #[test]
+    fn rejects_unrecognized_algorithm() {
+        for alg in ["", "hs256", "HS384", "GMAC", "ES256", " HS256"] {
+            assert_eq!(
+                binding(alg, SPEC_HASH).validate(),
+                Err(PolicyBindingError::UnsupportedAlgorithm {
+                    alg: alg.to_string()
+                }),
+                "alg {alg:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_empty_hash() {
+        assert_eq!(
+            binding("HS256", "").validate(),
+            Err(PolicyBindingError::EmptyHash)
+        );
+        // A freshly constructed KeyAccess has no binding yet.
+        let fresh = KeyAccess::new("https://kas.example.com".to_string());
+        assert_eq!(
+            fresh.policy_binding.validate(),
+            Err(PolicyBindingError::EmptyHash)
+        );
+    }
+
+    #[test]
+    fn rejects_hash_that_is_not_padded_standard_base64() {
+        let unpadded = SPEC_HASH.trim_end_matches('=');
+        let url_safe = SPEC_HASH.replace('/', "_").replace('+', "-");
+        let with_newline = format!("{SPEC_HASH}\n");
+        for hash in ["not base64!!", " ", unpadded, &url_safe, &with_newline] {
+            assert!(
+                matches!(
+                    binding("HS256", hash).validate(),
+                    Err(PolicyBindingError::InvalidBase64(_))
+                ),
+                "hash {hash:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_hash_of_implausible_length() {
+        for len in [1usize, 3, 16, 31, 33, 48, 63, 65, 128] {
+            assert_eq!(
+                binding("HS256", &BASE64.encode(vec![b'a'; len])).validate(),
+                Err(PolicyBindingError::InvalidHashLength { actual: len }),
+                "{len} bytes"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_64_bytes_that_are_not_hex() {
+        // One non-hex character in an otherwise valid legacy binding.
+        let mut hex = spec_hash_hex();
+        hex.replace_range(10..11, "g");
+        assert_eq!(
+            binding("HS256", &BASE64.encode(&hex)).validate(),
+            Err(PolicyBindingError::InvalidHexHash)
+        );
+        // 64 raw bytes (e.g. an HMAC-SHA512) are not a hex HMAC-SHA256 either.
+        assert_eq!(
+            binding("HS256", &BASE64.encode([0xffu8; 64])).validate(),
+            Err(PolicyBindingError::InvalidHexHash)
+        );
+    }
+
+    #[test]
+    fn deserializing_does_not_validate() {
+        // `validate` is opt-in: a manifest with a malformed binding still parses.
+        let parsed: PolicyBinding = serde_json::from_str(r#"{"alg":"none","hash":"BBBB"}"#)
+            .expect("parsing must not validate");
+        assert_eq!(
+            parsed.validate(),
+            Err(PolicyBindingError::UnsupportedAlgorithm {
+                alg: "none".to_string()
+            })
         );
     }
 }
