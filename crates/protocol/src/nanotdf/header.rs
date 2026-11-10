@@ -487,7 +487,7 @@ mod tests {
         assert_eq!(byte, 0x85);
 
         let parsed = SymmetricAndPayloadConfig::from_byte(byte).unwrap();
-        assert_eq!(parsed.signature_mode.has_signature, true);
+        assert!(parsed.signature_mode.has_signature);
         assert_eq!(
             parsed.signature_mode.signature_ecc_mode,
             Some(EccMode::Secp256r1)

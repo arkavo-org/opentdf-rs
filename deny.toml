@@ -15,16 +15,8 @@ all-features = true
 [advisories]
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
-ignore = [
-    # rsa 0.9 (Marvin attack, timing side channel in RSA private-key
-    # operations); fixed only in rsa >= 0.10. The crate is pulled in solely by
-    # opt-in features that are documented as affected: `kas-client-rustcrypto`
-    # / `rustcrypto-rsa` (opentdf), `rustcrypto-provider` / `rustcrypto-rsa`
-    # (opentdf-crypto) and `rsa` (opentdf-kas). Default builds use aws-lc-rs
-    # (constant-time) and browser WASM uses WebCrypto. Moving to rsa 0.10 is
-    # tracked separately; remove this entry when that lands.
-    { id = "RUSTSEC-2023-0071", reason = "opt-in rustcrypto RSA backend only; documented in README and SECURITY.md; rsa 0.10 bump tracked separately" },
-]
+# No ignores. The optional RustCrypto RSA backend is on rsa 0.10, the first
+# release with the fix for RUSTSEC-2023-0071.
 
 [licenses]
 allow = [

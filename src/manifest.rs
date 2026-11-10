@@ -12,8 +12,8 @@ use opentdf_crypto::{
 // Re-export protocol types for backward compatibility
 pub use opentdf_protocol::{
     Assertion, AssertionBinding, AssertionStatement, EncryptionInformation, EncryptionMethod,
-    IntegrityInformation, KeyAccess, Payload, PolicyBinding, RootSignature, Segment,
-    TDF_SPEC_VERSION, TdfManifest,
+    IntegrityInformation, KeyAccess, Payload, PolicyBinding, PolicyBindingError, RootSignature,
+    Segment, TDF_SPEC_VERSION, TdfManifest,
 };
 
 /// Why a TDF failed integrity verification while being decrypted.

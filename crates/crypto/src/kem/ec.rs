@@ -627,7 +627,7 @@ mod tests {
         // Verify the HKDF salt matches the spec
         use sha2::{Digest, Sha256};
         let magic_and_version = [0x4C, 0x31, 0x4C];
-        let expected_salt = Sha256::digest(&magic_and_version);
+        let expected_salt = Sha256::digest(magic_and_version);
         assert_eq!(NANOTDF_HKDF_SALT, expected_salt.as_slice());
     }
 

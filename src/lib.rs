@@ -102,7 +102,7 @@ pub use opentdf_crypto::{hkdf, p256, pkcs8, sha1, sha2};
 #[cfg(feature = "kas-client")]
 pub use ed25519_dalek;
 
-// Re-export rsa crate only for rustcrypto-rsa feature (legacy, has RUSTSEC-2023-0071)
+// Re-export rsa crate only for rustcrypto-rsa feature (rsa 0.10, pure Rust)
 #[cfg(feature = "rustcrypto-rsa")]
 pub use opentdf_crypto::rsa;
 
