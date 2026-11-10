@@ -41,7 +41,16 @@ pub enum IntegrityError {
     /// `rootSignature.sig` does not match the aggregate of the segment tags.
     #[error("integrity: root signature verification failed: {0}")]
     RootSignature(String),
+
+    /// A `segments[i].hash` decodes to something other than a 16-byte GMAC
+    /// tag, so the rows cannot be the input the root signature was computed
+    /// over.
+    #[error("integrity: segment {index} signature is {length} bytes, expected a 16-byte GMAC tag")]
+    SegmentHashLength { index: usize, length: usize },
 }
+
+/// Length in bytes of a GMAC segment tag, the AES-GCM authentication tag.
+const GMAC_TAG_LENGTH: usize = 16;
 
 /// Extension trait for IntegrityInformation that requires crypto operations
 pub trait IntegrityInformationExt {
@@ -64,6 +73,10 @@ pub trait IntegrityInformationExt {
         gmac_tags: &[Vec<u8>],
         payload_key: &[u8],
     ) -> Result<(), IntegrityError>;
+
+    /// Verify the root signature against the manifest's own segment rows,
+    /// before any segment has been decrypted.
+    fn verify_root_signature_from_rows(&self, payload_key: &[u8]) -> Result<(), IntegrityError>;
 }
 
 impl IntegrityInformationExt for IntegrityInformation {
@@ -148,6 +161,55 @@ impl IntegrityInformationExt for IntegrityInformation {
         }
 
         self.verify_root_signature(gmac_tags, payload_key)
+            .map_err(IntegrityError::RootSignature)
+    }
+
+    /// Recompute `HMAC-SHA256(payloadKey, concat(raw 16-byte tags))` from
+    /// `segments[i].hash` and compare it with `rootSignature.sig` in constant
+    /// time. This is the verifying counterpart of
+    /// [`generate_root_signature`](Self::generate_root_signature) for a
+    /// reader that holds the manifest and the payload key but has not
+    /// decrypted the payload.
+    ///
+    /// Success means the segment rows are the ones the key holder signed, in
+    /// that order. A random-access reader checks this once at open and then
+    /// trusts each row as the expected hash for
+    /// `TdfEncryption::decrypt_segment_into_verified`. Without it, rows and
+    /// their members can be reordered, dropped or repeated together, since
+    /// every member still passes its own GCM check.
+    ///
+    /// Every row must decode to exactly 16 bytes
+    /// ([`IntegrityError::SegmentHashLength`] otherwise). The signature is
+    /// over the concatenation, which does not record where one tag ends, so
+    /// rows of other lengths could re-split the same signed bytes into a
+    /// different list of tags. This also means only the `GMAC` segment hash
+    /// encoding this crate writes is accepted.
+    ///
+    /// Like [`verify_root_signature`](Self::verify_root_signature), this
+    /// does not compare the rows with any ciphertext; decrypting a segment
+    /// against its row does that.
+    fn verify_root_signature_from_rows(&self, payload_key: &[u8]) -> Result<(), IntegrityError> {
+        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+
+        let mut gmac_tags = Vec::with_capacity(self.segments.len());
+        for (index, segment) in self.segments.iter().enumerate() {
+            let tag =
+                BASE64
+                    .decode(&segment.hash)
+                    .map_err(|e| IntegrityError::SegmentHashEncoding {
+                        index,
+                        reason: e.to_string(),
+                    })?;
+            if tag.len() != GMAC_TAG_LENGTH {
+                return Err(IntegrityError::SegmentHashLength {
+                    index,
+                    length: tag.len(),
+                });
+            }
+            gmac_tags.push(tag);
+        }
+
+        self.verify_root_signature(&gmac_tags, payload_key)
             .map_err(IntegrityError::RootSignature)
     }
 }
@@ -369,5 +431,180 @@ mod tests {
         let retrieved_policy = manifest.get_policy().unwrap();
         assert_eq!(policy.uuid, retrieved_policy.uuid);
         assert_eq!(policy.body.dissem, retrieved_policy.body.dissem);
+    }
+
+    const ROOT_KEY: [u8; 32] = [0x42; 32];
+
+    fn b64(bytes: &[u8]) -> String {
+        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+        BASE64.encode(bytes)
+    }
+
+    /// Integrity information as a writer leaves it: one row per tag and a
+    /// root signature over the raw tags.
+    fn signed_rows(tags: &[Vec<u8>]) -> IntegrityInformation {
+        let mut integrity = IntegrityInformation::default();
+        integrity
+            .generate_root_signature(tags, &ROOT_KEY)
+            .expect("root signature");
+        for tag in tags {
+            integrity.segments.push(Segment {
+                hash: b64(tag),
+                segment_size: None,
+                encrypted_segment_size: None,
+            });
+        }
+        integrity
+    }
+
+    fn three_tags() -> Vec<Vec<u8>> {
+        vec![vec![0x01; 16], vec![0x02; 16], vec![0x03; 16]]
+    }
+
+    #[test]
+    fn root_signature_verifies_from_manifest_rows() {
+        let integrity = signed_rows(&three_tags());
+        integrity
+            .verify_root_signature_from_rows(&ROOT_KEY)
+            .expect("rows are the ones that were signed");
+
+        // The rows agree with the tag-based verifier, which is what a reader
+        // that has decrypted every segment uses.
+        integrity
+            .verify_segments_and_root_signature(&three_tags(), &ROOT_KEY)
+            .expect("tags match rows");
+    }
+
+    #[test]
+    fn root_signature_from_rows_rejects_changed_rows() {
+        type Tamper = fn(&mut IntegrityInformation);
+
+        let tampers: [(&str, Tamper); 5] = [
+            ("reordered", |integrity| integrity.segments.swap(0, 2)),
+            ("dropped", |integrity| {
+                integrity.segments.pop();
+            }),
+            ("repeated", |integrity| {
+                let first = integrity.segments[0].clone();
+                integrity.segments.push(first);
+            }),
+            ("edited", |integrity| {
+                let mut tag = vec![0x02; 16];
+                tag[15] ^= 0x01;
+                integrity.segments[1].hash = b64(&tag);
+            }),
+            ("resigned with another key", |integrity| {
+                integrity
+                    .generate_root_signature(&three_tags(), &[0x43; 32])
+                    .expect("root signature");
+            }),
+        ];
+        for (name, tamper) in tampers {
+            let mut integrity = signed_rows(&three_tags());
+            tamper(&mut integrity);
+            let err = integrity
+                .verify_root_signature_from_rows(&ROOT_KEY)
+                .expect_err(name);
+            assert!(
+                matches!(err, IntegrityError::RootSignature(_)),
+                "{name}: {err:?}"
+            );
+        }
+
+        // The right rows under the wrong key, and a key of the wrong length.
+        let integrity = signed_rows(&three_tags());
+        for key in [&[0x43u8; 32][..], &[0x42u8; 16][..]] {
+            let err = integrity
+                .verify_root_signature_from_rows(key)
+                .expect_err("wrong key");
+            assert!(matches!(err, IntegrityError::RootSignature(_)), "{err:?}");
+        }
+    }
+
+    /// The signature covers the concatenated tags, not their boundaries.
+    /// Rows of 8 and 24 bytes carry the same 32 signed bytes as two real
+    /// tags, so only the per-row length check tells the lists apart.
+    #[test]
+    fn root_signature_from_rows_rejects_rows_that_are_not_16_bytes() {
+        let tags = vec![vec![0xA1; 16], vec![0xB2; 16]];
+        let signed_bytes = tags.concat();
+        let resplit = vec![signed_bytes[..8].to_vec(), signed_bytes[8..].to_vec()];
+
+        let mut integrity = signed_rows(&tags);
+        integrity
+            .verify_root_signature_from_rows(&ROOT_KEY)
+            .expect("16-byte rows verify");
+
+        for (row, tag) in integrity.segments.iter_mut().zip(&resplit) {
+            row.hash = b64(tag);
+        }
+        // The HMAC input is unchanged, so the tag-based check still passes.
+        integrity
+            .verify_root_signature(&resplit, &ROOT_KEY)
+            .expect("same concatenated bytes");
+
+        let err = integrity
+            .verify_root_signature_from_rows(&ROOT_KEY)
+            .expect_err("an 8-byte row is not a GMAC tag");
+        assert!(
+            matches!(
+                err,
+                IntegrityError::SegmentHashLength {
+                    index: 0,
+                    length: 8
+                }
+            ),
+            "{err:?}"
+        );
+
+        // A long row is refused too, wherever it sits.
+        let mut integrity = signed_rows(&tags);
+        integrity.segments[1].hash = b64(&[0xB2; 24]);
+        let err = integrity
+            .verify_root_signature_from_rows(&ROOT_KEY)
+            .expect_err("a 24-byte row is not a GMAC tag");
+        assert!(
+            matches!(
+                err,
+                IntegrityError::SegmentHashLength {
+                    index: 1,
+                    length: 24
+                }
+            ),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn root_signature_from_rows_rejects_undecodable_rows_and_signatures() {
+        let mut integrity = signed_rows(&three_tags());
+        integrity.segments[2].hash = "not base64!".to_string();
+        let err = integrity
+            .verify_root_signature_from_rows(&ROOT_KEY)
+            .expect_err("row is not base64");
+        assert!(
+            matches!(err, IntegrityError::SegmentHashEncoding { index: 2, .. }),
+            "{err:?}"
+        );
+
+        let mut integrity = signed_rows(&three_tags());
+        let mut sig = base64_decode(&integrity.root_signature.sig);
+        sig[0] ^= 0x01;
+        integrity.root_signature.sig = b64(&sig);
+        let err = integrity
+            .verify_root_signature_from_rows(&ROOT_KEY)
+            .expect_err("signature was edited");
+        assert!(matches!(err, IntegrityError::RootSignature(_)), "{err:?}");
+
+        integrity.root_signature.sig = "not base64!".to_string();
+        let err = integrity
+            .verify_root_signature_from_rows(&ROOT_KEY)
+            .expect_err("signature is not base64");
+        assert!(matches!(err, IntegrityError::RootSignature(_)), "{err:?}");
+    }
+
+    fn base64_decode(value: &str) -> Vec<u8> {
+        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+        BASE64.decode(value).expect("base64")
     }
 }

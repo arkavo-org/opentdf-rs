@@ -114,9 +114,9 @@ pub use tdf::{TdfDecryptBuilder, TdfDecryptFileBuilder};
 
 // Core types
 pub use archive::{
-    LEGACY_TDF_MANIFEST_FILE_NAME, TDF_MANIFEST_FILE_NAME, TDF_PAYLOAD_FILE_NAME, TdfArchive,
-    TdfArchiveBuilder, TdfArchiveMemoryBuilder, TdfError, TdfMemberIndex, TdfMemberLocation,
-    TdfMultiEntryBuilder,
+    DEFAULT_MAX_MANIFEST_SIZE, DEFAULT_MAX_PAYLOAD_SIZE, LEGACY_TDF_MANIFEST_FILE_NAME,
+    TDF_MANIFEST_FILE_NAME, TDF_PAYLOAD_FILE_NAME, TdfArchive, TdfArchiveBuilder,
+    TdfArchiveMemoryBuilder, TdfError, TdfMemberIndex, TdfMemberLocation, TdfMultiEntryBuilder,
 };
 
 // Unified error type for SDK consumers
