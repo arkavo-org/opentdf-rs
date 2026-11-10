@@ -62,6 +62,10 @@ console.log('OpenTDF WASM version:', version());
 // Obtain OAuth token (example - your implementation will vary)
 const oauthToken = await getOAuthToken();
 
+// The KAS instances your application trusts with that token.
+// This comes from your configuration, never from a TDF.
+const trustedKasUrls = ['https://kas.example.com'];
+
 // Create a TDF
 const data = btoa('Sensitive information'); // Base64 encode
 const policy = {
@@ -89,8 +93,9 @@ if (result.success) {
     console.log('Manifest:', manifest);
   }
 
-  // Decrypt the TDF using KAS
-  const decryptResult = await tdf_decrypt_with_kas(tdfArchive, oauthToken);
+  // Decrypt the TDF using KAS. The token is sent only if the TDF names a
+  // KAS on one of the trusted origins.
+  const decryptResult = await tdf_decrypt_with_kas(tdfArchive, oauthToken, trustedKasUrls);
   if (decryptResult.success) {
     const plaintext = atob(decryptResult.data); // Base64 decode
     console.log('Decrypted:', plaintext);
@@ -203,28 +208,34 @@ Reads a TDF archive and returns its manifest.
 
 **Returns:** `WasmResult` with JSON manifest in `data` field
 
-### `tdf_decrypt_with_kas(tdf_data: string, kas_token: string): Promise<WasmResult>`
+### `tdf_decrypt_with_kas(tdf_data: string, kas_token: string, allowed_kas_urls: string[]): Promise<WasmResult>`
 
 Decrypts a TDF archive using the KAS rewrap protocol (async).
 
 **Parameters:**
 - `tdf_data`: Base64-encoded TDF archive
 - `kas_token`: OAuth bearer token for KAS authentication
+- `allowed_kas_urls`: URLs of the KAS instances you trust with `kas_token`, for example `['https://kas.example.com']`. Required. See [Trusted KAS allowlist](#trusted-kas-allowlist).
 
 **Returns:** Promise resolving to `WasmResult` with base64-encoded plaintext in `data` field
 
 **Flow:**
 1. Parses TDF manifest and extracts policy/key access info
-2. Generates ephemeral RSA-2048 key pair
-3. Builds and signs JWT rewrap request (ES256)
-4. POSTs to KAS `/v2/rewrap` endpoint with OAuth token
-5. Unwraps returned key using RSA-OAEP (SHA-1)
-6. Decrypts payload with AES-256-GCM
+2. Checks the manifest's KAS URL against `allowed_kas_urls`, and stops if it is not trusted
+3. Generates ephemeral RSA-2048 key pair
+4. Builds and signs JWT rewrap request (ES256)
+5. POSTs to KAS `/v2/rewrap` endpoint with OAuth token
+6. Unwraps returned key using RSA-OAEP (SHA-1)
+7. Decrypts payload with AES-256-GCM
 
 **Error Handling:**
+- Untrusted KAS: the TDF names a KAS that is not in `allowed_kas_urls`, or `allowed_kas_urls` is empty. No request is made.
+- Invalid KAS URL: the TDF's KAS URL, or an entry of `allowed_kas_urls`, is not `https` (or `http` on a loopback host), or cannot be parsed
 - 401: Invalid OAuth token
 - 403: Access denied (policy evaluation failed)
-- Network errors: CORS or connectivity issues
+- Network errors: CORS or connectivity issues, or a redirect from the KAS (redirects are refused)
+
+Calling without `allowed_kas_urls` (the two-argument form of earlier releases) throws a `TypeError`. It never falls back to the KAS named by the TDF.
 
 ### `policy_create(policy_json: string): WasmResult`
 
@@ -293,13 +304,14 @@ The WASM binary is optimized for size using:
 - `wasm-opt` with `-O3` - Additional WebAssembly-specific optimization
 
 Typical bundle size:
-- ~730 KB uncompressed, ~230 KB gzipped
+- ~910 KB uncompressed, ~390 KB gzipped
 
 The bundle includes full KAS rewrap protocol with:
 - RSA-2048 key generation and OAEP encryption/decryption
 - P-256 ECDSA JWT signing (ES256)
 - AES-256-GCM encryption/decryption
 - Browser Fetch API integration
+- URL parsing, with its IDNA tables, for the trusted KAS allowlist
 
 ## Browser Compatibility
 
@@ -319,6 +331,7 @@ The WASM module includes **full KAS (Key Access Service) integration** for both 
 - DEK never leaves WASM environment
 
 ### Decryption (tdf_decrypt_with_kas)
+- Checks the KAS named by the TDF against the caller's allowlist
 - Generates ephemeral RSA-2048 key pair
 - Signs JWT rewrap request with P-256 ECDSA (ES256)
 - POSTs to KAS `/v2/rewrap` endpoint with OAuth token
@@ -326,11 +339,33 @@ The WASM module includes **full KAS (Key Access Service) integration** for both 
 - Decrypts payload with AES-256-GCM
 - All cryptographic operations happen in WASM
 
+### Trusted KAS allowlist
+A TDF names the KAS that holds its key, and a TDF is untrusted input. Decrypting sends your OAuth token to that KAS, so `tdf_decrypt_with_kas()` contacts it only if you have said you trust it. Pass the KAS URLs you trust as `allowed_kas_urls`:
+
+```javascript
+const result = await tdf_decrypt_with_kas(tdfData, oauthToken, [
+  'https://kas.example.com',
+]);
+```
+
+The rules:
+- **Origin match.** The TDF's KAS URL is accepted only if its scheme, host and port equal those of an entry. URLs are parsed before they are compared, so `https://kas.example.com.evil.com` and `https://kas.example.com@evil.com` do not match `https://kas.example.com`. Default ports are filled in, so `https://kas.example.com:443` and `https://kas.example.com` are the same origin.
+- **Fails closed.** An empty list rejects every TDF. A malformed entry is an error, not a skipped entry. There is no wildcard.
+- **HTTPS only.** Both the entries and the TDF's KAS URL must use `https`. `http` is accepted only for loopback hosts (`localhost`, `127.0.0.0/8`, `[::1]`), for local development.
+- **No userinfo, query or fragment** in the TDF's KAS URL.
+- **No redirects.** The rewrap request refuses redirects, so a KAS cannot forward your token to another host.
+
+Only the origin of an entry is compared; its path is ignored. The path comes from the TDF, so a TDF can direct the rewrap request, with your token, to any path under a trusted origin. List origins that are dedicated to a KAS, not origins that also serve unrelated content.
+
+Take the list from your application's configuration. Do not build it from the TDF, for example from `tdf_read()` output: that trusts whatever the TDF says.
+
 ### OAuth Token Management
-The WASM module requires an OAuth bearer token for KAS operations. Your application must:
+The WASM module requires an OAuth bearer token to decrypt. Your application must:
 1. Obtain OAuth token from your identity provider
-2. Pass token to `tdf_create()` and `tdf_decrypt_with_kas()`
+2. Pass the token to `tdf_decrypt_with_kas()`, with the KAS URLs it may be sent to
 3. Handle token refresh when needed
+
+`tdf_create()` takes no token: it only fetches the KAS public key.
 
 ### CORS Configuration
 KAS must be configured to allow CORS requests from your domain:
@@ -396,7 +431,8 @@ In Native environments:
 #### What This Implementation Provides
 
 1. **Transport Security**
-   - All KAS communication over HTTPS (enforced by browser)
+   - The OAuth bearer token is sent only to a KAS origin the caller has allowlisted, over HTTPS (plain HTTP only for loopback hosts), and is not forwarded across redirects
+   - `tdf_create()` fetches the KAS public key from the URL you pass, as given; use an `https` URL
    - CORS policies prevent unauthorized cross-origin access
    - OAuth bearer tokens for authentication
 
@@ -427,13 +463,15 @@ In Native environments:
 
 ```javascript
 // DO: Let WASM handle sensitive operations
-const result = await tdf_decrypt_with_kas(tdfData, oauthToken);
+// DO: Take the trusted KAS list from your configuration
+const result = await tdf_decrypt_with_kas(tdfData, oauthToken, config.trustedKasUrls);
 
 // DO: Clear sensitive data after use
 let plaintext = atob(result.data);
 processData(plaintext);
 plaintext = null; // Allow GC to reclaim
 
+// DON'T: Build the trusted KAS list from the TDF being decrypted
 // DON'T: Extract and store decryption keys in JavaScript
 // DON'T: Log TDF contents or decrypted data
 // DON'T: Store OAuth tokens in localStorage (use sessionStorage or memory)

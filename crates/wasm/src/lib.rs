@@ -4,6 +4,7 @@ use std::io::Cursor;
 use wasm_bindgen::prelude::*;
 
 mod kas;
+mod kas_trust;
 /// WebCrypto RSA-OAEP operations via browser's SubtleCrypto API
 pub mod webcrypto;
 
@@ -225,27 +226,49 @@ fn _tdf_read_impl(tdf_data: &str) -> Result<String, String> {
 ///
 /// This performs the complete KAS rewrap flow:
 /// 1. Parse TDF manifest and extract policy/key access info
-/// 2. Generate ephemeral RSA-2048 key pair
-/// 3. Build and sign JWT rewrap request (ES256)
-/// 4. POST to KAS /v2/rewrap endpoint with OAuth token
-/// 5. Unwrap returned key using RSA-OAEP (SHA-1)
-/// 6. Decrypt payload with AES-256-GCM
+/// 2. Check the manifest's KAS URL against `allowed_kas_urls`
+/// 3. Generate ephemeral RSA-2048 key pair
+/// 4. Build and sign JWT rewrap request (ES256)
+/// 5. POST to KAS /v2/rewrap endpoint with OAuth token
+/// 6. Unwrap returned key using RSA-OAEP (SHA-1)
+/// 7. Decrypt payload with AES-256-GCM
+///
+/// # Security
+/// A TDF is untrusted input and names its own KAS. The OAuth token is sent
+/// only if the origin (scheme, host and port) of that KAS URL equals the
+/// origin of an entry of `allowed_kas_urls`; otherwise decryption fails before
+/// any request is made. An empty list rejects every TDF. URLs must use
+/// `https`, except `http` for loopback hosts during development. Redirects
+/// from the KAS are not followed.
+///
+/// Only the origin of each entry is compared: the TDF still chooses the path
+/// under that origin, so list origins that are dedicated to a KAS.
 ///
 /// # Arguments
 /// * `tdf_data` - Base64-encoded TDF archive
 /// * `kas_token` - OAuth bearer token for KAS authentication
+/// * `allowed_kas_urls` - URLs of the KAS instances the caller trusts with
+///   `kas_token` (e.g. `["https://kas.example.com"]`)
 ///
 /// # Returns
 /// Promise resolving to WasmResult with base64-encoded plaintext
 #[wasm_bindgen]
-pub async fn tdf_decrypt_with_kas(tdf_data: String, kas_token: String) -> WasmResult {
-    match _tdf_decrypt_with_kas_impl(&tdf_data, &kas_token).await {
+pub async fn tdf_decrypt_with_kas(
+    tdf_data: String,
+    kas_token: String,
+    allowed_kas_urls: Vec<String>,
+) -> WasmResult {
+    match _tdf_decrypt_with_kas_impl(&tdf_data, &kas_token, &allowed_kas_urls).await {
         Ok(plaintext_b64) => WasmResult::ok(plaintext_b64),
         Err(e) => WasmResult::err(e),
     }
 }
 
-async fn _tdf_decrypt_with_kas_impl(tdf_data: &str, kas_token: &str) -> Result<String, String> {
+async fn _tdf_decrypt_with_kas_impl(
+    tdf_data: &str,
+    kas_token: &str,
+    allowed_kas_urls: &[String],
+) -> Result<String, String> {
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
     // Step 1: Parse TDF archive and extract manifest
@@ -260,25 +283,32 @@ async fn _tdf_decrypt_with_kas_impl(tdf_data: &str, kas_token: &str) -> Result<S
         .by_index()
         .map_err(|e| format!("Failed to read TDF entry: {}", e))?;
 
-    // Step 2: Generate ephemeral RSA-2048 key pair (via WebCrypto)
+    // Step 2: Decide whether the KAS named by the manifest may be contacted.
+    //
+    // The manifest is untrusted and the rewrap request carries the caller's
+    // bearer token, so this runs before anything else is done with the TDF.
+    let rewrap_endpoint = kas_trust::trusted_rewrap_endpoint(&entry.manifest, allowed_kas_urls)
+        .map_err(|e| e.to_string())?;
+
+    // Step 3: Generate ephemeral RSA-2048 key pair (via WebCrypto)
     let ephemeral_keypair = kas::generate_rsa_keypair().await?;
 
-    // Step 3: Build unsigned rewrap request
+    // Step 4: Build unsigned rewrap request
     let unsigned_request =
         kas::build_rewrap_request(&entry.manifest, &ephemeral_keypair.public_key_pem)?;
 
-    // Step 4: Sign request with JWT (ES256)
+    // Step 5: Sign request with JWT (ES256)
     let signed_token = kas::create_signed_jwt(&unsigned_request)?;
 
-    // Step 5: POST to KAS /v2/rewrap
-    let kas_url = &entry.manifest.encryption_information.key_access[0].url;
-    let rewrap_response = kas::post_rewrap_request(kas_url, kas_token, &signed_token).await?;
+    // Step 6: POST to the trusted KAS /v2/rewrap endpoint
+    let rewrap_response =
+        kas::post_rewrap_request(&rewrap_endpoint, kas_token, &signed_token).await?;
 
-    // Step 6: Unwrap payload key using RSA-OAEP (via WebCrypto)
+    // Step 7: Unwrap payload key using RSA-OAEP (via WebCrypto)
     let payload_key =
         kas::unwrap_rsa_oaep(&rewrap_response.wrapped_key, &ephemeral_keypair.private_key).await?;
 
-    // Step 7: Decrypt payload
+    // Step 8: Decrypt payload
     //
     // `decrypt_with_key` verifies every manifest segment hash and the root
     // signature against the GMAC tags of the ciphertext, and aborts before
@@ -287,7 +317,7 @@ async fn _tdf_decrypt_with_kas_impl(tdf_data: &str, kas_token: &str) -> Result<S
         .decrypt_with_key(&payload_key)
         .map_err(|e| format!("Decryption failed: {}", e))?;
 
-    // Step 8: Return base64-encoded plaintext
+    // Step 9: Return base64-encoded plaintext
     Ok(BASE64.encode(&plaintext))
 }
 
@@ -446,5 +476,104 @@ mod tests {
         let result = policy_create(policy_json);
         assert!(result.success());
         assert!(result.data().is_some());
+    }
+
+    /// Build a base64 TDF whose manifest names `kas_url` as its KAS
+    fn tdf_naming_kas(kas_url: &str) -> String {
+        tdf_with_manifest(&TdfManifest::new(
+            "0.payload".to_string(),
+            kas_url.to_string(),
+        ))
+    }
+
+    fn tdf_with_manifest(manifest: &TdfManifest) -> String {
+        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+
+        let mut builder = TdfArchiveMemoryBuilder::new();
+        builder.add_entry(manifest, b"ciphertext", 0).unwrap();
+        BASE64.encode(builder.finish().unwrap())
+    }
+
+    /// The error `tdf_decrypt_with_kas` must fail with for this TDF and allowlist
+    fn expected_trust_error(kas_url: &str, allowed: &[String]) -> String {
+        let manifest = TdfManifest::new("0.payload".to_string(), kas_url.to_string());
+        kas_trust::trusted_rewrap_endpoint(&manifest, allowed)
+            .unwrap_err()
+            .to_string()
+    }
+
+    #[wasm_bindgen_test]
+    async fn test_decrypt_rejects_empty_key_access() {
+        let mut manifest = TdfManifest::new(
+            "0.payload".to_string(),
+            "https://kas.example.com".to_string(),
+        );
+        manifest.encryption_information.key_access.clear();
+
+        let result = tdf_decrypt_with_kas(
+            tdf_with_manifest(&manifest),
+            "token".to_string(),
+            vec!["https://kas.example.com".to_string()],
+        )
+        .await;
+
+        assert!(!result.success());
+        assert_eq!(
+            result.error(),
+            Some(kas_trust::KasTrustError::NoKeyAccess.to_string())
+        );
+    }
+
+    // The three tests below run where no KAS is reachable. They pass only if
+    // the export stops at the trust check: getting any further would fail with
+    // a different error (key generation or the fetch itself).
+
+    #[wasm_bindgen_test]
+    async fn test_decrypt_refuses_kas_outside_allowlist() {
+        let kas_url = "https://kas.example.com.evil.com/kas";
+        let allowed = vec!["https://kas.example.com".to_string()];
+
+        let result = tdf_decrypt_with_kas(
+            tdf_naming_kas(kas_url),
+            "token".to_string(),
+            allowed.clone(),
+        )
+        .await;
+
+        assert!(!result.success());
+        assert_eq!(
+            result.error(),
+            Some(expected_trust_error(kas_url, &allowed))
+        );
+    }
+
+    #[wasm_bindgen_test]
+    async fn test_decrypt_refuses_empty_allowlist() {
+        let kas_url = "https://kas.example.com/kas";
+
+        let result =
+            tdf_decrypt_with_kas(tdf_naming_kas(kas_url), "token".to_string(), Vec::new()).await;
+
+        assert!(!result.success());
+        assert_eq!(result.error(), Some(expected_trust_error(kas_url, &[])));
+    }
+
+    #[wasm_bindgen_test]
+    async fn test_decrypt_refuses_non_loopback_http() {
+        let kas_url = "http://kas.example.com/kas";
+        let allowed = vec!["https://kas.example.com".to_string()];
+
+        let result = tdf_decrypt_with_kas(
+            tdf_naming_kas(kas_url),
+            "token".to_string(),
+            allowed.clone(),
+        )
+        .await;
+
+        assert!(!result.success());
+        assert_eq!(
+            result.error(),
+            Some(expected_trust_error(kas_url, &allowed))
+        );
     }
 }
