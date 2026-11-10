@@ -50,7 +50,7 @@ jobs:
         run: cargo fmt --all --check
 
       - name: clippy
-        run: cargo clippy --lib --all-features -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
   test:
     name: test
@@ -64,6 +64,9 @@ jobs:
 
       - name: run-tests
         run: cargo test --verbose
+
+      - name: run-tests-all-features
+        run: cargo test --all-features --verbose
 
   build:
     name: build
