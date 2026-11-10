@@ -1,15 +1,21 @@
-# Weekly dependency updates, one grouped pull request per ecosystem.
+# Dependency updates: weekly grouped pull requests for GitHub Actions, and
+# security updates only for cargo.
 version: 2
 updates:
   # Workspace crates (root manifest plus crates/*).
+  #
+  # Version updates are off (limit 0); security updates are unaffected by the
+  # limit. Cargo.lock is not committed, so every build already resolves the
+  # newest compatible release, and the only thing a version update can do is
+  # raise a requirement across a breaking boundary (sha2 0.10 -> 0.11,
+  # reqwest 0.12 -> 0.13, ...). Those need code changes and move in sets, so
+  # they are done by hand. New advisories are caught by the daily cargo-deny
+  # run in audit.yml.
   - package-ecosystem: cargo
     directory: /
     schedule:
       interval: weekly
-    groups:
-      cargo:
-        patterns:
-          - "*"
+    open-pull-requests-limit: 0
 
   # Actions are pinned by commit SHA; Dependabot moves the SHA and the
   # trailing version comment together.
