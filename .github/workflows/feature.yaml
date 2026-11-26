@@ -57,6 +57,20 @@ jobs:
       - name: clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
+      - name: feature-matrix-and-no-ring
+        run: |
+          cargo check --no-default-features
+          cargo check --no-default-features --features kas-client,rustls-tls-no-provider
+          cargo check --no-default-features --features kas-client,rustls-tls-webpki-roots-no-provider
+          if cargo tree -e normal --no-default-features --features kas-client,rustls-tls-no-provider -i ring 2>/dev/null | grep -q '^ring '; then
+            echo "ERROR: ring leaked into rustls-tls-no-provider dependency graph" >&2
+            exit 1
+          fi
+          if cargo check --no-default-features --features kas-client 2>/dev/null; then
+            echo "ERROR: kas-client without a TLS feature should fail at compile time" >&2
+            exit 1
+          fi
+
   test:
     name: test
     runs-on: ubuntu-latest

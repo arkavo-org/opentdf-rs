@@ -645,7 +645,7 @@ Add to your Cargo.toml ([crates.io](https://crates.io/crates/opentdf)):
 
 ```toml
 [dependencies]
-opentdf = "0.16"
+opentdf = "0.20"
 ```
 
 ### Feature Flags
@@ -657,7 +657,7 @@ opentdf = "0.16"
 │ kas-client                           ✅        KAS client + aws-lc-rs (constant-time)│
 │ kas-client-rustcrypto                -         KAS client + pure Rust (portable)     │
 │ rustls-tls                           ✅        TLS via rustls (reqwest ring default) │
-│ rustls-tls-no-provider               -         TLS via rustls, caller owns provider  │
+│ rustls-tls-no-provider               -         rustls, no provider & no bundled roots│
 │ rustls-tls-webpki-roots-no-provider  -         rustls + webpki roots, no provider    │
 │ native-tls                           -         TLS via OpenSSL/SecureTransport       │
 └──────────────────────────────────────────────────────────────────────────────────────┘
@@ -675,19 +675,23 @@ opentdf = "0.16"
 
 ```toml
 # Recommended: Secure defaults (aws-lc-rs + rustls)
-opentdf = "0.19"
+opentdf = "0.20"
 
-# Application-governed TLS / FIPS (e.g. with crypto-profile + KasClient::with_http_client)
-opentdf = { version = "0.19", default-features = false, features = ["kas-client", "rustls-tls-no-provider"] }
+# Application-governed TLS / FIPS (pass a preconfigured rustls::ClientConfig via
+# KasClient::with_http_client_builder or KasClient::with_http_client; no bundled roots)
+opentdf = { version = "0.20", default-features = false, features = ["kas-client", "rustls-tls-no-provider"] }
+
+# Application-installed process-default CryptoProvider + bundled Mozilla webpki roots
+opentdf = { version = "0.20", default-features = false, features = ["kas-client", "rustls-tls-webpki-roots-no-provider"] }
 
 # Pure Rust: No C compiler needed (not FIPS validated)
-opentdf = { version = "0.19", default-features = false, features = ["kas-client-rustcrypto", "rustls-tls"] }
+opentdf = { version = "0.20", default-features = false, features = ["kas-client-rustcrypto", "rustls-tls"] }
 
 # Native TLS: Use system TLS (OpenSSL on Linux, SecureTransport on macOS)
-opentdf = { version = "0.19", default-features = false, features = ["kas-client", "native-tls"] }
+opentdf = { version = "0.20", default-features = false, features = ["kas-client", "native-tls"] }
 
 # Minimal: Core TDF operations only (no KAS client, no async)
-opentdf = { version = "0.19", default-features = false }
+opentdf = { version = "0.20", default-features = false }
 ```
 
 #### WASM Note

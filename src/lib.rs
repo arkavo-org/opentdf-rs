@@ -49,6 +49,24 @@ pub mod pdp;
 mod policy;
 mod tdf;
 
+// Fail loudly at compile time when a KAS client feature is enabled with
+// `default-features = false` and no TLS backend feature is selected.
+#[cfg(all(
+    feature = "_kas-client-base",
+    not(any(
+        feature = "rustls-tls",
+        feature = "rustls-tls-no-provider",
+        feature = "rustls-tls-webpki-roots-no-provider",
+        feature = "native-tls",
+    ))
+))]
+compile_error!(
+    "opentdf: `kas-client` / `kas-client-rustcrypto` requires an explicit TLS feature when \
+     `default-features = false` is set. Enable one of: `rustls-tls`, `native-tls`, \
+     `rustls-tls-no-provider` (manual roots / `use_preconfigured_tls`), or \
+     `rustls-tls-webpki-roots-no-provider` (webpki roots + process-default CryptoProvider)."
+);
+
 #[cfg(feature = "kas-client")]
 pub mod kas;
 
