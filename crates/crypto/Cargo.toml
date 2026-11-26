@@ -86,7 +86,7 @@ nanotdf = ["kem-ec"]
 
 # Use Mbed TLS for NanoTDF GCM operations (supports 64-128 bit tags, 64-bit is NanoTDF default)
 # NOTE: This feature is under development. Use RustCrypto (96-128 bit tags) for now.
-nanotdf-mbedtls = ["mbedtls"]
+nanotdf-mbedtls = ["kem-ec", "mbedtls"]
 
 # Deprecated aliases for backwards compatibility
 kas = ["aws-lc-provider", "kem-rsa", "kem-ec"]

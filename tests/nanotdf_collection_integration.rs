@@ -575,9 +575,7 @@ fn test_header_roundtrip() {
 
 #[test]
 fn test_policy_binding_gmac() {
-    use opentdf_crypto::sha2::{Digest, Sha256};
-
-    let (_, public_key) = generate_test_keypair();
+    let (private_key, public_key) = generate_test_keypair();
 
     let policy_body = b"test-policy-for-binding";
 
@@ -591,18 +589,39 @@ fn test_policy_binding_gmac() {
     // Get header
     let header = collection.header();
 
-    // Verify policy binding is GMAC (SHA-256 last 8 bytes)
-    let expected_hash = Sha256::digest(policy_body);
-    let expected_binding = &expected_hash[24..]; // Last 8 bytes
-
     assert_eq!(
         header.policy.binding.len(),
         8,
-        "GMAC binding should be 8 bytes"
+        "Keyed policy binding should be 8 bytes"
     );
-    assert_eq!(
-        header.policy.binding, expected_binding,
-        "Policy binding should match SHA-256 last 8 bytes"
+
+    // Keyed binding must NOT equal an unkeyed SHA-256 digest
+    use opentdf_crypto::sha2::{Digest, Sha256};
+    let unkeyed_hash = Sha256::digest(policy_body);
+    assert_ne!(
+        header.policy.binding.as_slice(),
+        &unkeyed_hash[24..],
+        "Policy binding must be keyed with DEK, not unkeyed SHA-256"
+    );
+
+    // Untampered header decrypts cleanly
+    let header_bytes = collection.to_header_bytes().unwrap();
+    assert!(
+        NanoTdfCollectionDecryptor::from_header_with_kas_key(&header_bytes, &private_key).is_ok()
+    );
+
+    // Tampered policy body with recomputed unkeyed SHA-256 must be rejected
+    let mut tampered_header = header.clone();
+    let forged_policy = b"forged-permissive-policy".to_vec();
+    tampered_header.policy.body =
+        opentdf_protocol::nanotdf::policy::PolicyBody::EmbeddedPlaintext(forged_policy.clone());
+    tampered_header.policy.binding = Sha256::digest(&forged_policy)[24..].to_vec();
+    let mut tampered_bytes = Vec::new();
+    opentdf_protocol::binary::BinaryWrite::write_to(&tampered_header, &mut tampered_bytes).unwrap();
+    assert!(
+        NanoTdfCollectionDecryptor::from_header_with_kas_key(&tampered_bytes, &private_key)
+            .is_err(),
+        "Tampered policy must fail keyed policy binding verification"
     );
 }
 

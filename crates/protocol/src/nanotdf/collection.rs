@@ -30,7 +30,7 @@
 //! - IV range: 1 to 0x00FFFFFF (16,777,215 items max per DEK)
 //! - GCM nonce expansion: `[9 zero bytes][3-byte IV counter]` (JS SDK interop)
 
-use crate::binary::{read_u24_be, write_u24_be};
+use crate::binary::{read_bytes, read_u24_be, write_u24_be};
 use std::io::{self, Read, Write};
 
 /// Maximum IV value (2^24 - 1 = 16,777,215)
@@ -69,40 +69,63 @@ impl CollectionItem {
         }
     }
 
+    /// Validate that this item's IV is in the allowed 24-bit range (1..=MAX_IV).
+    pub fn validate_iv(&self) -> io::Result<()> {
+        if self.iv == RESERVED_POLICY_IV {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Collection item IV 0 is reserved for encrypted policy",
+            ));
+        }
+        if self.iv > MAX_IV {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("Collection item IV {} exceeds MAX_IV {}", self.iv, MAX_IV),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Checked container framing: `[IV (3B)][ciphertext][tag]`.
+    pub fn try_to_bytes(&self) -> io::Result<Vec<u8>> {
+        self.validate_iv()?;
+        let mut buf = Vec::with_capacity(3 + self.ciphertext_and_tag.len());
+        self.write_to(&mut buf)?;
+        Ok(buf)
+    }
+
+    /// Checked NanoTDF payload framing: `[length (3B)][IV (3B)][ciphertext][tag]`.
+    pub fn try_to_nanotdf_payload_bytes(&self) -> io::Result<Vec<u8>> {
+        let mut buf = Vec::with_capacity(6 + self.ciphertext_and_tag.len());
+        self.write_nanotdf_payload_to(&mut buf)?;
+        Ok(buf)
+    }
+
     /// Container framing: [IV (3B)][ciphertext][tag]
     ///
     /// Use this format when the container (FLV/RTMP) provides the length.
     /// This is the minimal wire format for streaming scenarios.
+    ///
+    /// # Panics
+    /// Panics if `self.iv` is `0` (`RESERVED_POLICY_IV`) or exceeds `MAX_IV` (`0x00FF_FFFF`).
+    /// Use [`try_to_bytes`](Self::try_to_bytes) for fallible serialization.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(3 + self.ciphertext_and_tag.len());
-        // Write IV as 3 bytes big-endian
-        buf.push(((self.iv >> 16) & 0xFF) as u8);
-        buf.push(((self.iv >> 8) & 0xFF) as u8);
-        buf.push((self.iv & 0xFF) as u8);
-        buf.extend_from_slice(&self.ciphertext_and_tag);
-        buf
+        self.try_to_bytes()
+            .expect("CollectionItem::to_bytes called with invalid IV")
     }
 
     /// NanoTDF payload framing: [length (3B)][IV (3B)][ciphertext][tag]
     ///
     /// This is spec-compliant format with a 3-byte length prefix.
     /// Use this when you need a self-describing payload format.
+    ///
+    /// # Panics
+    /// Panics if `self.iv` is out of range or `3 + ciphertext_and_tag.len() > 0x00FF_FFFF`.
+    /// Use [`try_to_nanotdf_payload_bytes`](Self::try_to_nanotdf_payload_bytes) for fallible serialization.
     pub fn to_nanotdf_payload_bytes(&self) -> Vec<u8> {
-        let payload_len = 3 + self.ciphertext_and_tag.len();
-        let mut buf = Vec::with_capacity(3 + payload_len);
-
-        // Write length (3 bytes big-endian) - includes IV + ciphertext + tag
-        buf.push(((payload_len >> 16) & 0xFF) as u8);
-        buf.push(((payload_len >> 8) & 0xFF) as u8);
-        buf.push((payload_len & 0xFF) as u8);
-
-        // Write IV as 3 bytes big-endian
-        buf.push(((self.iv >> 16) & 0xFF) as u8);
-        buf.push(((self.iv >> 8) & 0xFF) as u8);
-        buf.push((self.iv & 0xFF) as u8);
-
-        buf.extend_from_slice(&self.ciphertext_and_tag);
-        buf
+        self.try_to_nanotdf_payload_bytes().expect(
+            "CollectionItem::to_nanotdf_payload_bytes called with invalid IV or oversized payload",
+        )
     }
 
     /// Parse from container framing: [IV (3B)][ciphertext][tag]
@@ -182,8 +205,7 @@ impl CollectionItem {
             ));
         }
 
-        let mut bytes = vec![0u8; total_len];
-        reader.read_exact(&mut bytes)?;
+        let bytes = read_bytes(reader, total_len)?;
         Self::from_bytes(&bytes)
     }
 
@@ -201,13 +223,13 @@ impl CollectionItem {
             ));
         }
 
-        let mut payload = vec![0u8; length];
-        reader.read_exact(&mut payload)?;
+        let payload = read_bytes(reader, length)?;
         Self::from_bytes(&payload)
     }
 
     /// Write to a writer using container framing
     pub fn write_to<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        self.validate_iv()?;
         // Write IV as 3 bytes big-endian
         writer.write_all(&[
             ((self.iv >> 16) & 0xFF) as u8,
@@ -219,7 +241,18 @@ impl CollectionItem {
 
     /// Write to a writer using NanoTDF payload framing
     pub fn write_nanotdf_payload_to<W: Write>(&self, writer: &mut W) -> io::Result<()> {
-        let payload_len = (3 + self.ciphertext_and_tag.len()) as u32;
+        self.validate_iv()?;
+        let payload_len = self
+            .ciphertext_and_tag
+            .len()
+            .checked_add(3)
+            .and_then(|n| u32::try_from(n).ok())
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "NanoTDF payload length exceeds u24 maximum",
+                )
+            })?;
         write_u24_be(writer, payload_len)?;
         self.write_to(writer)
     }
@@ -339,5 +372,16 @@ mod tests {
         assert_eq!(MAX_IV, 0x00FF_FFFF);
         assert_eq!(RESERVED_POLICY_IV, 0);
         assert_eq!(DEFAULT_ROTATION_THRESHOLD, 0x0080_0000);
+    }
+
+    #[test]
+    fn test_invalid_iv_rejected_on_write() {
+        let zero_iv = CollectionItem::new(0, vec![1, 2, 3]);
+        assert!(zero_iv.try_to_bytes().is_err());
+        assert!(zero_iv.try_to_nanotdf_payload_bytes().is_err());
+
+        let too_large = CollectionItem::new(MAX_IV + 1, vec![1, 2, 3]);
+        assert!(too_large.try_to_bytes().is_err());
+        assert!(too_large.try_to_nanotdf_payload_bytes().is_err());
     }
 }

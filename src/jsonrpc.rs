@@ -332,6 +332,20 @@ impl TdfJson {
             .decrypt(nonce, ciphertext.as_ref())
             .map_err(EncryptionError::AeadError)?;
 
+        // Verify segment hash and root signature against the AES-GCM tag
+        const GCM_TAG_LENGTH: usize = 16;
+        if ciphertext.len() < GCM_TAG_LENGTH {
+            return Err(EncryptionError::SegmentError(
+                "Ciphertext too short for GMAC tag".to_string(),
+            ));
+        }
+        let gmac_tag = ciphertext[ciphertext.len() - GCM_TAG_LENGTH..].to_vec();
+        self.manifest
+            .encryption_information
+            .integrity_information
+            .verify_segments_and_root_signature(&[gmac_tag], payload_key)
+            .map_err(|e| EncryptionError::SegmentError(e.to_string()))?;
+
         Ok(plaintext)
     }
 
@@ -521,7 +535,9 @@ impl TdfJsonBuilder {
 
         // Create created timestamp if requested
         let created = if self.include_created {
-            Some(chrono::Utc::now().to_rfc3339())
+            time::OffsetDateTime::now_utc()
+                .format(&time::format_description::well_known::Rfc3339)
+                .ok()
         } else {
             None
         };
@@ -635,6 +651,20 @@ impl TdfJsonRpc {
         let plaintext = cipher
             .decrypt(nonce, ciphertext.as_ref())
             .map_err(EncryptionError::AeadError)?;
+
+        // Verify segment hash and root signature against the AES-GCM tag
+        const GCM_TAG_LENGTH: usize = 16;
+        if ciphertext.len() < GCM_TAG_LENGTH {
+            return Err(EncryptionError::SegmentError(
+                "Ciphertext too short for GMAC tag".to_string(),
+            ));
+        }
+        let gmac_tag = ciphertext[ciphertext.len() - GCM_TAG_LENGTH..].to_vec();
+        self.manifest
+            .encryption_information
+            .integrity_information
+            .verify_segments_and_root_signature(&[gmac_tag], payload_key)
+            .map_err(|e| EncryptionError::SegmentError(e.to_string()))?;
 
         Ok(plaintext)
     }
@@ -848,13 +878,10 @@ impl TdfJsonRpcBuilder {
             ephemeral_public_key: None, // RSA wrapping, no ephemeral key needed
         };
 
-        // Calculate encrypted size from base64 string length (more efficient than decoding)
-        // Base64 encoding: 4 chars per 3 bytes, so decoded_len = (encoded_len * 3) / 4
-        let encrypted_size = ((encrypted_payload.ciphertext.len() * 3) / 4) as u64;
-
         // Extract GMAC tag from encrypted payload (last 16 bytes of ciphertext)
         // AES-GCM encryption appends the authentication tag to the ciphertext
         let ciphertext_bytes = BASE64.decode(&encrypted_payload.ciphertext)?;
+        let encrypted_size = ciphertext_bytes.len() as u64;
         let gmac_tag = if ciphertext_bytes.len() >= 16 {
             ciphertext_bytes[ciphertext_bytes.len() - 16..].to_vec()
         } else {
@@ -1040,26 +1067,28 @@ mod tests {
             ephemeral_public_key: None,
         };
 
+        let ciphertext_bytes = BASE64.decode(&encrypted_payload.ciphertext).unwrap();
+        let ciphertext_len = ciphertext_bytes.len() as u64;
+        let gmac_tag = ciphertext_bytes[ciphertext_bytes.len() - 16..].to_vec();
+
         // Create integrity information
-        let integrity_info = IntegrityInformation {
+        let mut integrity_info = IntegrityInformation {
             root_signature: RootSignature {
                 alg: "HS256".to_string(),
                 sig: String::new(),
             },
             segment_hash_alg: "GMAC".to_string(),
             segments: vec![Segment {
-                hash: String::new(),
+                hash: BASE64.encode(&gmac_tag),
                 segment_size: Some(original_data.len() as u64),
-                encrypted_segment_size: Some(
-                    BASE64.decode(&encrypted_payload.ciphertext).unwrap().len() as u64,
-                ),
+                encrypted_segment_size: Some(ciphertext_len),
             }],
             segment_size_default: original_data.len() as u64,
-            encrypted_segment_size_default: BASE64
-                .decode(&encrypted_payload.ciphertext)
-                .unwrap()
-                .len() as u64,
+            encrypted_segment_size_default: ciphertext_len,
         };
+        integrity_info
+            .generate_root_signature(&[gmac_tag], &payload_key)
+            .expect("Failed to generate root signature");
 
         // Create encryption information
         let encryption_info = EncryptionInformation {
@@ -1415,23 +1444,28 @@ mod tests {
             ephemeral_public_key: None,
         };
 
-        let ciphertext_len = BASE64.decode(&encrypted_payload.ciphertext).unwrap().len() as u64;
+        let ciphertext_bytes = BASE64.decode(&encrypted_payload.ciphertext).unwrap();
+        let ciphertext_len = ciphertext_bytes.len() as u64;
+        let gmac_tag = ciphertext_bytes[ciphertext_bytes.len() - 16..].to_vec();
 
-        // Create integrity information
-        let integrity_info = IntegrityInformation {
+        // Create integrity information with valid segment hash and root signature
+        let mut integrity_info = IntegrityInformation {
             root_signature: RootSignature {
                 alg: "HS256".to_string(),
                 sig: String::new(),
             },
             segment_hash_alg: "GMAC".to_string(),
             segments: vec![Segment {
-                hash: String::new(),
+                hash: BASE64.encode(&gmac_tag),
                 segment_size: Some(original_data.len() as u64),
                 encrypted_segment_size: Some(ciphertext_len),
             }],
             segment_size_default: original_data.len() as u64,
             encrypted_segment_size_default: ciphertext_len,
         };
+        integrity_info
+            .generate_root_signature(&[gmac_tag], &payload_key)
+            .expect("Failed to generate root signature");
 
         // Create encryption information
         let encryption_info = EncryptionInformation {

@@ -58,7 +58,13 @@ pub use tdf::{
 
 // RSA KEM exports
 #[cfg(feature = "kem-rsa")]
-pub use kem::rsa::{OaepHash, RsaOaepKem, wrap_key_with_rsa_oaep};
+pub use kem::rsa::{OaepHash, RsaOaepKem};
+
+#[cfg(all(
+    feature = "kem-rsa",
+    any(feature = "aws-lc-provider", feature = "rustcrypto-provider")
+))]
+pub use kem::rsa::wrap_key_with_rsa_oaep;
 
 // EC KEM exports
 #[cfg(feature = "kem-ec")]

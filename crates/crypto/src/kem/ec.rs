@@ -430,27 +430,21 @@ pub fn wrap_key_with_ec(
     use rand::rngs::OsRng;
     use sha2::Sha256;
 
-    // Parse PEM to get DER bytes
-    let pem_lines: Vec<&str> = recipient_public_key_pem.lines().collect();
-    let base64_content: String = pem_lines
-        .iter()
-        .filter(|line| !line.starts_with("-----"))
-        .map(|s| s.trim())
+    // Parse PEM to get DER bytes (trim before filtering armor lines)
+    let base64_content: String = recipient_public_key_pem
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.starts_with("-----") && !line.is_empty())
         .collect();
     let der_bytes = BASE64
         .decode(&base64_content)
         .map_err(|e| KemError::InvalidKey(format!("Invalid PEM encoding: {}", e)))?;
 
-    // Parse recipient's public key from DER (SPKI format)
-    let recipient_key = PublicKey::from_sec1_bytes(&der_bytes)
-        .or_else(|_| {
-            // Try parsing as SPKI (SubjectPublicKeyInfo) format using proper ASN.1 parsing
-            use p256::pkcs8::spki::SubjectPublicKeyInfoRef;
-            let spki = SubjectPublicKeyInfoRef::try_from(der_bytes.as_slice())
-                .map_err(|_| p256::elliptic_curve::Error)?;
-            // Extract the raw public key bytes from the SPKI structure
-            PublicKey::from_sec1_bytes(spki.subject_public_key.raw_bytes())
-        })
+    // Parse recipient's public key: accept standard SPKI (validating P-256 curve OID)
+    // or raw SEC1 point bytes (33 or 65 bytes).
+    use p256::pkcs8::DecodePublicKey;
+    let recipient_key = PublicKey::from_public_key_der(&der_bytes)
+        .or_else(|_| PublicKey::from_sec1_bytes(&der_bytes))
         .map_err(|_| KemError::InvalidPublicKey)?;
 
     // Generate ephemeral key pair
@@ -514,42 +508,44 @@ pub fn unwrap_key_with_ec(
     use p256::{PublicKey, SecretKey};
     use sha2::Sha256;
 
-    // Parse private key from PEM
-    let pem_lines: Vec<&str> = private_key_pem.lines().collect();
-    let base64_content: String = pem_lines
-        .iter()
-        .filter(|line| !line.starts_with("-----"))
-        .map(|s| s.trim())
-        .collect();
-    let der_bytes = BASE64
-        .decode(&base64_content)
-        .map_err(|e| KemError::InvalidKey(format!("Invalid PEM encoding: {}", e)))?;
+    // Parse private key from PEM (trim before filtering; zeroize temporary key buffers)
+    let base64_content = Zeroizing::new(
+        private_key_pem
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.starts_with("-----") && !line.is_empty())
+            .collect::<String>(),
+    );
+    let der_bytes = Zeroizing::new(
+        BASE64
+            .decode(base64_content.as_str())
+            .map_err(|e| KemError::InvalidKey(format!("Invalid PEM encoding: {}", e)))?,
+    );
 
     let private_key = SecretKey::from_pkcs8_der(&der_bytes)
         .or_else(|_| SecretKey::from_sec1_der(&der_bytes))
         .map_err(|_| KemError::InvalidPrivateKey)?;
 
-    // Parse ephemeral public key - supports both base64 SEC1 and PEM formats
+    // Parse ephemeral public key - supports base64 SEC1 and SPKI/SEC1 PEM formats
+    use p256::pkcs8::DecodePublicKey;
     let ephemeral_bytes = if ephemeral_public_key_pem.contains("-----BEGIN") {
-        // PEM format (legacy)
-        let pem_lines: Vec<&str> = ephemeral_public_key_pem.lines().collect();
-        let base64_content: String = pem_lines
-            .iter()
-            .filter(|line| !line.starts_with("-----"))
-            .map(|s| s.trim())
+        let base64_content: String = ephemeral_public_key_pem
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.starts_with("-----") && !line.is_empty())
             .collect();
         BASE64
             .decode(&base64_content)
             .map_err(|e| KemError::InvalidKey(format!("Invalid ephemeral PEM encoding: {}", e)))?
     } else {
-        // Base64 SEC1 format (compressed or uncompressed)
         BASE64
-            .decode(ephemeral_public_key_pem)
+            .decode(ephemeral_public_key_pem.trim())
             .map_err(|e| KemError::InvalidKey(format!("Invalid ephemeral key encoding: {}", e)))?
     };
 
-    let ephemeral_public =
-        PublicKey::from_sec1_bytes(&ephemeral_bytes).map_err(|_| KemError::InvalidPublicKey)?;
+    let ephemeral_public = PublicKey::from_public_key_der(&ephemeral_bytes)
+        .or_else(|_| PublicKey::from_sec1_bytes(&ephemeral_bytes))
+        .map_err(|_| KemError::InvalidPublicKey)?;
 
     // Perform ECDH
     let shared_secret = p256::ecdh::diffie_hellman(
@@ -568,8 +564,8 @@ pub fn unwrap_key_with_ec(
         .decode(wrapped_key_base64)
         .map_err(|e| KemError::UnwrapError(format!("Invalid wrapped key encoding: {}", e)))?;
 
-    // Parse: nonce (12) + ciphertext (32) + tag (16) = 60 bytes minimum for AES-256 key
-    if wrapped_data.len() < 60 {
+    // Minimum size: 12-byte nonce + 16-byte GCM tag = 28 bytes
+    if wrapped_data.len() < 28 {
         return Err(KemError::UnwrapError("Wrapped key too short".into()));
     }
 
@@ -628,7 +624,7 @@ mod tests {
         use sha2::{Digest, Sha256};
         let magic_and_version = [0x4C, 0x31, 0x4C];
         let expected_salt = Sha256::digest(magic_and_version);
-        assert_eq!(NANOTDF_HKDF_SALT, expected_salt.as_slice());
+        assert_eq!(NANOTDF_HKDF_SALT, &expected_salt[..]);
     }
 
     #[test]
@@ -681,5 +677,37 @@ mod tests {
             assert_eq!(key.as_slice().len(), 32); // Should be 32 bytes for AES-256
             assert_eq!(ephemeral.len(), curve.public_key_size());
         }
+    }
+
+    #[test]
+    fn test_wrap_and_unwrap_key_with_ec_spki_and_short_key() {
+        use p256::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
+
+        let secret = p256::SecretKey::generate();
+        let pub_pem = secret
+            .public_key()
+            .to_public_key_pem(LineEnding::LF)
+            .unwrap();
+        let priv_pem = secret.to_pkcs8_pem(LineEnding::LF).unwrap();
+
+        // 16-byte AES-128 key must round-trip as well as 32-byte keys
+        let dek16 = [0x5Au8; 16];
+        let wrapped = wrap_key_with_ec(&pub_pem, &dek16).unwrap();
+        let unwrapped = unwrap_key_with_ec(
+            &priv_pem,
+            &wrapped.wrapped_key,
+            &wrapped.ephemeral_public_key,
+        )
+        .unwrap();
+        assert_eq!(unwrapped, dek16);
+
+        // Standard SPKI PEM ephemeral key (with indented armor lines) must also unwrap
+        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+        let eph_sec1 = BASE64.decode(&wrapped.ephemeral_public_key).unwrap();
+        let eph_pk = p256::PublicKey::from_sec1_bytes(&eph_sec1).unwrap();
+        let eph_spki_pem = format!("  {}", eph_pk.to_public_key_pem(LineEnding::LF).unwrap());
+        let unwrapped_spki =
+            unwrap_key_with_ec(&priv_pem, &wrapped.wrapped_key, &eph_spki_pem).unwrap();
+        assert_eq!(unwrapped_spki, dek16);
     }
 }

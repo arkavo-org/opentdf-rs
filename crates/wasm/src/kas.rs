@@ -36,20 +36,82 @@ pub struct KasPublicKeyResponse {
 /// # Returns
 ///
 /// The KAS public key response with PEM-encoded RSA public key and key ID
-pub async fn fetch_kas_public_key(kas_url: &str) -> Result<KasPublicKeyResponse, String> {
-    // Construct the public key endpoint URL
-    let endpoint = if kas_url.ends_with("/kas") {
-        format!("{}/v2/kas_public_key", kas_url)
-    } else if kas_url.ends_with('/') {
-        format!("{}v2/kas_public_key", kas_url)
-    } else {
-        format!("{}/v2/kas_public_key", kas_url)
-    };
+/// Validate and build the KAS public key endpoint URL.
+///
+/// Enforces HTTPS (allowing HTTP only for loopback hosts), rejects userinfo,
+/// query strings, and fragments, and builds the path via `url::Url`.
+fn build_public_key_endpoint(kas_url: &str) -> Result<String, String> {
+    let mut parsed =
+        url::Url::parse(kas_url).map_err(|e| format!("Invalid KAS URL '{}': {}", kas_url, e))?;
 
-    // Create request
+    match parsed.scheme() {
+        "https" => {}
+        "http" => {
+            let is_loopback = match parsed.host() {
+                Some(url::Host::Domain("localhost")) => true,
+                Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+                Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+                _ => false,
+            };
+            if !is_loopback {
+                return Err(
+                    "KAS URL must use HTTPS (HTTP is only allowed for localhost/loopback)"
+                        .to_string(),
+                );
+            }
+        }
+        other => {
+            return Err(format!(
+                "Unsupported KAS URL scheme '{}': must be https",
+                other
+            ));
+        }
+    }
+
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("KAS URL must not contain userinfo".to_string());
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err("KAS URL must not contain query or fragment".to_string());
+    }
+
+    let base_path = parsed.path().trim_end_matches('/');
+    let new_path = if base_path.ends_with("/kas") {
+        format!("{}/v2/kas_public_key", base_path)
+    } else {
+        format!("{}/kas/v2/kas_public_key", base_path)
+    };
+    parsed.set_path(&new_path);
+    Ok(parsed.into())
+}
+
+/// Issue a `fetch(request)` call in either a browser `Window` or a Web Worker / global context.
+fn fetch_with_request(request: &Request) -> Result<js_sys::Promise, String> {
+    if let Some(window) = web_sys::window() {
+        return Ok(window.fetch_with_request(request));
+    }
+    let global = js_sys::global();
+    let fetch_val = js_sys::Reflect::get(&global, &wasm_bindgen::JsValue::from_str("fetch"))
+        .map_err(|_| "No fetch function available in this environment".to_string())?;
+    let fetch_fn: js_sys::Function = fetch_val
+        .dyn_into()
+        .map_err(|_| "globalThis.fetch is not a function".to_string())?;
+    let promise = fetch_fn
+        .call1(&global, request)
+        .map_err(|e| format!("Failed to invoke fetch: {:?}", e))?;
+    promise
+        .dyn_into()
+        .map_err(|_| "fetch did not return a Promise".to_string())
+}
+
+pub async fn fetch_kas_public_key(kas_url: &str) -> Result<KasPublicKeyResponse, String> {
+    let endpoint = build_public_key_endpoint(kas_url)?;
+
+    // Create request (refuse redirects so a 3xx cannot substitute a public key from another host)
     let opts = RequestInit::new();
     opts.set_method("GET");
     opts.set_mode(RequestMode::Cors);
+    opts.set_redirect(RequestRedirect::Error);
 
     let request = Request::new_with_str_and_init(&endpoint, &opts)
         .map_err(|e| format!("Failed to create request: {:?}", e))?;
@@ -60,9 +122,8 @@ pub async fn fetch_kas_public_key(kas_url: &str) -> Result<KasPublicKeyResponse,
         .set("Accept", "application/json")
         .map_err(|e| format!("Failed to set headers: {:?}", e))?;
 
-    // Make the request using browser's fetch API
-    let window = web_sys::window().ok_or("No window object available")?;
-    let resp_value = JsFuture::from(window.fetch_with_request(&request))
+    // Make the request using browser/worker fetch API
+    let resp_value = JsFuture::from(fetch_with_request(&request)?)
         .await
         .map_err(|e| format!("Fetch failed: {:?}", e))?;
 
@@ -308,9 +369,8 @@ pub async fn post_rewrap_request(
         .set("Accept", "application/json")
         .map_err(|e| format!("Failed to set accept header: {:?}", e))?;
 
-    // Make request
-    let window = web_sys::window().ok_or("No window object")?;
-    let resp_value = JsFuture::from(window.fetch_with_request(&request))
+    // Make request (works in both Window and Web Worker contexts)
+    let resp_value = JsFuture::from(fetch_with_request(&request)?)
         .await
         .map_err(|e| format!("Fetch failed: {:?}", e))?;
 
@@ -339,7 +399,9 @@ pub async fn post_rewrap_request(
     let rewrap_resp: RewrapResponse = serde_wasm_bindgen::from_value(json)
         .map_err(|e| format!("Failed to deserialize response: {:?}", e))?;
 
-    // Extract wrapped key from response
+    // Extract wrapped key from response: prefer the first permitted result
+    // (supporting out-of-order multi-KAO responses), falling back to reporting
+    // the first denial if none permitted.
     let policy_result = rewrap_resp
         .responses
         .first()
@@ -347,7 +409,9 @@ pub async fn post_rewrap_request(
 
     let key_result = policy_result
         .results
-        .first()
+        .iter()
+        .find(|r| r.status == "permit")
+        .or_else(|| policy_result.results.first())
         .ok_or("No key results in response")?;
 
     // Check access status
@@ -359,11 +423,17 @@ pub async fn post_rewrap_request(
         return Err(format!("KAS denied access: {}", error_msg));
     }
 
-    // Get wrapped key (try kasWrappedKey first, then legacy entityWrappedKey)
+    // Get wrapped key (try non-empty kasWrappedKey first, then legacy entityWrappedKey)
     let wrapped_key_b64 = key_result
         .kas_wrapped_key
         .as_ref()
-        .or(key_result.entity_wrapped_key.as_ref())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            key_result
+                .entity_wrapped_key
+                .as_ref()
+                .filter(|s| !s.is_empty())
+        })
         .ok_or("Missing wrapped key in response")?;
 
     let wrapped_key = BASE64
@@ -403,5 +473,34 @@ mod tests {
                 .starts_with("-----BEGIN PUBLIC KEY-----")
         );
         assert_eq!(response.kid, "r1");
+    }
+
+    #[test]
+    fn test_build_public_key_endpoint_security() {
+        assert_eq!(
+            build_public_key_endpoint("https://kas.example.com").unwrap(),
+            "https://kas.example.com/kas/v2/kas_public_key"
+        );
+        assert_eq!(
+            build_public_key_endpoint("https://kas.example.com/kas").unwrap(),
+            "https://kas.example.com/kas/v2/kas_public_key"
+        );
+        assert_eq!(
+            build_public_key_endpoint("https://kas.example.com/kas/").unwrap(),
+            "https://kas.example.com/kas/v2/kas_public_key"
+        );
+        assert_eq!(
+            build_public_key_endpoint("http://localhost:8080/kas").unwrap(),
+            "http://localhost:8080/kas/v2/kas_public_key"
+        );
+        assert_eq!(
+            build_public_key_endpoint("http://127.0.0.1:8080").unwrap(),
+            "http://127.0.0.1:8080/kas/v2/kas_public_key"
+        );
+        assert!(build_public_key_endpoint("http://kas.example.com/kas").is_err());
+        assert!(build_public_key_endpoint("https://user:pass@kas.example.com/kas").is_err());
+        assert!(build_public_key_endpoint("https://kas.example.com/kas?foo=bar").is_err());
+        assert!(build_public_key_endpoint("https://kas.example.com/kas#frag").is_err());
+        assert!(build_public_key_endpoint("javascript:alert(1)").is_err());
     }
 }

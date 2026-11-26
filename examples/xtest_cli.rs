@@ -495,7 +495,9 @@ fn encrypt_json(
     let envelope = TdfJson {
         tdf: "json".to_string(),
         version: "1.0.0".to_string(),
-        created: Some(chrono::Utc::now().to_rfc3339()),
+        created: time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .ok(),
         manifest: TdfJsonManifest {
             encryption_information: encryption_info,
             assertions: None,

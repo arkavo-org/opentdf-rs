@@ -91,12 +91,16 @@ impl TagSize {
 pub struct NanoTdfIv([u8; 3]);
 
 impl NanoTdfIv {
-    /// Create a new random IV
+    /// Create a new random IV (never emits the reserved `POLICY_IV` `[0, 0, 0]`)
     pub fn random() -> Self {
         let mut rng = rand::thread_rng();
         let mut iv = [0u8; 3];
-        rng.fill_bytes(&mut iv);
-        Self(iv)
+        loop {
+            rng.fill_bytes(&mut iv);
+            if iv != Self::POLICY_IV.0 {
+                return Self(iv);
+            }
+        }
     }
 
     /// Create from bytes
@@ -119,10 +123,10 @@ impl NanoTdfIv {
         &self.0
     }
 
-    /// Convert to 12-byte nonce for AES-GCM (pad with zeros)
+    /// Convert to 12-byte nonce for AES-GCM (pad with 9 leading zeros: `[0; 9] || iv`)
     pub fn to_gcm_nonce(&self) -> [u8; 12] {
         let mut nonce = [0u8; 12];
-        nonce[0..3].copy_from_slice(&self.0);
+        nonce[9..12].copy_from_slice(&self.0);
         nonce
     }
 

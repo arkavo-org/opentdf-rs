@@ -74,10 +74,28 @@ impl AttributeFqn {
             });
         }
 
+        // Reject query strings or fragments in FQN URLs
+        if rest.contains('?') || rest.contains('#') {
+            return Err(FqnError::MalformedUrl(
+                "FQN must not contain query string or fragment".to_string(),
+            ));
+        }
+
         // Parse namespace (everything before first /)
         let (namespace, path) = match rest.split_once('/') {
             Some((ns, p)) => (ns, p),
             None => {
+                if rest.is_empty() {
+                    return Err(FqnError::MissingComponent {
+                        component: "namespace",
+                    });
+                }
+                if rest.contains('@') {
+                    return Err(FqnError::InvalidNamespace {
+                        namespace: rest.to_string(),
+                        reason: "Namespace must not contain userinfo ('@')".to_string(),
+                    });
+                }
                 // Just a namespace, no path
                 return Ok(Self {
                     namespace: rest.to_lowercase(),
@@ -93,11 +111,17 @@ impl AttributeFqn {
                 component: "namespace",
             });
         }
+        if namespace.contains('@') {
+            return Err(FqnError::InvalidNamespace {
+                namespace: namespace.to_string(),
+                reason: "Namespace must not contain userinfo ('@')".to_string(),
+            });
+        }
 
         let namespace = namespace.to_lowercase(); // Case-insensitive
 
-        // If we require /attr/ structure, validate it
-        if rules.require_attr_structure {
+        // If path uses standard /attr/ structure (or rules require it), parse attr/<name>[/value/<value>]
+        if rules.require_attr_structure || path.starts_with("attr/") {
             if !path.starts_with("attr/") {
                 return Err(FqnError::MissingAttrStructure { url: s.to_string() });
             }
@@ -111,6 +135,12 @@ impl AttributeFqn {
 
             // Split remaining path
             if let Some((name, value_part)) = path.split_once("/value/") {
+                if name.is_empty() {
+                    return Err(FqnError::MissingComponent { component: "name" });
+                }
+                if value_part.is_empty() {
+                    return Err(FqnError::MissingComponent { component: "value" });
+                }
                 // Has value component
                 Ok(Self {
                     namespace,
@@ -129,7 +159,7 @@ impl AttributeFqn {
             // Lenient parsing - just split on /
             let parts: Vec<&str> = path.split('/').collect();
             match parts.as_slice() {
-                [] => Ok(Self {
+                [] | [""] => Ok(Self {
                     namespace,
                     name: String::new(),
                     value: None,
@@ -364,40 +394,41 @@ impl Default for NamespaceRegistry {
     }
 }
 
-/// Simple percent-encoding for URL paths
+/// RFC 3986 percent-encoding for UTF-8 URL path segments
 fn percent_encode(s: &str) -> String {
-    s.chars()
-        .map(|c| match c {
-            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
-            _ => format!("%{:02X}", c as u8),
-        })
-        .collect()
-}
-
-/// Simple percent-decoding for URL paths
-fn percent_decode(s: &str) -> String {
-    let mut result = String::new();
-    let mut chars = s.chars();
-
-    while let Some(c) = chars.next() {
-        if c == '%' {
-            // Try to read two hex digits
-            let hex: String = chars.by_ref().take(2).collect();
-            if hex.len() == 2
-                && let Ok(byte) = u8::from_str_radix(&hex, 16)
-            {
-                result.push(byte as char);
-                continue;
-            }
-            // If decoding fails, keep the original
-            result.push('%');
-            result.push_str(&hex);
+    let mut out = String::with_capacity(s.len());
+    for &b in s.as_bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(b as char);
         } else {
-            result.push(c);
+            use std::fmt::Write;
+            let _ = write!(&mut out, "%{b:02X}");
         }
     }
+    out
+}
 
-    result
+/// RFC 3986 percent-decoding for UTF-8 URL path segments
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && bytes[i + 1].is_ascii_hexdigit()
+            && bytes[i + 2].is_ascii_hexdigit()
+        {
+            let hi = (bytes[i + 1] as char).to_digit(16).unwrap() as u8;
+            let lo = (bytes[i + 2] as char).to_digit(16).unwrap() as u8;
+            out.push((hi << 4) | lo);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
 }
 
 #[cfg(test)]
@@ -474,5 +505,40 @@ mod tests {
         let fqn = AttributeFqn::parse("https://example.com/attr/classification").unwrap();
         let id = fqn.to_identifier();
         assert_eq!(id.as_string(), "example.com:classification");
+    }
+
+    #[test]
+    fn test_unicode_percent_encoding_and_validation() {
+        // Multi-byte UTF-8 must not truncate to ASCII and collide ("Ł" = U+0141 != "A" = 0x41)
+        let fqn_l = AttributeFqn::with_value("example.com", "role", "Łdmin");
+        let fqn_a = AttributeFqn::with_value("example.com", "role", "Admin");
+        assert_ne!(fqn_l.to_url(), fqn_a.to_url());
+        let parsed_l = AttributeFqn::parse(&fqn_l.to_url()).unwrap();
+        assert_eq!(parsed_l.get_value(), Some("Łdmin"));
+
+        // Invalid percent sequences must not decode '+' or consume following valid '%'
+        assert_eq!(percent_decode("%+a"), "%+a");
+        assert_eq!(percent_decode("%%20"), "% ");
+
+        // Reject empty namespace, userinfo, query/fragment, and empty name/value
+        assert!(AttributeFqn::parse("https://").is_err());
+        assert!(AttributeFqn::parse("https://user@example.com/attr/a").is_err());
+        assert!(AttributeFqn::parse("https://example.com/attr/a?x=1").is_err());
+        assert!(AttributeFqn::parse("https://example.com/attr/").is_err());
+        assert!(AttributeFqn::parse("https://example.com/attr/a/value/").is_err());
+
+        // Lenient mode should parse /attr/ URLs properly
+        let lenient_rules = FqnValidationRules {
+            require_https: true,
+            require_attr_structure: false,
+            validate_namespace_registry: false,
+        };
+        let lenient = AttributeFqn::parse_with_rules(
+            "https://example.com/attr/cls/value/top",
+            &lenient_rules,
+        )
+        .unwrap();
+        assert_eq!(lenient.get_name(), "cls");
+        assert_eq!(lenient.get_value(), Some("top"));
     }
 }

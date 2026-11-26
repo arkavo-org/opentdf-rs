@@ -11,7 +11,7 @@
 //! format is used here for simplicity and direct compatibility with the p256 crate.
 
 use crate::error::KasServerError;
-use p256::elliptic_curve::sec1::ToSec1Point;
+use p256::pkcs8::{DecodePublicKey, EncodePublicKey, LineEnding};
 use p256::{PublicKey as P256PublicKey, SecretKey as P256SecretKey};
 
 /// EC P-256 keypair for NanoTDF operations
@@ -66,18 +66,26 @@ impl KasEcKeypair {
         &self.public_key_pem
     }
 
-    /// Encode public key to PEM format
+    /// Encode public key to standard SPKI PEM format (`-----BEGIN PUBLIC KEY-----`)
     fn encode_public_key_pem(public_key: &P256PublicKey) -> Result<String, KasServerError> {
-        let encoded_point = public_key.to_sec1_point(false);
-        let sec1_bytes = encoded_point.as_bytes();
-        let pem_encoded = pem::Pem::new("PUBLIC KEY", sec1_bytes.to_vec());
-        Ok(pem::encode(&pem_encoded))
+        public_key
+            .to_public_key_pem(LineEnding::LF)
+            .map_err(|e| KasServerError::InvalidPublicKey(e.to_string()))
     }
 
-    /// Parse PEM-encoded public key
+    /// Parse PEM-encoded EC P-256 public key (accepts standard SPKI PEM and legacy raw SEC1 PEM)
     pub fn parse_public_key_pem(pem_str: &str) -> Result<P256PublicKey, KasServerError> {
+        if let Ok(key) = P256PublicKey::from_public_key_pem(pem_str) {
+            return Ok(key);
+        }
         let pem_parsed =
             pem::parse(pem_str).map_err(|e| KasServerError::InvalidPublicKey(e.to_string()))?;
+        if !matches!(pem_parsed.tag(), "PUBLIC KEY" | "EC PUBLIC KEY") {
+            return Err(KasServerError::InvalidPublicKey(format!(
+                "unexpected PEM tag '{}'",
+                pem_parsed.tag()
+            )));
+        }
         P256PublicKey::from_sec1_bytes(pem_parsed.contents())
             .map_err(|e| KasServerError::InvalidPublicKey(e.to_string()))
     }
@@ -92,11 +100,18 @@ pub struct KasRsaKeypair {
 
 #[cfg(feature = "rsa")]
 impl KasRsaKeypair {
-    /// Create from existing private key in PKCS#8 PEM format
+    /// Create from existing private key in PKCS#8 PEM format (minimum 2048-bit modulus)
     pub fn from_pkcs8_pem(pem_str: &str) -> Result<Self, KasServerError> {
         use rsa::pkcs8::DecodePrivateKey;
+        use rsa::traits::PublicKeyParts;
         let private_key = rsa::PrivateKey::from_pkcs8_pem(pem_str)
             .map_err(|e| KasServerError::InvalidPrivateKey(e.to_string()))?;
+        if private_key.size() < 256 {
+            return Err(KasServerError::InvalidPrivateKey(format!(
+                "RSA key size {} bits is below the 2048-bit minimum",
+                private_key.size() * 8
+            )));
+        }
         let public_key_pem = Self::encode_public_key_pem(&private_key)?;
 
         Ok(Self {

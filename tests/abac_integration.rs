@@ -1,4 +1,3 @@
-use chrono::{Duration, Utc};
 use opentdf::{
     AttributeIdentifier, AttributePolicy, AttributeValue, Operator, Policy, PolicyBody, TdfArchive,
     TdfArchiveBuilder, TdfEncryption, TdfManifest,
@@ -6,6 +5,7 @@ use opentdf::{
 };
 use std::collections::HashMap;
 use tempfile::NamedTempFile;
+use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
 #[test]
@@ -28,7 +28,7 @@ fn test_abac_policy_tdf_integration() -> Result<(), Box<dyn std::error::Error>> 
     );
 
     // Create policy with time constraints
-    let now = Utc::now();
+    let now = OffsetDateTime::now_utc();
     let expiry = now + Duration::days(30);
 
     let policy = Policy::new(
@@ -150,7 +150,7 @@ fn test_complex_abac_policy() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Access time must be during business hours
-    let now = Utc::now();
+    let now = OffsetDateTime::now_utc();
     let time_condition = AttributePolicy::condition(
         time_attr.clone(),
         Operator::GreaterThan,

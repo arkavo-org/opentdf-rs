@@ -16,31 +16,36 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use js_sys::{Array, ArrayBuffer, Object, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{Crypto, CryptoKey, CryptoKeyPair, SubtleCrypto};
+use web_sys::{CryptoKey, CryptoKeyPair, SubtleCrypto};
 
-/// Get the SubtleCrypto interface from the browser
+/// Get the SubtleCrypto interface from the browser or worker global object
 fn get_subtle_crypto() -> Result<SubtleCrypto, String> {
     let global = js_sys::global();
 
-    // Try window.crypto (browser context)
+    // Try globalThis.crypto (browser window / Node / Deno / modern workers)
     if let Ok(crypto) = Reflect::get(&global, &JsValue::from_str("crypto"))
-        && !crypto.is_undefined()
+        && crypto.is_object()
+        && let Ok(subtle) = Reflect::get(&crypto, &JsValue::from_str("subtle"))
+        && subtle.is_object()
     {
-        let crypto: Crypto = crypto.unchecked_into();
-        return Ok(crypto.subtle());
+        return Ok(subtle.unchecked_into());
     }
 
     // Try self.crypto (Web Worker context)
     if let Ok(self_obj) = Reflect::get(&global, &JsValue::from_str("self"))
-        && !self_obj.is_undefined()
+        && self_obj.is_object()
         && let Ok(crypto) = Reflect::get(&self_obj, &JsValue::from_str("crypto"))
-        && !crypto.is_undefined()
+        && crypto.is_object()
+        && let Ok(subtle) = Reflect::get(&crypto, &JsValue::from_str("subtle"))
+        && subtle.is_object()
     {
-        let crypto: Crypto = crypto.unchecked_into();
-        return Ok(crypto.subtle());
+        return Ok(subtle.unchecked_into());
     }
 
-    Err("WebCrypto not available in this environment".to_string())
+    Err(
+        "WebCrypto SubtleCrypto not available in this environment (requires a secure context)"
+            .to_string(),
+    )
 }
 
 /// Create RSA-OAEP algorithm object for WebCrypto
@@ -123,15 +128,16 @@ fn pem_to_der(pem: &str) -> Result<Vec<u8>, String> {
         let mut in_body = false;
 
         for line in lines {
-            if line.starts_with("-----BEGIN") {
+            let trimmed = line.trim();
+            if trimmed.starts_with("-----BEGIN") {
                 in_body = true;
                 continue;
             }
-            if line.starts_with("-----END") {
+            if trimmed.starts_with("-----END") {
                 break;
             }
             if in_body {
-                content.push_str(line.trim());
+                content.push_str(trimmed);
             }
         }
         content
@@ -244,8 +250,9 @@ pub async fn generate_rsa_keypair() -> Result<WebCryptoRsaKeyPair, String> {
     key_usages.push(&JsValue::from_str("encrypt"));
     key_usages.push(&JsValue::from_str("decrypt"));
 
+    // Ephemeral private key is non-extractable (the public key remains exportable per W3C WebCrypto)
     let promise = subtle
-        .generate_key_with_object(&algorithm, true, &key_usages)
+        .generate_key_with_object(&algorithm, false, &key_usages)
         .map_err(|e| format!("Failed to call generateKey: {:?}", e))?;
 
     let key_pair = JsFuture::from(promise)

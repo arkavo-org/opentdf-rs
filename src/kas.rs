@@ -338,10 +338,13 @@ impl KasClient {
         &self,
         signed_request: &SignedRewrapRequest,
     ) -> Result<RewrapResponse, KasError> {
-        let request = self
+        let mut request = self
             .http_client
             .post(&self.endpoints.rewrap_url)
             .header("Content-Type", "application/json");
+        if self.endpoints.transport == crate::kas_discovery::KasTransport::Connect {
+            request = request.header("Connect-Protocol-Version", "1");
+        }
         let request = match &self.caller_key {
             None => request.header("Authorization", format!("Bearer {}", self.oauth_token)),
             Some(caller_key) => {
@@ -356,7 +359,6 @@ impl KasClient {
                 request
                     .header("Authorization", format!("DPoP {}", self.oauth_token))
                     .header("DPoP", proof)
-                    .header("Connect-Protocol-Version", "1")
             }
         };
         let response =
@@ -512,7 +514,7 @@ impl KasClient {
         let request_json = serde_json::to_string(request).map_err(KasError::SerializationError)?;
 
         // Create JWT claims
-        let now = chrono::Utc::now().timestamp();
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
 
         // The KAS verifies the SRT with the key the caller proved possession
         // of, so a caller-bound token needs the SRT signed by that same key.
@@ -713,15 +715,32 @@ impl KasClient {
                     expected: Some("at least one KAO result".to_string()),
                 })?;
 
+        if key_result.status != "permit" {
+            let error_msg = key_result
+                .error
+                .clone()
+                .unwrap_or_else(|| "Access denied".to_string());
+            return Err(KasError::AccessDenied {
+                resource: "key".to_string(),
+                reason: error_msg,
+            });
+        }
+
         // For NanoTDF, the DEK is returned directly (base64 encoded)
-        let dek_b64 =
-            key_result
-                .entity_wrapped_key
-                .as_ref()
-                .ok_or_else(|| KasError::InvalidResponse {
-                    reason: "No DEK in NanoTDF rewrap response".to_string(),
-                    expected: Some("entity_wrapped_key field".to_string()),
-                })?;
+        let dek_b64 = key_result
+            .entity_wrapped_key
+            .as_ref()
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                key_result
+                    .kas_wrapped_key
+                    .as_ref()
+                    .filter(|s| !s.is_empty())
+            })
+            .ok_or_else(|| KasError::InvalidResponse {
+                reason: "No DEK in NanoTDF rewrap response".to_string(),
+                expected: Some("entity_wrapped_key field".to_string()),
+            })?;
 
         // Decode the symmetric key
         BASE64.decode(dek_b64).map_err(KasError::Base64Error)

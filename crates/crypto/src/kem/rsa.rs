@@ -14,7 +14,9 @@
 //!   RUSTSEC-2023-0071 (Marvin attack). It is not FIPS validated; use it where
 //!   aws-lc-rs build requirements cannot be met.
 
+#[cfg(any(feature = "aws-lc-provider", feature = "rustcrypto-provider"))]
 use super::{KemError, KeyEncapsulation};
+#[cfg(any(feature = "aws-lc-provider", feature = "rustcrypto-provider"))]
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
 /// OAEP hash algorithm selection
@@ -77,11 +79,13 @@ mod aws_lc_impl {
         OaepPublicEncryptingKey, PrivateDecryptingKey, PublicEncryptingKey,
     };
 
-    /// Parse PEM to DER bytes
-    fn pem_to_der(pem_str: &str) -> Result<Vec<u8>, KemError> {
+    /// Parse PEM to DER bytes (zeroized on drop)
+    fn pem_to_der(pem_str: &str) -> Result<zeroize::Zeroizing<Vec<u8>>, KemError> {
         let pem = pem::parse(pem_str)
             .map_err(|e| KemError::InvalidKey(format!("Failed to parse PEM: {}", e)))?;
-        Ok(pem.contents().to_vec())
+        let der = zeroize::Zeroizing::new(pem.contents().to_vec());
+        drop(pem);
+        Ok(der)
     }
 
     impl KeyEncapsulation for RsaOaepKem {
@@ -145,8 +149,8 @@ mod aws_lc_impl {
             let oaep_key = OaepPrivateDecryptingKey::new(private_key)
                 .map_err(|e| KemError::InvalidKey(format!("Failed to create OAEP key: {:?}", e)))?;
 
-            // Allocate plaintext buffer
-            let mut plaintext = vec![0u8; oaep_key.min_output_size()];
+            // Allocate plaintext buffer (zeroized on drop)
+            let mut plaintext = zeroize::Zeroizing::new(vec![0u8; oaep_key.min_output_size()]);
 
             // Select algorithm based on hash
             let algorithm = match self.hash {

@@ -71,6 +71,20 @@ impl AccessPdp {
                 v.fqn = v.fqn.to_ascii_lowercase();
             }
             validate_attribute(&attr)?;
+            if attributes_by_def_fqn.contains_key(&attr.fqn) {
+                return Err(PdpError::InvalidAttributeDefinition(format!(
+                    "duplicate attribute definition FQN {}",
+                    attr.fqn
+                )));
+            }
+            for v in &attr.values {
+                if parent_def_by_value_fqn.contains_key(&v.fqn) {
+                    return Err(PdpError::InvalidAttributeDefinition(format!(
+                        "value FQN {} belongs to multiple attribute definitions",
+                        v.fqn
+                    )));
+                }
+            }
             for v in &attr.values {
                 parent_def_by_value_fqn.insert(v.fqn.clone(), attr.fqn.clone());
             }
@@ -117,11 +131,16 @@ impl AccessPdp {
             ));
         }
 
-        // Normalize entitlements to lowercase keys once.
-        let normalized_entitlements: HashMap<String, Vec<String>> = entitlements
-            .iter()
-            .map(|(k, v)| (k.to_ascii_lowercase(), v.clone()))
-            .collect();
+        // Normalize entitlements to lowercase keys once, merging actions for
+        // keys that differ only in ASCII case so iteration order cannot drop actions.
+        let mut normalized_entitlements: HashMap<String, Vec<String>> =
+            HashMap::with_capacity(entitlements.len());
+        for (k, v) in entitlements {
+            normalized_entitlements
+                .entry(k.to_ascii_lowercase())
+                .or_default()
+                .extend(v.iter().cloned());
+        }
 
         // Normalize resource FQNs and partition into known / unknown.
         let mut value_fqns: Vec<String> = Vec::with_capacity(resource_attribute_value_fqns.len());
@@ -251,14 +270,26 @@ fn hierarchy_rule(
         .collect();
 
     // Find the lowest-indexed (highest-hierarchy) resource value.
-    let mut lowest_idx = definition.values.len();
+    // Fail closed if any resource value is absent from the active definition.
+    let mut lowest_idx: Option<usize> = None;
     for fqn in resource_value_fqns {
-        if let Some(&i) = value_index.get(fqn.as_str())
-            && i < lowest_idx
-        {
-            lowest_idx = i;
-        }
+        let Some(&i) = value_index.get(fqn.as_str()) else {
+            return resource_value_fqns
+                .iter()
+                .map(|fqn| EntitlementFailure {
+                    attribute_value_fqn: fqn.clone(),
+                    action_name: action.name.clone(),
+                })
+                .collect();
+        };
+        lowest_idx = Some(match lowest_idx {
+            Some(cur) => cur.min(i),
+            None => i,
+        });
     }
+    let Some(lowest_idx) = lowest_idx else {
+        return Vec::new();
+    };
     // Any entitled FQN at or above that level with the right action satisfies.
     let mut seen: HashSet<&str> = HashSet::new();
     for entitled_fqn in entitlements.keys() {

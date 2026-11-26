@@ -52,7 +52,7 @@ pub enum IdentifierType {
 }
 
 impl IdentifierType {
-    /// Parse identifier type from 4-bit value
+    /// Parse identifier type from the upper 4 bits of the protocol header byte
     pub fn from_bits(bits: u8) -> io::Result<Self> {
         match (bits >> 4) & 0x0F {
             0x0 => Ok(IdentifierType::None),
@@ -231,8 +231,29 @@ impl BinaryWrite for ResourceLocator {
             ));
         }
 
+        // Validate identifier length before writing header byte so wire stream
+        // cannot be desynchronized by a non-standard identifier length.
+        let id_type = match &self.identifier {
+            None => IdentifierType::None,
+            Some(id) => match id.len() {
+                0 => IdentifierType::None,
+                2 => IdentifierType::TwoByte,
+                8 => IdentifierType::EightByte,
+                32 => IdentifierType::ThirtyTwoByte,
+                other => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!(
+                            "Invalid identifier length: {} (expected 0, 2, 8, or 32)",
+                            other
+                        ),
+                    ));
+                }
+            },
+        };
+
         // Write protocol header (protocol + identifier type)
-        let header = self.identifier_type().to_bits() | self.protocol.to_bits();
+        let header = id_type.to_bits() | self.protocol.to_bits();
         write_u8(writer, header)?;
 
         // Write body length
@@ -242,7 +263,9 @@ impl BinaryWrite for ResourceLocator {
         writer.write_all(&self.body)?;
 
         // Write identifier if present
-        if let Some(ref id) = self.identifier {
+        if let Some(ref id) = self.identifier
+            && !id.is_empty()
+        {
             writer.write_all(id)?;
         }
 
@@ -311,5 +334,14 @@ mod tests {
     fn test_to_url() {
         let locator = ResourceLocator::new(Protocol::Https, b"kas.example.com/kas".to_vec());
         assert_eq!(locator.to_url().unwrap(), "https://kas.example.com/kas");
+    }
+
+    #[test]
+    fn test_write_rejects_invalid_identifier_length() {
+        let mut locator = ResourceLocator::new(Protocol::Https, b"kas.example.com".to_vec());
+        locator.identifier = Some(vec![0x01, 0x02, 0x03]); // invalid length (not 0, 2, 8, or 32)
+        let mut buf = Vec::new();
+        let err = locator.write_to(&mut buf).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     }
 }

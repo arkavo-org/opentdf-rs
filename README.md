@@ -84,7 +84,7 @@ let value = AttributeValue::Number(42.0);
 let value = AttributeValue::Boolean(true);
 
 // Date/time value
-let value = AttributeValue::DateTime(chrono::Utc::now());
+let value = AttributeValue::DateTime(time::OffsetDateTime::now_utc());
 
 // Array values
 let value = AttributeValue::StringArray(vec!["ENGINEERING".to_string(), "EXECUTIVE".to_string()]);
@@ -149,8 +149,8 @@ Complete policy with time constraints and dissemination:
 // Create policy with attribute conditions and recipients
 let policy = Policy {
     uuid: uuid::Uuid::new_v4().to_string(),
-    valid_from: Some(chrono::Utc::now()),
-    valid_to: Some(chrono::Utc::now() + chrono::Duration::days(30)),
+    valid_from: Some(time::OffsetDateTime::now_utc()),
+    valid_to: Some(time::OffsetDateTime::now_utc() + time::Duration::days(30)),
     body: PolicyBody {
         attributes: vec![attribute_policy],
         dissem: vec!["user@example.com".to_string()],
@@ -258,8 +258,8 @@ let clearance_policy = AttributePolicy::condition(
 let policy = Policy {
     uuid: uuid::Uuid::new_v4().to_string(),
     // Valid for next 24 hours only
-    valid_from: Some(chrono::Utc::now()),
-    valid_to: Some(chrono::Utc::now() + chrono::Duration::hours(24)),
+    valid_from: Some(time::OffsetDateTime::now_utc()),
+    valid_to: Some(time::OffsetDateTime::now_utc() + time::Duration::hours(24)),
     body: PolicyBody {
         attributes: vec![clearance_policy],
         dissem: vec!["user@example.com".to_string()],

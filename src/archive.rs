@@ -282,30 +282,16 @@ impl<'a> TdfEntry<'a> {
 
             Ok(plaintext)
         } else {
-            // Legacy single-block format
+            // Check `method.iv` length first so malformed empty-segment manifests
+            // report an explicit IV error without panicking.
             let iv_b64 = &self.manifest.encryption_information.method.iv;
             let iv = BASE64
                 .decode(iv_b64)
                 .map_err(|e| TdfError::DecryptionFailed {
-                    reason: format!("Invalid IV encoding: {}", e),
+                    reason: format!("integrity: invalid method.iv encoding: {}", e),
                     algorithm: Some("Base64".to_string()),
                 })?;
 
-            // Create decryption cipher
-            use aes_gcm::{
-                Aes256Gcm, Nonce,
-                aead::{Aead, KeyInit},
-            };
-
-            let cipher =
-                Aes256Gcm::new_from_slice(payload_key).map_err(|_| TdfError::DecryptionFailed {
-                    reason: "Invalid key length".to_string(),
-                    algorithm: Some("AES-256-GCM".to_string()),
-                })?;
-            // `Nonce::from_slice` panics on any length but 12, which would abort
-            // the process (and trap, on wasm) for a manifest we have not
-            // authenticated yet. An empty `method.iv` reaches here whenever a
-            // TDF carries no segments.
             const GCM_NONCE_LENGTH: usize = 12;
             if iv.len() != GCM_NONCE_LENGTH {
                 return Err(TdfError::DecryptionFailed {
@@ -316,18 +302,78 @@ impl<'a> TdfEntry<'a> {
                     algorithm: Some("AES-256-GCM".to_string()),
                 });
             }
-            let nonce = Nonce::from_slice(&iv);
 
-            // Decrypt the payload
-            let plaintext = cipher.decrypt(nonce, self.payload.as_ref()).map_err(|e| {
-                TdfError::DecryptionFailed {
-                    reason: format!("AES-GCM decryption failed: {}", e),
-                    algorithm: Some("AES-256-GCM".to_string()),
-                }
-            })?;
-
-            Ok(plaintext)
+            // Refuse unauthenticated legacy single-block decryption here: because
+            // manifest fields outside `policy` are not bound by `policyBinding`,
+            // falling back to single-block AES-GCM without `segments`/`rootSignature`
+            // allows an attacker to strip a multi-segment TDF down to a single
+            // segment (moving its 12-byte IV prefix into `method.iv`). Callers that
+            // explicitly need legacy unsegmented TDF decryption must opt in via
+            // `decrypt_legacy_single_block_with_key`.
+            Err(TdfError::DecryptionFailed {
+                reason: "integrity: manifest declares no segments; refusing legacy single-block \
+                         downgrade without rootSignature verification"
+                    .to_string(),
+                algorithm: Some("AES-256-GCM".to_string()),
+            })
         }
+    }
+
+    /// Explicitly decrypt a legacy single-block (non-segmented, non-streamable) TDF payload.
+    ///
+    /// **Security Warning:** Legacy single-block TDFs do not verify `integrityInformation.segments`
+    /// or `rootSignature`. Only call this when you have out-of-band assurance that the input is a
+    /// legacy unsegmented TDF rather than a downgraded multi-segment TDF.
+    pub fn decrypt_legacy_single_block_with_key(
+        &self,
+        payload_key: &[u8],
+    ) -> Result<Vec<u8>, TdfError> {
+        use aes_gcm::{
+            Aes256Gcm, Nonce,
+            aead::{Aead, KeyInit},
+        };
+        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+
+        let integrity = &self.manifest.encryption_information.integrity_information;
+        if !integrity.segments.is_empty() {
+            return self.decrypt_with_key(payload_key);
+        }
+        if self.manifest.encryption_information.method.is_streamable
+            || !integrity.root_signature.sig.is_empty()
+        {
+            return Err(TdfError::DecryptionFailed {
+                reason: "integrity: streamable or root-signed manifest must not use legacy single-block decryption".to_string(),
+                algorithm: Some("AES-256-GCM".to_string()),
+            });
+        }
+
+        let iv = BASE64
+            .decode(&self.manifest.encryption_information.method.iv)
+            .map_err(|e| TdfError::DecryptionFailed {
+                reason: format!("Invalid IV encoding: {}", e),
+                algorithm: Some("Base64".to_string()),
+            })?;
+        const GCM_NONCE_LENGTH: usize = 12;
+        if iv.len() != GCM_NONCE_LENGTH {
+            return Err(TdfError::DecryptionFailed {
+                reason: format!(
+                    "integrity: method.iv is {} bytes, expected {GCM_NONCE_LENGTH}",
+                    iv.len()
+                ),
+                algorithm: Some("AES-256-GCM".to_string()),
+            });
+        }
+        let cipher =
+            Aes256Gcm::new_from_slice(payload_key).map_err(|_| TdfError::DecryptionFailed {
+                reason: "Invalid key length".to_string(),
+                algorithm: Some("AES-256-GCM".to_string()),
+            })?;
+        cipher
+            .decrypt(Nonce::from_slice(&iv), self.payload.as_ref())
+            .map_err(|e| TdfError::DecryptionFailed {
+                reason: format!("AES-GCM decryption failed: {}", e),
+                algorithm: Some("AES-256-GCM".to_string()),
+            })
     }
 }
 

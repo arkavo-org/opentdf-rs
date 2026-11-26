@@ -196,12 +196,15 @@ impl FullyQualifiedRegisteredResourceValue {
             .ok_or(IdentifierError::InvalidFormat)?;
 
         // Split into optional namespace and the resm tail.
+        // Note: `https://resm/<name>/value/<val>` has no namespace (starts with "resm/"),
+        // whereas `https://resm/resm/<name>/value/<val>` has namespace "resm".
         let (ns, after) = match rest.split_once("/resm/") {
             Some(("", _)) => return Err(IdentifierError::InvalidFormat),
             Some((maybe_ns, after)) => {
-                if maybe_ns == "resm" {
-                    // The string was actually "resm/..." with no leading namespace; fall through.
-                    return Self::parse_no_namespace_tail(after);
+                // Distinguish legacy `https://resm/resm/value/<v>` (no namespace, name == "resm")
+                // from `https://resm/resm/<name>/value/<v>` (namespace == "resm", name == <name>).
+                if maybe_ns == "resm" && after.starts_with("value/") {
+                    return Self::parse_no_namespace_form(rest);
                 }
                 (maybe_ns.to_lowercase(), after)
             }

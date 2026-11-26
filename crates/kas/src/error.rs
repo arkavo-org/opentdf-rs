@@ -44,6 +44,10 @@ pub enum KasServerError {
     /// Invalid key size
     #[error("invalid key size: expected {expected}, got {got}")]
     InvalidKeySize { expected: usize, got: usize },
+
+    /// Policy binding verification failed
+    #[error("policy binding verification failed: {0}")]
+    PolicyBindingFailed(String),
 }
 
 impl From<p256::elliptic_curve::Error> for KasServerError {

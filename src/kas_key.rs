@@ -79,12 +79,11 @@ pub async fn fetch_kas_public_key(
     http_client: &Client,
 ) -> Result<KasPublicKeyResponse, KasKeyError> {
     // Construct the public key endpoint URL
-    let endpoint = if kas_url.ends_with("/kas") {
-        format!("{}/v2/kas_public_key", kas_url)
-    } else if kas_url.ends_with('/') {
-        format!("{}v2/kas_public_key", kas_url)
+    let trimmed = kas_url.trim_end_matches('/');
+    let endpoint = if trimmed.ends_with("/kas") {
+        format!("{}/v2/kas_public_key", trimmed)
     } else {
-        format!("{}/v2/kas_public_key", kas_url)
+        format!("{}/kas/v2/kas_public_key", trimmed)
     };
 
     // Make the HTTP GET request
@@ -119,6 +118,7 @@ pub async fn fetch_kas_public_key_connect(
     let response = http_client
         .post(public_key_url)
         .header("Content-Type", "application/json")
+        .header("Connect-Protocol-Version", "1")
         .body("{}")
         .send()
         .await?;
@@ -197,12 +197,11 @@ pub async fn fetch_kas_ec_public_key(
     http_client: &Client,
 ) -> Result<KasEcPublicKeyResponse, KasKeyError> {
     // Construct the public key endpoint URL
-    let endpoint = if kas_url.ends_with("/kas") {
-        format!("{}/v2/kas_public_key", kas_url)
-    } else if kas_url.ends_with('/') {
-        format!("{}kas/v2/kas_public_key", kas_url)
+    let trimmed = kas_url.trim_end_matches('/');
+    let endpoint = if trimmed.ends_with("/kas") {
+        format!("{}/v2/kas_public_key?algorithm=ec:secp256r1", trimmed)
     } else {
-        format!("{}/kas/v2/kas_public_key", kas_url)
+        format!("{}/kas/v2/kas_public_key?algorithm=ec:secp256r1", trimmed)
     };
 
     // Make the HTTP GET request
@@ -238,7 +237,8 @@ pub async fn fetch_kas_ec_public_key_connect(
     let response = http_client
         .post(public_key_url)
         .header("Content-Type", "application/json")
-        .body("{}")
+        .header("Connect-Protocol-Version", "1")
+        .body(r#"{"algorithm":"ec:secp256r1"}"#)
         .send()
         .await?;
 

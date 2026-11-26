@@ -134,6 +134,8 @@ impl Tdf {
 pub struct TdfEncryptBuilder {
     data: Vec<u8>,
     kas_url: Option<String>,
+    #[cfg(feature = "kas-client")]
+    kas_public_key_pem: Option<String>,
     policy: Option<Policy>,
     mime_type: Option<String>,
     segment_size: usize,
@@ -145,6 +147,8 @@ impl TdfEncryptBuilder {
         Self {
             data,
             kas_url: None,
+            #[cfg(feature = "kas-client")]
+            kas_public_key_pem: None,
             policy: None,
             mime_type: None,
             segment_size: DEFAULT_SEGMENT_SIZE,
@@ -155,6 +159,15 @@ impl TdfEncryptBuilder {
     #[must_use]
     pub fn kas_url(mut self, url: impl Into<String>) -> Self {
         self.kas_url = Some(url.into());
+        self
+    }
+
+    /// Set the KAS public key PEM (RSA or EC P-256) used to wrap the payload key
+    /// into `manifest.encryptionInformation.keyAccess[0].wrappedKey`.
+    #[cfg(feature = "kas-client")]
+    #[must_use]
+    pub fn kas_public_key(mut self, pem: impl Into<String>) -> Self {
+        self.kas_public_key_pem = Some(pem.into());
         self
     }
 
@@ -229,6 +242,19 @@ impl TdfEncryptBuilder {
         let mut manifest = TdfManifest::new("0.payload".to_string(), kas_url);
         manifest.encryption_information.method.algorithm = "AES-256-GCM".to_string();
         manifest.encryption_information.method.iv = String::new(); // Segments have their own IVs
+
+        // Wrap payload key with KAS public key if provided
+        #[cfg(feature = "kas-client")]
+        if let Some(ref kas_pem) = self.kas_public_key_pem {
+            let wrapped_key =
+                opentdf_crypto::wrap_key_with_rsa_oaep(tdf_encryption.payload_key(), kas_pem)
+                    .map_err(|e| TdfError::CryptoError {
+                        algorithm: "RSA-OAEP".to_string(),
+                        reason: format!("Failed to wrap payload key with KAS public key: {}", e),
+                        source: Some(Box::new(e)),
+                    })?;
+            manifest.encryption_information.key_access[0].wrapped_key = wrapped_key;
+        }
 
         if let Some(mime_type) = self.mime_type {
             manifest.payload.mime_type = Some(mime_type);
@@ -305,6 +331,8 @@ pub struct TdfEncryptFileBuilder {
     input_path: std::path::PathBuf,
     output_path: std::path::PathBuf,
     kas_url: Option<String>,
+    #[cfg(feature = "kas-client")]
+    kas_public_key_pem: Option<String>,
     policy: Option<Policy>,
     mime_type: Option<String>,
     segment_size: usize,
@@ -317,6 +345,8 @@ impl TdfEncryptFileBuilder {
             input_path,
             output_path,
             kas_url: None,
+            #[cfg(feature = "kas-client")]
+            kas_public_key_pem: None,
             policy: None,
             mime_type: None,
             segment_size: DEFAULT_SEGMENT_SIZE,
@@ -327,6 +357,14 @@ impl TdfEncryptFileBuilder {
     #[must_use]
     pub fn kas_url(mut self, url: impl Into<String>) -> Self {
         self.kas_url = Some(url.into());
+        self
+    }
+
+    /// Set the KAS public key PEM used to wrap the payload key
+    #[cfg(feature = "kas-client")]
+    #[must_use]
+    pub fn kas_public_key(mut self, pem: impl Into<String>) -> Self {
+        self.kas_public_key_pem = Some(pem.into());
         self
     }
 
@@ -359,6 +397,11 @@ impl TdfEncryptFileBuilder {
 
         if let Some(kas_url) = self.kas_url {
             builder = builder.kas_url(kas_url);
+        }
+
+        #[cfg(feature = "kas-client")]
+        if let Some(kas_pem) = self.kas_public_key_pem {
+            builder = builder.kas_public_key(kas_pem);
         }
 
         if let Some(policy) = self.policy {

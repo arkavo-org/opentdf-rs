@@ -176,7 +176,7 @@ async fn no_caller_key_keeps_bearer_and_rs256_request_token() {
     let seen = seen.lock().unwrap()[0].clone();
     assert_eq!(seen.authorization.as_deref(), Some("Bearer service-token"));
     assert!(seen.dpop.is_empty());
-    assert_eq!(seen.connect_protocol_version, None);
+    assert_eq!(seen.connect_protocol_version.as_deref(), Some("1"));
     assert_eq!(jws_part(&seen.srt, 0)["alg"], "RS256");
 }
 

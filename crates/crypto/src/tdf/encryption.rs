@@ -161,34 +161,45 @@ impl TdfEncryption {
         })
     }
 
-    /// Decrypt data using the policy key to first decrypt the payload key
+    /// Decrypt data using the policy key to first decrypt the payload key.
+    ///
+    /// Accepts either a 24-byte combined IV (`payload_iv (12) || key_iv (12)`, matching
+    /// [`encrypt`](Self::encrypt)) or a legacy 12-byte IV.
     pub fn decrypt(
         &mut self,
         ciphertext: &[u8],
         iv: &[u8],
         encrypted_key: &[u8],
     ) -> Result<Vec<u8>, EncryptionError> {
+        let (payload_iv, key_iv) = match iv.len() {
+            24 => iv.split_at(12),
+            12 => (iv, iv),
+            other => return Err(EncryptionError::InvalidIvLength(other)),
+        };
+
         // First decrypt the payload key using the policy key
         let policy_cipher = Aes256Gcm::new_from_slice(self.policy_key.as_slice())
             .map_err(|_| EncryptionError::InvalidKeyLength)?;
-        let nonce = Nonce::from_slice(iv);
+        let key_nonce = Nonce::from_slice(key_iv);
 
-        let decrypted_payload_key = policy_cipher
-            .decrypt(nonce, encrypted_key)
-            .map_err(EncryptionError::AeadError)?;
+        let decrypted_payload_key = zeroize::Zeroizing::new(
+            policy_cipher
+                .decrypt(key_nonce, encrypted_key)
+                .map_err(EncryptionError::AeadError)?,
+        );
 
-        // Update payload key
-        self.payload_key = PayloadKey::from_slice(&decrypted_payload_key)
+        let candidate_payload_key = PayloadKey::from_slice(&decrypted_payload_key)
             .map_err(|_| EncryptionError::InvalidKeyLength)?;
 
-        // Then decrypt the actual data using the decrypted payload key
-        let payload_cipher = Aes256Gcm::new_from_slice(self.payload_key.as_slice())
+        // Decrypt the actual data BEFORE mutating `self.payload_key`
+        let payload_cipher = Aes256Gcm::new_from_slice(candidate_payload_key.as_slice())
             .map_err(|_| EncryptionError::InvalidKeyLength)?;
-        let payload_nonce = Nonce::from_slice(iv);
+        let payload_nonce = Nonce::from_slice(payload_iv);
         let plaintext = payload_cipher
             .decrypt(payload_nonce, ciphertext)
             .map_err(EncryptionError::AeadError)?;
 
+        self.payload_key = candidate_payload_key;
         Ok(plaintext)
     }
 
@@ -202,6 +213,10 @@ impl TdfEncryption {
         let combined_iv = BASE64.decode(&encrypted_payload.iv)?;
         let encrypted_key = BASE64.decode(&encrypted_payload.encrypted_key)?;
 
+        if combined_iv.len() != 24 {
+            return Err(EncryptionError::InvalidIvLength(combined_iv.len()));
+        }
+
         // Split combined IV into payload and key IVs
         let (payload_iv, key_iv) = combined_iv.split_at(12);
 
@@ -209,9 +224,11 @@ impl TdfEncryption {
         let policy_cipher =
             Aes256Gcm::new_from_slice(policy_key).map_err(|_| EncryptionError::InvalidKeyLength)?;
         let key_nonce = Nonce::from_slice(key_iv);
-        let payload_key = policy_cipher
-            .decrypt(key_nonce, encrypted_key.as_ref())
-            .map_err(EncryptionError::AeadError)?;
+        let payload_key = zeroize::Zeroizing::new(
+            policy_cipher
+                .decrypt(key_nonce, encrypted_key.as_ref())
+                .map_err(EncryptionError::AeadError)?,
+        );
 
         // Then decrypt the actual data using the decrypted payload key
         let payload_cipher = Aes256Gcm::new_from_slice(&payload_key)
@@ -387,17 +404,27 @@ impl TdfEncryption {
     ) -> Result<SegmentedPayload, EncryptionError> {
         const GCM_TAG_SIZE: usize = 16; // 128-bit authentication tag
 
+        if segment_size == 0 {
+            return Err(EncryptionError::SegmentError(
+                "Segment size must be greater than zero".to_string(),
+            ));
+        }
+
         let cipher = Aes256Gcm::new_from_slice(self.payload_key.as_slice())
             .map_err(|_| EncryptionError::InvalidKeyLength)?;
 
-        // Pre-allocate vectors with expected capacity for performance
-        let segment_count = data.len().div_ceil(segment_size);
+        // Emit one authenticated empty segment when plaintext is empty so
+        // empty TDF payloads have an IV, GCM tag, and valid root signature.
+        let segment_count = if data.is_empty() {
+            1
+        } else {
+            data.len().div_ceil(segment_size)
+        };
         let mut segments = Vec::with_capacity(segment_count);
         let mut segment_info = Vec::with_capacity(segment_count);
         let mut gmac_tags = Vec::with_capacity(segment_count);
 
-        // Process data in segments
-        for chunk in data.chunks(segment_size) {
+        let mut encrypt_chunk = |chunk: &[u8]| -> Result<(), EncryptionError> {
             // Generate unique IV for this segment
             let iv = generate_nonce();
             let nonce = Nonce::from_slice(iv.as_slice());
@@ -423,6 +450,15 @@ impl TdfEncryption {
 
             segments.push(segment_data);
             gmac_tags.push(gmac_tag);
+            Ok(())
+        };
+
+        if data.is_empty() {
+            encrypt_chunk(&[])?;
+        } else {
+            for chunk in data.chunks(segment_size) {
+                encrypt_chunk(chunk)?;
+            }
         }
 
         Ok(SegmentedPayload {
@@ -514,6 +550,14 @@ impl TdfEncryption {
 
             plaintext.extend_from_slice(&decrypted);
             offset = segment_end;
+        }
+
+        if offset != payload.len() {
+            return Err(EncryptionError::SegmentError(format!(
+                "Trailing unauthenticated payload bytes: consumed {} of {} bytes",
+                offset,
+                payload.len()
+            )));
         }
 
         Ok((plaintext, gmac_tags))
@@ -873,5 +917,50 @@ mod single_segment_tests {
             single.bytes.len() as u64
         );
         assert_eq!(streamed.gmac_tags[0].len(), single.tag.len());
+    }
+
+    #[test]
+    fn test_segment_edge_cases_and_trailing_bytes() {
+        let enc = TdfEncryption::new().unwrap();
+
+        // segment_size == 0 must return an error, not panic
+        assert!(enc.encrypt_with_segments(b"hello", 0).is_err());
+
+        // Empty plaintext must emit 1 authenticated segment and round-trip
+        let empty = enc.encrypt_with_segments(b"", 64).unwrap();
+        assert_eq!(empty.segments.len(), 1);
+        let seg_meta: Vec<(u64, u64)> = empty
+            .segment_info
+            .iter()
+            .map(|s| (s.plaintext_size, s.encrypted_size))
+            .collect();
+        let (pt, tags) = enc
+            .decrypt_with_segments(&empty.segments[0], &seg_meta)
+            .unwrap();
+        assert!(pt.is_empty());
+        assert_eq!(tags.len(), 1);
+
+        // Trailing unauthenticated bytes must be rejected
+        let mut with_trailing = empty.segments[0].clone();
+        with_trailing.extend_from_slice(b"trailing");
+        assert!(
+            enc.decrypt_with_segments(&with_trailing, &seg_meta)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_decrypt_rejects_short_iv_without_panic() {
+        let mut enc = TdfEncryption::new().unwrap();
+        let dummy = [0u8; 32];
+        assert!(enc.decrypt(&dummy, b"short", &dummy).is_err());
+
+        let bad = EncryptedPayload {
+            ciphertext: BASE64.encode(dummy),
+            iv: BASE64.encode(b"short"),
+            encrypted_key: BASE64.encode(dummy),
+            policy_key_hash: String::new(),
+        };
+        assert!(TdfEncryption::decrypt_legacy(enc.policy_key(), &bad).is_err());
     }
 }

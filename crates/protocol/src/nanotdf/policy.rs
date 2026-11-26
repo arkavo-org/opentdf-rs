@@ -1,6 +1,9 @@
 //! NanoTDF Policy Structures
 
-use crate::binary::{BinaryRead, BinaryWrite, read_u8, read_u16_be, write_u8, write_u16_be};
+use crate::binary::{
+    BinaryRead, BinaryWrite, read_bytes, read_u8, read_u16_be, write_u8, write_u16_be,
+};
+use crate::nanotdf::header::{EccAndBindingMode, EccMode};
 use crate::nanotdf::resource_locator::ResourceLocator;
 use std::io::{self, Read, Write};
 
@@ -116,8 +119,13 @@ impl Policy {
     }
 }
 
-impl BinaryRead for Policy {
-    fn read_from<R: Read>(reader: &mut R) -> io::Result<Self> {
+impl Policy {
+    /// Read a policy using the header's ECC and binding mode so non-P-256
+    /// ephemeral keys and ECDSA bindings are parsed with their true lengths.
+    pub fn read_from_with_mode<R: Read>(
+        reader: &mut R,
+        mode: EccAndBindingMode,
+    ) -> io::Result<Self> {
         // Read policy type
         let policy_type = PolicyType::from_byte(read_u8(reader)?)?;
 
@@ -131,9 +139,8 @@ impl BinaryRead for Policy {
                 // Read content length (2 bytes)
                 let content_len = read_u16_be(reader)? as usize;
 
-                // Read content
-                let mut content = vec![0u8; content_len];
-                reader.read_exact(&mut content)?;
+                // Read content using bounded/chunked reader
+                let content = read_bytes(reader, content_len)?;
 
                 if policy_type == PolicyType::EmbeddedPlaintext {
                     PolicyBody::EmbeddedPlaintext(content)
@@ -145,19 +152,14 @@ impl BinaryRead for Policy {
                 // Read content length (2 bytes)
                 let content_len = read_u16_be(reader)? as usize;
 
-                // Read content
-                let mut content = vec![0u8; content_len];
-                reader.read_exact(&mut content)?;
+                // Read content using bounded/chunked reader
+                let content = read_bytes(reader, content_len)?;
 
                 // Read key access resource locator
                 let key_access = ResourceLocator::read_from(reader)?;
 
-                // Read ephemeral public key
-                // Note: We need to know the ECC mode from the header to know the size
-                // For now, we'll read a P-256 key (33 bytes) as default
-                // This will need to be refactored to pass ECC mode from header
-                let mut ephemeral_key = vec![0u8; 33];
-                reader.read_exact(&mut ephemeral_key)?;
+                // Read ephemeral public key sized to header ECC mode
+                let ephemeral_key = read_bytes(reader, mode.ecc_mode.public_key_size())?;
 
                 PolicyBody::EmbeddedEncryptedWithKeyAccess {
                     content,
@@ -167,14 +169,21 @@ impl BinaryRead for Policy {
             }
         };
 
-        // Read binding
-        // L1L v12 format: Always 8 bytes (SHA-256 last 8 bytes)
-        // Note: This should eventually be refactored to pass binding mode from header
-        // for ECDSA support (which has variable size)
-        let mut binding = vec![0u8; 8];
-        reader.read_exact(&mut binding)?;
+        // Read binding: 8 bytes for GMAC/HMAC binding, or curve signature size for ECDSA binding
+        let binding_len = if mode.use_ecdsa_binding {
+            mode.ecc_mode.signature_size()
+        } else {
+            8
+        };
+        let binding = read_bytes(reader, binding_len)?;
 
         Ok(Self { body, binding })
+    }
+}
+
+impl BinaryRead for Policy {
+    fn read_from<R: Read>(reader: &mut R) -> io::Result<Self> {
+        Self::read_from_with_mode(reader, EccAndBindingMode::new(false, EccMode::Secp256r1))
     }
 }
 

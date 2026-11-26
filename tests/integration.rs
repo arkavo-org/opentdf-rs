@@ -219,9 +219,11 @@ fn test_encrypted_archive_with_policy_verification() -> Result<(), Box<dyn std::
     );
 
     // Set up policy with additional constraints
-    let expiry_date = chrono::DateTime::parse_from_rfc3339("2025-12-31T23:59:59Z")
-        .unwrap()
-        .with_timezone(&chrono::Utc);
+    let expiry_date = time::OffsetDateTime::parse(
+        "2025-12-31T23:59:59Z",
+        &time::format_description::well_known::Rfc3339,
+    )
+    .unwrap();
 
     let policy = Policy {
         uuid: "test-policy-verification".to_string(),
@@ -315,5 +317,55 @@ fn test_encrypted_archive_with_policy_verification() -> Result<(), Box<dyn std::
     let decrypted = decryptor.decrypt(&ciphertext, iv, &encrypted_key)?;
     assert_eq!(decrypted, original_data);
 
+    Ok(())
+}
+
+#[test]
+fn test_tdf_entry_rejects_legacy_single_block_downgrade() -> Result<(), Box<dyn std::error::Error>>
+{
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD as BASE64;
+    use opentdf::{TdfArchive, TdfArchiveMemoryBuilder, TdfEncryption, TdfManifest};
+
+    let tdf_enc = TdfEncryption::new()?;
+    let payload_key = tdf_enc.payload_key().to_vec();
+    let segmented = tdf_enc.encrypt_with_segments(b"first-segment|second-segment", 14)?;
+    assert_eq!(segmented.segments.len(), 2);
+
+    // Simulate a downgrade attacker taking segment 0 (iv || ct || tag), moving its
+    // 12-byte IV into method.iv, stripping segments/rootSignature, and clearing is_streamable.
+    let seg0 = &segmented.segments[0];
+    let mut manifest = TdfManifest::new(
+        "0.payload".to_string(),
+        "https://kas.example.com".to_string(),
+    );
+    manifest.encryption_information.method.algorithm = "AES-256-GCM".to_string();
+    manifest.encryption_information.method.iv = BASE64.encode(&seg0[..12]);
+    manifest.encryption_information.method.is_streamable = false;
+    manifest
+        .encryption_information
+        .integrity_information
+        .segments
+        .clear();
+    manifest
+        .encryption_information
+        .integrity_information
+        .root_signature
+        .sig
+        .clear();
+
+    let mut mem = TdfArchiveMemoryBuilder::new();
+    mem.add_entry(&manifest, &seg0[12..], 0)?;
+    let bytes = mem.finish()?;
+
+    let mut archive = TdfArchive::new(std::io::Cursor::new(bytes))?;
+    let entry = archive.by_index()?;
+
+    // Standard decrypt_with_key MUST refuse the unauthenticated legacy fallback
+    assert!(entry.decrypt_with_key(&payload_key).is_err());
+
+    // Explicit opt-in legacy helper still works for callers who genuinely need it
+    let legacy_pt = entry.decrypt_legacy_single_block_with_key(&payload_key)?;
+    assert_eq!(legacy_pt, b"first-segment|");
     Ok(())
 }

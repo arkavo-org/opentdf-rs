@@ -61,9 +61,9 @@ pub use salt::{
 pub use types::{KeyAccessObject, KeyAlgorithm, KeyInfo, RewrapResult};
 
 // Re-export unwrap functions
+pub use unwrap::{custom_ecdh, ec_unwrap, ec_unwrap_with_policy_binding};
 #[cfg(feature = "rsa")]
-pub use unwrap::rsa_unwrap;
-pub use unwrap::{custom_ecdh, ec_unwrap};
+pub use unwrap::{rsa_unwrap, rsa_unwrap_with_policy_binding, verify_standard_policy_binding};
 
 // Re-export underlying crypto libraries for advanced use cases
 pub use p256;

@@ -30,9 +30,10 @@
 //!   - Signature (64-132 bytes ECDSA)
 //! ```
 
+use crate::hmac::calculate_hmac;
 use crate::kem::ec::{EcCurve, EcdhKem};
 use crate::tdf::nanotdf_crypto::{NanoTdfIv, TagSize, decrypt, encrypt};
-use opentdf_protocol::binary::{BinaryRead, BinaryWrite, read_u24_be, write_u24_be};
+use opentdf_protocol::binary::{BinaryRead, BinaryWrite, read_bytes, read_u24_be, write_u24_be};
 use opentdf_protocol::nanotdf::{
     MagicNumberAndVersion,
     header::{
@@ -43,6 +44,7 @@ use opentdf_protocol::nanotdf::{
     resource_locator::{Protocol, ResourceLocator},
 };
 use std::io::{self, Cursor, Read, Write};
+use subtle::ConstantTimeEq;
 use thiserror::Error;
 
 /// NanoTDF errors
@@ -187,13 +189,13 @@ impl NanoTdfBuilder {
         self
     }
 
-    /// Set a remote policy body (just the body bytes, not full Policy)
+    /// Set a remote policy body (URL starting with `http://`/`https://` or raw resource identifier bytes)
     #[must_use]
-    pub fn policy_remote_body(mut self, _body: Vec<u8>) -> Self {
-        // For remote policy, create a simple resource locator
-        // This is simplified - in practice would parse the body as a locator
-        let locator = ResourceLocator::from_url("http://policy")
-            .unwrap_or_else(|_| ResourceLocator::new(Protocol::Http, "policy".as_bytes().to_vec()));
+    pub fn policy_remote_body(mut self, body: Vec<u8>) -> Self {
+        let locator = std::str::from_utf8(&body)
+            .ok()
+            .and_then(|s| ResourceLocator::from_url(s).ok())
+            .unwrap_or_else(|| ResourceLocator::new(Protocol::SharedResourceDirectory, body));
         self.policy_body = Some(PolicyBody::Remote(locator));
         self
     }
@@ -230,13 +232,16 @@ impl NanoTdfBuilder {
     /// 5. Calculate policy binding (GMAC or ECDH-based)
     /// 6. Assemble header + payload
     pub fn encrypt(self, plaintext: &[u8], kas_public_key: &[u8]) -> Result<NanoTdf, NanoTdfError> {
-        // Validate payload size (max 16MB - 3-byte length field)
-        const MAX_PAYLOAD_SIZE: usize = 0xFFFFFF; // 16,777,215 bytes
-        if plaintext.len() > MAX_PAYLOAD_SIZE {
+        // Tag size: default to 96-bit (12 bytes) for RustCrypto compatibility
+        let tag_size = TagSize::Bits96;
+
+        // Validate payload size: 3-byte u24 length field carries IV (3) + ciphertext + tag
+        let max_plaintext_size: usize = 0x00FF_FFFF - 3 - tag_size.bytes();
+        if plaintext.len() > max_plaintext_size {
             return Err(NanoTdfError::InvalidPayload(format!(
-                "Payload too large: {} bytes (max {})",
+                "Payload too large: {} bytes (max {} bytes plaintext for 3-byte payload length)",
                 plaintext.len(),
-                MAX_PAYLOAD_SIZE
+                max_plaintext_size
             )));
         }
 
@@ -266,40 +271,19 @@ impl NanoTdfBuilder {
         let iv = NanoTdfIv::random();
 
         // Encrypt payload with AES-256-GCM
-        // Tag size: default to 96-bit (12 bytes) for RustCrypto compatibility
-        let tag_size = TagSize::Bits96;
         let ciphertext_and_tag = encrypt(&aes_key, &iv, plaintext, tag_size)?;
 
-        // Calculate policy binding (L1L v12 format)
-        // According to Go/otdfctl gold standard: SHA-256 hash of policy body, last 8 bytes
+        // Calculate keyed policy binding: HMAC-SHA256(aes_key, policy_bytes)[24..32]
         let policy_binding = if self.use_ecdh_binding {
             // ECDSA binding (future)
             return Err(NanoTdfError::Unsupported(
                 "ECDSA policy binding not yet implemented".to_string(),
             ));
         } else {
-            // GMAC binding for L1L v12: SHA-256 of policy body, take last 8 bytes
-            use sha2::{Digest, Sha256};
-            let policy_bytes = match &policy_body {
-                PolicyBody::Remote(locator) => {
-                    // For remote policy, hash the resource locator bytes
-                    let mut buf = Vec::new();
-                    locator.write_to(&mut buf).map_err(|e| {
-                        NanoTdfError::InvalidHeader(format!("Failed to serialize policy: {}", e))
-                    })?;
-                    buf
-                }
-                PolicyBody::EmbeddedPlaintext(content) => content.clone(),
-                PolicyBody::EmbeddedEncrypted(content) => content.clone(),
-                _ => {
-                    return Err(NanoTdfError::Unsupported(
-                        "Encrypted policy with key access not supported".to_string(),
-                    ));
-                }
-            };
-
-            let hash = Sha256::digest(&policy_bytes);
-            hash[24..].to_vec() // Last 8 bytes
+            let policy_bytes = serialize_policy_body_for_binding(&policy_body)?;
+            let mac = calculate_hmac(aes_key.as_slice(), &policy_bytes)
+                .map_err(|e| NanoTdfError::EncryptionFailed(format!("Policy binding HMAC: {e}")))?;
+            mac[24..].to_vec() // Last 8 bytes
         };
 
         // Create KAS resource locator
@@ -440,40 +424,47 @@ impl NanoTdf {
         let aes_key =
             kem.derive_key_with_private(kas_private_key, &self.header.ephemeral_public_key)?;
 
-        // Verify policy binding (L1L v12: SHA-256 last 8 bytes)
+        // Verify policy binding using keyed HMAC-SHA256 in constant time
+        if self.header.ecc_and_binding_mode.use_ecdsa_binding {
+            return Err(NanoTdfError::Unsupported(
+                "ECDSA policy binding verification not yet implemented".to_string(),
+            ));
+        }
         {
-            use sha2::{Digest, Sha256};
+            let policy_bytes = serialize_policy_body_for_binding(&self.header.policy.body)?;
+            let mac = calculate_hmac(aes_key.as_slice(), &policy_bytes).map_err(|e| {
+                NanoTdfError::DecryptionFailed(format!("Policy binding HMAC failed: {e}"))
+            })?;
+            let expected_binding = &mac[24..]; // Last 8 bytes
 
-            // Get policy bytes for binding verification
-            let policy_bytes = match &self.header.policy.body {
-                PolicyBody::Remote(locator) => {
-                    let mut buf = Vec::new();
-                    locator.write_to(&mut buf).map_err(|e| {
-                        NanoTdfError::InvalidHeader(format!("Failed to serialize policy: {}", e))
-                    })?;
-                    buf
-                }
-                PolicyBody::EmbeddedPlaintext(content) => content.clone(),
-                PolicyBody::EmbeddedEncrypted(content) => content.clone(),
-                _ => {
-                    return Err(NanoTdfError::Unsupported(
-                        "Encrypted policy with key access not supported".to_string(),
-                    ));
-                }
-            };
-
-            // L1L v12 binding: SHA-256 of policy body, last 8 bytes
-            let hash = Sha256::digest(&policy_bytes);
-            let expected_binding = &hash[24..]; // Last 8 bytes
-
-            // Policy binding should be 8 bytes for L1L v12
-            if self.header.policy.binding.len() != 8 {
+            if self.header.policy.binding.len() != 8
+                || !bool::from(
+                    self.header
+                        .policy
+                        .binding
+                        .as_slice()
+                        .ct_eq(expected_binding),
+                )
+            {
                 return Err(NanoTdfError::PolicyBindingFailed);
             }
+        }
 
-            if self.header.policy.binding != expected_binding {
-                return Err(NanoTdfError::PolicyBindingFailed);
-            }
+        // Verify optional ECDSA payload signature before returning plaintext
+        let sig_mode = self.header.symmetric_and_payload_config.signature_mode;
+        if sig_mode.has_signature || self.signature.is_some() {
+            let sig = self.signature.as_ref().ok_or_else(|| {
+                NanoTdfError::DecryptionFailed(
+                    "Header declares payload signature but signature is absent".to_string(),
+                )
+            })?;
+            let sig_ecc_mode = sig_mode.signature_ecc_mode.ok_or_else(|| {
+                NanoTdfError::InvalidHeader("Signature ECC mode missing".to_string())
+            })?;
+            let mut signed_data = Vec::new();
+            self.header.write_to(&mut signed_data)?;
+            self.payload.write_to(&mut signed_data)?;
+            verify_nanotdf_signature(sig_ecc_mode, sig, &signed_data)?;
         }
 
         // Determine tag size from config
@@ -545,9 +536,8 @@ impl BinaryRead for NanoTdfPayload {
             ));
         }
 
-        // Read all payload data (IV + ciphertext + tag)
-        let mut payload_data = vec![0u8; length as usize];
-        reader.read_exact(&mut payload_data)?;
+        // Read all payload data (IV + ciphertext + tag) using bounded/chunked reader
+        let payload_data = read_bytes(reader, length as usize)?;
 
         // Extract IV from first 3 bytes
         let iv = NanoTdfIv::from_bytes([payload_data[0], payload_data[1], payload_data[2]]);
@@ -560,6 +550,84 @@ impl BinaryRead for NanoTdfPayload {
             iv,
             ciphertext_and_tag,
         })
+    }
+}
+
+pub(crate) fn serialize_policy_body_for_binding(
+    policy_body: &PolicyBody,
+) -> Result<Vec<u8>, NanoTdfError> {
+    match policy_body {
+        PolicyBody::Remote(locator) => {
+            let mut buf = Vec::new();
+            locator.write_to(&mut buf).map_err(|e| {
+                NanoTdfError::InvalidHeader(format!("Failed to serialize policy: {}", e))
+            })?;
+            Ok(buf)
+        }
+        PolicyBody::EmbeddedPlaintext(content)
+        | PolicyBody::EmbeddedEncrypted(content)
+        | PolicyBody::EmbeddedEncryptedWithKeyAccess { content, .. } => Ok(content.clone()),
+    }
+}
+
+fn verify_nanotdf_signature(
+    ecc_mode: EccMode,
+    sig: &NanoTdfSignature,
+    message: &[u8],
+) -> Result<(), NanoTdfError> {
+    match ecc_mode {
+        EccMode::Secp256r1 => {
+            use p256::ecdsa::{Signature, VerifyingKey, signature::Verifier};
+            let vk = VerifyingKey::from_sec1_bytes(&sig.public_key).map_err(|e| {
+                NanoTdfError::DecryptionFailed(format!("Invalid P-256 signature public key: {e}"))
+            })?;
+            let signature = Signature::from_slice(&sig.signature).map_err(|e| {
+                NanoTdfError::DecryptionFailed(format!("Invalid P-256 signature bytes: {e}"))
+            })?;
+            vk.verify(message, &signature).map_err(|_| {
+                NanoTdfError::DecryptionFailed("P-256 payload signature verification failed".into())
+            })
+        }
+        EccMode::Secp384r1 => {
+            use p384::ecdsa::{Signature, VerifyingKey, signature::Verifier};
+            let vk = VerifyingKey::from_sec1_bytes(&sig.public_key).map_err(|e| {
+                NanoTdfError::DecryptionFailed(format!("Invalid P-384 signature public key: {e}"))
+            })?;
+            let signature = Signature::from_slice(&sig.signature).map_err(|e| {
+                NanoTdfError::DecryptionFailed(format!("Invalid P-384 signature bytes: {e}"))
+            })?;
+            vk.verify(message, &signature).map_err(|_| {
+                NanoTdfError::DecryptionFailed("P-384 payload signature verification failed".into())
+            })
+        }
+        EccMode::Secp521r1 => {
+            use p521::ecdsa::{Signature, VerifyingKey, signature::Verifier};
+            let vk = VerifyingKey::from_sec1_bytes(&sig.public_key).map_err(|e| {
+                NanoTdfError::DecryptionFailed(format!("Invalid P-521 signature public key: {e}"))
+            })?;
+            let signature = Signature::from_slice(&sig.signature).map_err(|e| {
+                NanoTdfError::DecryptionFailed(format!("Invalid P-521 signature bytes: {e}"))
+            })?;
+            vk.verify(message, &signature).map_err(|_| {
+                NanoTdfError::DecryptionFailed("P-521 payload signature verification failed".into())
+            })
+        }
+        EccMode::Secp256k1 => {
+            use k256::ecdsa::{Signature, VerifyingKey, signature::Verifier};
+            let vk = VerifyingKey::from_sec1_bytes(&sig.public_key).map_err(|e| {
+                NanoTdfError::DecryptionFailed(format!(
+                    "Invalid secp256k1 signature public key: {e}"
+                ))
+            })?;
+            let signature = Signature::from_slice(&sig.signature).map_err(|e| {
+                NanoTdfError::DecryptionFailed(format!("Invalid secp256k1 signature bytes: {e}"))
+            })?;
+            vk.verify(message, &signature).map_err(|_| {
+                NanoTdfError::DecryptionFailed(
+                    "secp256k1 payload signature verification failed".into(),
+                )
+            })
+        }
     }
 }
 
@@ -613,15 +681,82 @@ mod tests {
         // Create a dummy KAS key (won't work for encryption but tests size validation)
         let dummy_key = vec![0u8; 33];
 
-        // Test max payload size (16MB - 1)
-        let max_payload = vec![0u8; 0xFFFFFF];
+        // Test max plaintext size (16MB - 1 - 3-byte IV - 12-byte 96-bit tag)
+        let max_payload = vec![0u8; 0x00FF_FFFF - 3 - 12];
         let result = builder.clone().encrypt(&max_payload, &dummy_key);
-        // Will fail on crypto, but not on size validation
+        // Will fail on crypto (invalid dummy key), not on size validation
         assert!(result.is_err());
+        assert!(!matches!(result, Err(NanoTdfError::InvalidPayload(_))));
 
-        // Test over-size payload
-        let oversized_payload = vec![0u8; 0x1000000]; // 16MB
+        // Test over-size plaintext (exceeds u24 once IV + tag are added)
+        let oversized_payload = vec![0u8; 0x00FF_FFFF - 3 - 11];
         let result = builder.encrypt(&oversized_payload, &dummy_key);
         assert!(matches!(result, Err(NanoTdfError::InvalidPayload(_))));
+    }
+
+    #[test]
+    fn test_nanotdf_policy_binding_and_signature_verification() {
+        use p256::SecretKey;
+        use p256::ecdsa::{SigningKey, signature::Signer};
+        use p256::elliptic_curve::Generate;
+        use pkcs8::EncodePrivateKey;
+
+        let kas_secret = SecretKey::generate();
+        let kas_public = kas_secret.public_key().to_sec1_bytes();
+        let kas_priv_der = kas_secret.to_pkcs8_der().unwrap();
+
+        let mut ntdf = NanoTdfBuilder::new()
+            .kas_url("https://kas.example.com")
+            .policy_plaintext(b"secret-policy".to_vec())
+            .encrypt(b"hello nanotdf", &kas_public)
+            .unwrap();
+
+        // Normal decrypt succeeds
+        assert_eq!(
+            ntdf.decrypt(kas_priv_der.as_bytes()).unwrap(),
+            b"hello nanotdf"
+        );
+
+        // Tampering policy body must fail keyed HMAC-SHA256 policy binding verification
+        let mut tampered_policy = ntdf.clone();
+        tampered_policy.header.policy.body =
+            PolicyBody::EmbeddedPlaintext(b"tampered-policy".to_vec());
+        assert!(tampered_policy.decrypt(kas_priv_der.as_bytes()).is_err());
+
+        // Replacing binding with unkeyed SHA-256 tail must also fail
+        use sha2::Digest;
+        let mut unkeyed = ntdf.clone();
+        let policy_bytes = serialize_policy_body_for_binding(&unkeyed.header.policy.body).unwrap();
+        let sha = sha2::Sha256::digest(&policy_bytes);
+        unkeyed.header.policy.binding = sha[24..].to_vec();
+        assert!(unkeyed.decrypt(kas_priv_der.as_bytes()).is_err());
+
+        // Payload ECDSA signature verification: valid signature passes, forged fails
+        let signing_key = SigningKey::from(&SecretKey::generate());
+        let verifying_key = signing_key.verifying_key();
+        ntdf.header
+            .symmetric_and_payload_config
+            .signature_mode
+            .has_signature = true;
+        ntdf.header
+            .symmetric_and_payload_config
+            .signature_mode
+            .signature_ecc_mode = Some(EccMode::Secp256r1);
+        let mut msg = Vec::new();
+        ntdf.header.write_to(&mut msg).unwrap();
+        ntdf.payload.write_to(&mut msg).unwrap();
+        let sig: p256::ecdsa::Signature = signing_key.sign(&msg);
+        ntdf.signature = Some(NanoTdfSignature {
+            public_key: verifying_key.to_sec1_point(true).as_bytes().to_vec(),
+            signature: sig.to_bytes().to_vec(),
+        });
+        assert_eq!(
+            ntdf.decrypt(kas_priv_der.as_bytes()).unwrap(),
+            b"hello nanotdf"
+        );
+
+        // Flip a signature byte -> must reject
+        ntdf.signature.as_mut().unwrap().signature[0] ^= 0xFF;
+        assert!(ntdf.decrypt(kas_priv_der.as_bytes()).is_err());
     }
 }
