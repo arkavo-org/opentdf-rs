@@ -15,8 +15,8 @@ readme = "README.md"
 
 [dependencies]
 # New modular crates
-opentdf-protocol = { path = "crates/protocol", version = "0.18.0" }
-opentdf-crypto = { path = "crates/crypto", version = "0.18.0", default-features = false }
+opentdf-protocol = { path = "crates/protocol", version = "0.19.0" }
+opentdf-crypto = { path = "crates/crypto", version = "0.19.0", default-features = false }
 
 # Core dependencies (using workspace versions)
 zip = { version = "9.0.4", default-features = false, features = ["deflate"] }
@@ -24,9 +24,10 @@ serde_json.workspace = true
 serde.workspace = true
 base64.workspace = true
 thiserror.workspace = true
-chrono.workspace = true
+time.workspace = true
 uuid.workspace = true
 aes-gcm.workspace = true
+zeroize.workspace = true
 
 # KAS client dependencies (simplified, crypto moved to opentdf-crypto)
 reqwest = { workspace = true, optional = true }
@@ -43,6 +44,10 @@ ed25519-dalek = { version = "2", optional = true }
 
 # CBOR encoding for TDF-CBOR format (optional)
 ciborium = { version = "0.2", optional = true }
+
+# time needs wasm-bindgen feature for WASM Date interop (OffsetDateTime::now_utc)
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+time = { version = "0.3", features = ["wasm-bindgen"] }
 
 [dev-dependencies]
 tempfile = "3.14"
@@ -70,7 +75,7 @@ ciborium = "0.2"
 members = ["crates/protocol", "crates/crypto", "crates/kas", "crates/wasm"]
 
 [workspace.package]
-version = "0.18.0"
+version = "0.19.0"
 
 [workspace.dependencies]
 # Core serialization
@@ -84,7 +89,7 @@ thiserror = "2.0"
 base64 = "0.22"
 
 # Date/time
-chrono = { version = "0.4", features = ["serde"] }
+time = { version = "0.3", features = ["serde-well-known", "formatting", "parsing"] }
 
 # Identifiers
 uuid = { version = "1.11", features = ["v4", "serde"] }

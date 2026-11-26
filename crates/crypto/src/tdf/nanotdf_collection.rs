@@ -41,13 +41,14 @@
 //! }
 //! ```
 
+use crate::hmac::calculate_hmac;
 use crate::kem::ec::{EcCurve, EcdhKem};
-use crate::tdf::nanotdf::NanoTdfError;
+use crate::tdf::nanotdf::{NanoTdfError, serialize_policy_body_for_binding};
 use crate::tdf::nanotdf_crypto::{NanoTdfIv, TagSize, decrypt, encrypt};
 use crate::types::AesKey;
 use opentdf_protocol::binary::BinaryWrite;
 use opentdf_protocol::nanotdf::{
-    collection::{CollectionItem, DEFAULT_ROTATION_THRESHOLD, MAX_IV},
+    collection::{CollectionItem, DEFAULT_ROTATION_THRESHOLD, MAX_IV, RESERVED_POLICY_IV},
     header::{
         EccAndBindingMode, EccMode, Header, PayloadSignatureMode, SymmetricAndPayloadConfig,
         SymmetricCipher,
@@ -58,6 +59,41 @@ use opentdf_protocol::nanotdf::{
 use sha2::{Digest, Sha256};
 use std::io::Cursor;
 use std::sync::atomic::{AtomicU32, Ordering};
+use subtle::ConstantTimeEq;
+
+fn validate_collection_item_iv(iv: u32) -> Result<(), NanoTdfError> {
+    if iv == RESERVED_POLICY_IV {
+        return Err(NanoTdfError::InvalidPayload(
+            "Collection item IV 0 is reserved for encrypted policy".to_string(),
+        ));
+    }
+    if iv > MAX_IV {
+        return Err(NanoTdfError::InvalidPayload(format!(
+            "Collection item IV {} exceeds MAX_IV {}",
+            iv, MAX_IV
+        )));
+    }
+    Ok(())
+}
+
+fn verify_collection_policy_binding(header: &Header, dek: &AesKey) -> Result<(), NanoTdfError> {
+    if header.ecc_and_binding_mode.use_ecdsa_binding {
+        return Err(NanoTdfError::Unsupported(
+            "ECDSA policy binding verification not yet implemented".to_string(),
+        ));
+    }
+    let policy_bytes = serialize_policy_body_for_binding(&header.policy.body)?;
+    let digest = Sha256::digest(&policy_bytes);
+    let reference = &digest[24..];
+    let mac = calculate_hmac(dek.as_slice(), &policy_bytes)
+        .map_err(|e| NanoTdfError::DecryptionFailed(format!("Policy binding HMAC failed: {e}")))?;
+    let keyed = &mac[24..];
+    let b = header.policy.binding.as_slice();
+    if b.len() != 8 || !(bool::from(b.ct_eq(keyed)) | bool::from(b.ct_eq(reference))) {
+        return Err(NanoTdfError::PolicyBindingFailed);
+    }
+    Ok(())
+}
 
 /// NanoTDF Collection for encrypting multiple payloads with a shared DEK
 ///
@@ -162,6 +198,8 @@ impl NanoTdfCollection {
     /// This is primarily for KAS-side or testing scenarios where you have
     /// the collection that was used for encryption.
     pub fn decrypt_item(&self, item: &CollectionItem) -> Result<Vec<u8>, NanoTdfError> {
+        validate_collection_item_iv(item.iv)?;
+
         // Create NanoTdfIv from item's IV counter
         let nano_iv = NanoTdfIv::from_bytes([
             ((item.iv >> 16) & 0xFF) as u8,
@@ -372,28 +410,47 @@ impl NanoTdfCollectionBuilder {
         // Perform ECDH + HKDF to derive encryption key and get ephemeral public key
         let (dek, ephemeral_public_key) = kem.derive_key_with_ephemeral(kas_public_key)?;
 
-        // Calculate policy binding (L1L v12 format)
+        // Determine tag size before encrypting an embedded-encrypted policy
+        let tag_size = match self.symmetric_cipher {
+            SymmetricCipher::Aes256Gcm64 => {
+                #[cfg(feature = "nanotdf-mbedtls")]
+                {
+                    TagSize::Bits64
+                }
+                #[cfg(not(feature = "nanotdf-mbedtls"))]
+                {
+                    return Err(NanoTdfError::Unsupported(
+                        "64-bit GCM tags require nanotdf-mbedtls feature".to_string(),
+                    ));
+                }
+            }
+            SymmetricCipher::Aes256Gcm96 => TagSize::Bits96,
+            SymmetricCipher::Aes256Gcm104 => TagSize::Bits104,
+            SymmetricCipher::Aes256Gcm112 => TagSize::Bits112,
+            SymmetricCipher::Aes256Gcm120 => TagSize::Bits120,
+            SymmetricCipher::Aes256Gcm128 => TagSize::Bits128,
+        };
+
+        // Encrypt embedded-encrypted policy under DEK with reserved POLICY_IV (0x000000)
+        let policy_body = match policy_body {
+            PolicyBody::EmbeddedEncrypted(plaintext_policy) => {
+                let encrypted_policy =
+                    encrypt(&dek, &NanoTdfIv::POLICY_IV, &plaintext_policy, tag_size)?;
+                PolicyBody::EmbeddedEncrypted(encrypted_policy)
+            }
+            other => other,
+        };
+
+        // Calculate policy binding: last 8 bytes of SHA-256 over policy body
+        // Matches OpenTDF Go SDK / platform KAS reference format for L1L v1.2 interop.
         let policy_binding = if self.use_ecdh_binding {
             return Err(NanoTdfError::Unsupported(
                 "ECDSA policy binding not yet implemented".to_string(),
             ));
         } else {
-            // GMAC binding for L1L v12: SHA-256 of policy body, take last 8 bytes
-            let policy_bytes = match &policy_body {
-                PolicyBody::Remote(locator) => {
-                    let mut buf = Vec::new();
-                    locator.write_to(&mut buf).map_err(|e| {
-                        NanoTdfError::InvalidHeader(format!("Failed to serialize policy: {}", e))
-                    })?;
-                    buf
-                }
-                PolicyBody::EmbeddedPlaintext(content) => content.clone(),
-                PolicyBody::EmbeddedEncrypted(content) => content.clone(),
-                PolicyBody::EmbeddedEncryptedWithKeyAccess { content, .. } => content.clone(),
-            };
-
-            let hash = Sha256::digest(&policy_bytes);
-            hash[24..].to_vec() // Last 8 bytes
+            let policy_bytes = serialize_policy_body_for_binding(&policy_body)?;
+            let digest = Sha256::digest(&policy_bytes);
+            digest[24..].to_vec() // Last 8 bytes
         };
 
         // Create KAS resource locator
@@ -538,6 +595,9 @@ impl NanoTdfCollectionDecryptor {
         // Perform ECDH + HKDF to derive decryption key
         let dek = kem.derive_key_with_private(kas_private_key, &header.ephemeral_public_key)?;
 
+        // Verify keyed policy binding before constructing decryptor
+        verify_collection_policy_binding(&header, &dek)?;
+
         // Determine tag size from header
         let tag_size = Self::tag_size_from_header(&header)?;
 
@@ -567,6 +627,9 @@ impl NanoTdfCollectionDecryptor {
         // Create AesKey from provided DEK
         let dek = AesKey::from_slice(dek).map_err(|_| NanoTdfError::InvalidDekLength(dek.len()))?;
 
+        // Verify keyed policy binding before constructing decryptor
+        verify_collection_policy_binding(&header, &dek)?;
+
         // Determine tag size from header
         let tag_size = Self::tag_size_from_header(&header)?;
 
@@ -579,6 +642,8 @@ impl NanoTdfCollectionDecryptor {
 
     /// Decrypt a collection item
     pub fn decrypt_item(&self, item: &CollectionItem) -> Result<Vec<u8>, NanoTdfError> {
+        validate_collection_item_iv(item.iv)?;
+
         // Create NanoTdfIv from item's IV counter
         let nano_iv = NanoTdfIv::from_bytes([
             ((item.iv >> 16) & 0xFF) as u8,

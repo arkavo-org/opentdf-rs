@@ -108,12 +108,16 @@ impl TagSize {
 pub struct NanoTdfIv([u8; 3]);
 
 impl NanoTdfIv {
-    /// Create a new random IV
+    /// Create a new random IV (never emits the reserved `POLICY_IV` `[0, 0, 0]`)
     pub fn random() -> Self {
         let mut rng = rand::thread_rng();
         let mut iv = [0u8; 3];
-        rng.fill_bytes(&mut iv);
-        Self(iv)
+        loop {
+            rng.fill_bytes(&mut iv);
+            if iv != Self::POLICY_IV.0 {
+                return Self(iv);
+            }
+        }
     }
 
     /// Create from bytes

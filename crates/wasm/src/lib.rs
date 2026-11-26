@@ -89,9 +89,12 @@ async fn _tdf_create_impl(data: &str, kas_url: &str, policy_json: &str) -> Resul
         .decode(data)
         .map_err(|e| format!("Failed to decode data: {}", e))?;
 
-    // Step 3: Parse policy
+    // Step 3: Parse and validate policy
     let policy: Policy =
         serde_json::from_str(policy_json).map_err(|e| format!("Failed to parse policy: {}", e))?;
+    policy
+        .validate()
+        .map_err(|e| format!("Invalid policy: {}", e))?;
 
     // Step 4: Create TDF encryption instance with generated keys
     let tdf_encryption =
@@ -339,6 +342,9 @@ pub fn policy_create(policy_json: &str) -> WasmResult {
 fn _policy_create_impl(policy_json: &str) -> Result<String, String> {
     let policy: Policy =
         serde_json::from_str(policy_json).map_err(|e| format!("Failed to parse policy: {}", e))?;
+    policy
+        .validate()
+        .map_err(|e| format!("Invalid policy: {}", e))?;
 
     serde_json::to_string(&policy).map_err(|e| format!("Failed to serialize policy: {}", e))
 }
@@ -379,19 +385,36 @@ fn _access_evaluate_impl(policy_json: &str, attributes_json: &str) -> Result<boo
             serde_json::Value::Number(n) => AttributeValue::Number(n.as_f64().unwrap_or(0.0)),
             serde_json::Value::Bool(b) => AttributeValue::Boolean(b),
             serde_json::Value::Array(arr) => {
-                // Try to determine array type from first element
+                // Validate that every element has the same supported type (never silently drop)
                 if let Some(first) = arr.first() {
                     match first {
                         serde_json::Value::String(_) => {
-                            let strings: Vec<String> = arr
+                            let strings: Result<Vec<String>, String> = arr
                                 .iter()
-                                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                .map(|v| {
+                                    v.as_str().map(|s| s.to_string()).ok_or_else(|| {
+                                        format!(
+                                            "Mixed array element types for string attribute '{}'",
+                                            key
+                                        )
+                                    })
+                                })
                                 .collect();
-                            AttributeValue::StringArray(strings)
+                            AttributeValue::StringArray(strings?)
                         }
                         serde_json::Value::Number(_) => {
-                            let numbers: Vec<f64> = arr.iter().filter_map(|v| v.as_f64()).collect();
-                            AttributeValue::NumberArray(numbers)
+                            let numbers: Result<Vec<f64>, String> = arr
+                                .iter()
+                                .map(|v| {
+                                    v.as_f64().ok_or_else(|| {
+                                        format!(
+                                            "Mixed array element types for number attribute '{}'",
+                                            key
+                                        )
+                                    })
+                                })
+                                .collect();
+                            AttributeValue::NumberArray(numbers?)
                         }
                         _ => {
                             return Err(format!(
@@ -466,7 +489,7 @@ mod tests {
     #[wasm_bindgen_test]
     fn test_policy_create() {
         let policy_json = r#"{
-            "uuid": "test-uuid",
+            "uuid": "550e8400-e29b-41d4-a716-446655440000",
             "body": {
                 "attributes": [],
                 "dissem": ["user@example.com"]

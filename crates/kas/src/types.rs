@@ -15,9 +15,8 @@ impl KeyAlgorithm {
     /// Parse algorithm string from OpenTDF spec format
     pub fn parse(s: &str) -> Option<Self> {
         match s {
-            "" => Some(KeyAlgorithm::Rsa2048), // Empty = Standard TDF RSA
-            s if s.starts_with("ec") || s.contains("secp256") => Some(KeyAlgorithm::EcP256),
-            s if s.starts_with("rsa") => Some(KeyAlgorithm::Rsa2048),
+            "" | "rsa" | "rsa:2048" => Some(KeyAlgorithm::Rsa2048),
+            "ec" | "ec:secp256r1" | "secp256r1" => Some(KeyAlgorithm::EcP256),
             _ => None,
         }
     }
@@ -33,18 +32,25 @@ impl KeyAlgorithm {
     }
 }
 
-/// Key access object for rewrap
+/// Key access object for rewrap (supports both NanoTDF `header` and Standard TDF `wrappedKey`)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KeyAccessObject {
-    /// Base64-encoded header (NanoTDF header or RSA-wrapped DEK)
+    /// Base64-encoded NanoTDF header (empty for Standard TDF)
+    #[serde(default)]
     pub header: String,
+    /// Base64-encoded wrapped key (Standard TDF)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wrapped_key: Option<String>,
+    /// Policy binding (Standard TDF)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_binding: Option<opentdf_protocol::KasPolicyBinding>,
     /// Key access type
     #[serde(rename = "type")]
     pub type_field: String,
     /// KAS URL
     pub url: String,
-    /// Protocol (e.g., "nanotdf", "tdf")
+    /// Protocol (e.g., "nanotdf", "tdf", "kas")
     pub protocol: String,
 }
 

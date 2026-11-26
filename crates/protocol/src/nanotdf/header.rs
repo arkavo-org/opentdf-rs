@@ -54,6 +54,7 @@ impl BinaryRead for MagicNumberAndVersion {
 
 impl BinaryWrite for MagicNumberAndVersion {
     fn write_to<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        self.validate()?;
         writer.write_all(&self.bytes)
     }
 
@@ -256,6 +257,9 @@ impl PayloadSignatureMode {
 
     /// Get the signature size if present
     pub fn signature_size(&self) -> usize {
+        if !self.has_signature {
+            return 0;
+        }
         if let Some(ecc_mode) = self.signature_ecc_mode {
             ecc_mode.public_key_size() + ecc_mode.signature_size()
         } else {
@@ -307,17 +311,16 @@ impl SymmetricAndPayloadConfig {
 
     /// Convert to byte
     pub fn to_byte(self) -> u8 {
-        let sig_bit = if self.signature_mode.has_signature {
-            0x80
+        if self.signature_mode.has_signature {
+            let sig_ecc = self
+                .signature_mode
+                .signature_ecc_mode
+                .map(|m| m.to_bits() << 4)
+                .unwrap_or(0x00);
+            0x80 | sig_ecc | self.symmetric_cipher.to_bits()
         } else {
-            0x00
-        };
-        let sig_ecc = if let Some(ecc_mode) = self.signature_mode.signature_ecc_mode {
-            ecc_mode.to_bits() << 4
-        } else {
-            0x00
-        };
-        sig_bit | sig_ecc | self.symmetric_cipher.to_bits()
+            self.symmetric_cipher.to_bits()
+        }
     }
 }
 
@@ -330,6 +333,18 @@ impl BinaryRead for SymmetricAndPayloadConfig {
 
 impl BinaryWrite for SymmetricAndPayloadConfig {
     fn write_to<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        if self.signature_mode.has_signature && self.signature_mode.signature_ecc_mode.is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Signature mode has_signature=true requires signature_ecc_mode",
+            ));
+        }
+        if !self.signature_mode.has_signature && self.signature_mode.signature_ecc_mode.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Signature mode has_signature=false must not set signature_ecc_mode",
+            ));
+        }
         write_u8(writer, self.to_byte())
     }
 
@@ -395,7 +410,7 @@ impl BinaryRead for Header {
         let kas = ResourceLocator::read_from(reader)?;
         let ecc_and_binding_mode = EccAndBindingMode::read_from(reader)?;
         let symmetric_and_payload_config = SymmetricAndPayloadConfig::read_from(reader)?;
-        let policy = Policy::read_from(reader)?;
+        let policy = Policy::read_from_with_mode(reader, ecc_and_binding_mode)?;
 
         // Read ephemeral public key (size depends on ECC mode)
         let key_size = ecc_and_binding_mode.ecc_mode.public_key_size();
@@ -415,6 +430,48 @@ impl BinaryRead for Header {
 
 impl BinaryWrite for Header {
     fn write_to<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        let expected_key_size = self.ecc_and_binding_mode.ecc_mode.public_key_size();
+        if self.ephemeral_public_key.len() != expected_key_size {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "Invalid ephemeral public key size: {} (expected {})",
+                    self.ephemeral_public_key.len(),
+                    expected_key_size
+                ),
+            ));
+        }
+        let expected_binding_size = if self.ecc_and_binding_mode.use_ecdsa_binding {
+            self.ecc_and_binding_mode.ecc_mode.signature_size()
+        } else {
+            8
+        };
+        if self.policy.binding.len() != expected_binding_size {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "Invalid policy binding size: {} (expected {})",
+                    self.policy.binding.len(),
+                    expected_binding_size
+                ),
+            ));
+        }
+        if let crate::nanotdf::policy::PolicyBody::EmbeddedEncryptedWithKeyAccess {
+            ephemeral_key,
+            ..
+        } = &self.policy.body
+            && ephemeral_key.len() != expected_key_size
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "Invalid policy ephemeral key size: {} (expected {})",
+                    ephemeral_key.len(),
+                    expected_key_size
+                ),
+            ));
+        }
+
         self.magic_number_and_version.write_to(writer)?;
         self.kas.write_to(writer)?;
         self.ecc_and_binding_mode.write_to(writer)?;
@@ -493,5 +550,35 @@ mod tests {
             Some(EccMode::Secp256r1)
         );
         assert_eq!(parsed.symmetric_cipher, SymmetricCipher::Aes256Gcm128);
+    }
+
+    #[test]
+    fn test_header_roundtrip_p384_ecdsa_binding() {
+        use crate::nanotdf::{PolicyBody, Protocol};
+        use std::io::Cursor;
+
+        let ecc_mode = EccAndBindingMode {
+            use_ecdsa_binding: true,
+            ecc_mode: EccMode::Secp384r1,
+        };
+        let header = Header {
+            magic_number_and_version: MagicNumberAndVersion::new(),
+            kas: ResourceLocator::new(Protocol::Https, b"kas.example.com".to_vec()),
+            ecc_and_binding_mode: ecc_mode,
+            symmetric_and_payload_config: SymmetricAndPayloadConfig::new(
+                PayloadSignatureMode::none(),
+                SymmetricCipher::Aes256Gcm128,
+            ),
+            policy: Policy {
+                body: PolicyBody::EmbeddedPlaintext(b"p384-policy".to_vec()),
+                binding: vec![0xAB; 96],
+            },
+            ephemeral_public_key: vec![0x02; 49],
+        };
+        let mut buf = Vec::new();
+        header.write_to(&mut buf).unwrap();
+        let mut cursor = Cursor::new(&buf);
+        let parsed = Header::read_from(&mut cursor).unwrap();
+        assert_eq!(parsed, header);
     }
 }

@@ -152,9 +152,9 @@ pub struct KeyAccessObject {
     pub key_type: String,
     pub url: String,
     pub protocol: String,
-    #[serde(rename = "wrappedKey")]
+    #[serde(rename = "wrappedKey", default)]
     pub wrapped_key: String,
-    #[serde(rename = "policyBinding")]
+    #[serde(rename = "policyBinding", default)]
     pub policy_binding: KasPolicyBinding,
     #[serde(rename = "encryptedMetadata", skip_serializing_if = "Option::is_none")]
     pub encrypted_metadata: Option<String>,
@@ -205,8 +205,9 @@ impl KeyAccessObject {
 }
 
 /// Policy binding for KAS requests
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct KasPolicyBinding {
+    #[serde(default)]
     pub hash: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub algorithm: Option<String>,
@@ -227,6 +228,7 @@ pub struct SignedRewrapRequest {
 #[derive(Debug, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct RewrapResponse {
+    #[serde(default)]
     pub responses: Vec<PolicyRewrapResult>,
     #[serde(rename = "sessionPublicKey")]
     pub session_public_key: Option<String>,
@@ -236,8 +238,9 @@ pub struct RewrapResponse {
 #[derive(Debug, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct PolicyRewrapResult {
-    #[serde(rename = "policyId")]
+    #[serde(rename = "policyId", default)]
     pub policy_id: String,
+    #[serde(default)]
     pub results: Vec<KeyAccessRewrapResult>,
 }
 
@@ -245,8 +248,9 @@ pub struct PolicyRewrapResult {
 #[derive(Debug, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct KeyAccessRewrapResult {
-    #[serde(rename = "keyAccessObjectId")]
+    #[serde(rename = "keyAccessObjectId", default)]
     pub key_access_object_id: String,
+    #[serde(default)]
     pub status: String,
     #[serde(rename = "kasWrappedKey")]
     pub kas_wrapped_key: Option<String>,

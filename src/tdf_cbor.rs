@@ -48,9 +48,14 @@ use crate::manifest::{
     Assertion, EncryptionInformation, EncryptionMethod, IntegrityInformation,
     IntegrityInformationExt, KeyAccess, RootSignature, Segment,
 };
+#[cfg(feature = "kas-client")]
 use crate::policy::Policy;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use opentdf_crypto::{EncryptionError, TdfEncryption, calculate_policy_binding};
+use opentdf_crypto::EncryptionError;
+#[cfg(any(feature = "kas-client", test))]
+use opentdf_crypto::TdfEncryption;
+#[cfg(feature = "kas-client")]
+use opentdf_crypto::calculate_policy_binding;
 use serde::{Deserialize, Serialize};
 
 /// AES-256-GCM nonce length in bytes; `method.iv` must carry at least this many.
@@ -238,6 +243,10 @@ pub struct TdfCborManifest {
 
     /// Optional assertions (spec: assertion.md), same shape as
     /// `TdfManifest::assertions`.
+    ///
+    /// **Security note**: Decoded assertions are NOT cryptographically verified
+    /// during `TdfCbor::from_bytes` or `TdfCbor::decrypt_with_key`. Callers MUST
+    /// verify assertion bindings/signatures before trusting assertion contents.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assertions: Option<Vec<Assertion>>,
 }
@@ -392,10 +401,7 @@ impl TdfCbor {
 
         for (k, v) in map {
             let key = match k {
-                Value::Integer(i) => {
-                    let i128_val: i128 = i.into();
-                    i128_val as u64
-                }
+                Value::Integer(i) => Self::int_to_u64(i)?,
                 _ => continue,
             };
 
@@ -411,9 +417,20 @@ impl TdfCbor {
                     {
                         let mut ver = [0u8; 3];
                         for (i, val) in arr.iter().enumerate() {
-                            if let Value::Integer(n) = val {
-                                let i128_val: i128 = (*n).into();
-                                ver[i] = i128_val as u8;
+                            match val {
+                                Value::Integer(n) => {
+                                    let i128_val: i128 = (*n).into();
+                                    ver[i] = u8::try_from(i128_val).map_err(|_| {
+                                        TdfCborError::DecodingError(format!(
+                                            "Version component out of u8 range: {i128_val}"
+                                        ))
+                                    })?;
+                                }
+                                _ => {
+                                    return Err(TdfCborError::DecodingError(
+                                        "Version components must be integers".to_string(),
+                                    ));
+                                }
                             }
                         }
                         version = Some(ver);
@@ -421,8 +438,7 @@ impl TdfCbor {
                 }
                 key::CREATED => {
                     if let Value::Integer(i) = v {
-                        let i128_val: i128 = i.into();
-                        created = Some(i128_val as u64);
+                        created = Some(Self::int_to_u64(i)?);
                     }
                 }
                 key::MANIFEST => {
@@ -453,10 +469,7 @@ impl TdfCbor {
                         for (pk, pv) in payload_map {
                             // Support both integer keys (new spec) and string keys (legacy)
                             let pkey: u64 = match pk {
-                                Value::Integer(i) => {
-                                    let i128_val: i128 = i.into();
-                                    i128_val as u64
-                                }
+                                Value::Integer(i) => Self::int_to_u64(i)?,
                                 Value::Text(s) => match s.as_str() {
                                     "type" => payload_key::TYPE,
                                     "protocol" => payload_key::PROTOCOL,
@@ -473,8 +486,7 @@ impl TdfCbor {
                                     // Support both integer enum (new) and string (legacy)
                                     match pv {
                                         Value::Integer(i) => {
-                                            let i128_val: i128 = i.into();
-                                            payload_type = match i128_val as u64 {
+                                            payload_type = match Self::int_to_u64(i)? {
                                                 enums::PAYLOAD_TYPE_INLINE => "inline".to_string(),
                                                 enums::PAYLOAD_TYPE_REFERENCE => {
                                                     "reference".to_string()
@@ -490,8 +502,7 @@ impl TdfCbor {
                                     // Support both integer enum (new) and string (legacy)
                                     match pv {
                                         Value::Integer(i) => {
-                                            let i128_val: i128 = i.into();
-                                            protocol = match i128_val as u64 {
+                                            protocol = match Self::int_to_u64(i)? {
                                                 enums::PAYLOAD_PROTOCOL_BINARY => {
                                                     "binary".to_string()
                                                 }
@@ -685,11 +696,20 @@ impl TdfCbor {
             ),
         ];
 
-        // Build manifest map
-        let manifest_map = vec![(
+        // Build manifest map (preserving assertions if present)
+        let mut manifest_map = vec![(
             Value::Integer(manifest_key::ENCRYPTION_INFORMATION.into()),
             Value::Map(enc_info_map),
         )];
+
+        if let Some(ref assertions) = self.manifest.assertions {
+            let assertions_val = Value::serialized(assertions)
+                .map_err(|e| TdfCborError::EncodingError(format!("Assertions encode: {e}")))?;
+            manifest_map.push((
+                Value::Integer(manifest_key::ASSERTIONS.into()),
+                assertions_val,
+            ));
+        }
 
         Ok(Value::Map(manifest_map))
     }
@@ -759,6 +779,13 @@ impl TdfCbor {
         ];
 
         // Add optional fields
+        if let Some(ref meta) = ka.encrypted_metadata {
+            ka_map.push((
+                Value::Integer(key_access_key::ENCRYPTED_METADATA.into()),
+                Value::Text(meta.clone()),
+            ));
+        }
+
         if let Some(ref kid) = ka.kid {
             ka_map.push((
                 Value::Integer(key_access_key::KID.into()),
@@ -966,19 +993,29 @@ impl TdfCbor {
         };
 
         let mut enc_info = None;
+        let mut assertions = None;
 
         for (k, v) in manifest_map {
             let key = Self::extract_int_key(&k)?;
 
-            if key == manifest_key::ENCRYPTION_INFORMATION {
-                enc_info = Some(Self::decode_encryption_info(v)?);
+            match key {
+                manifest_key::ENCRYPTION_INFORMATION => {
+                    enc_info = Some(Self::decode_encryption_info(v)?);
+                }
+                manifest_key::ASSERTIONS => {
+                    let parsed: Vec<Assertion> = v.deserialized().map_err(|e| {
+                        TdfCborError::DecodingError(format!("Assertions decode: {e}"))
+                    })?;
+                    assertions = Some(parsed);
+                }
+                _ => {}
             }
         }
 
         Ok(TdfCborManifest {
             encryption_information: enc_info
                 .ok_or_else(|| TdfCborError::MissingField("encryptionInformation".to_string()))?,
-            assertions: None, // TODO: decode assertions if present
+            assertions,
         })
     }
 
@@ -1010,8 +1047,7 @@ impl TdfCbor {
             match key {
                 enc_info_key::TYPE => {
                     if let Value::Integer(i) = v {
-                        let i128_val: i128 = i.into();
-                        enc_type = match i128_val as u64 {
+                        enc_type = match Self::int_to_u64(i)? {
                             enums::ENCRYPTION_TYPE_SPLIT => "split".to_string(),
                             _ => "split".to_string(),
                         };
@@ -1069,6 +1105,7 @@ impl TdfCbor {
         let mut protocol = "kas".to_string();
         let mut wrapped_key = String::new();
         let mut policy_binding = None;
+        let mut encrypted_metadata = None;
         let mut kid = None;
         let mut ephemeral_public_key = None;
         let mut schema_version = None;
@@ -1079,8 +1116,7 @@ impl TdfCbor {
             match key {
                 key_access_key::TYPE => {
                     if let Value::Integer(i) = v {
-                        let i128_val: i128 = i.into();
-                        access_type = match i128_val as u64 {
+                        access_type = match Self::int_to_u64(i)? {
                             enums::KEY_ACCESS_TYPE_WRAPPED => "wrapped".to_string(),
                             enums::KEY_ACCESS_TYPE_REMOTE => "remote".to_string(),
                             _ => "wrapped".to_string(),
@@ -1094,8 +1130,7 @@ impl TdfCbor {
                 }
                 key_access_key::PROTOCOL => {
                     if let Value::Integer(i) = v {
-                        let i128_val: i128 = i.into();
-                        protocol = match i128_val as u64 {
+                        protocol = match Self::int_to_u64(i)? {
                             enums::KEY_PROTOCOL_KAS => "kas".to_string(),
                             _ => "kas".to_string(),
                         };
@@ -1108,6 +1143,11 @@ impl TdfCbor {
                 }
                 key_access_key::POLICY_BINDING => {
                     policy_binding = Some(Self::decode_policy_binding(v)?);
+                }
+                key_access_key::ENCRYPTED_METADATA => {
+                    if let Value::Text(s) = v {
+                        encrypted_metadata = Some(s);
+                    }
                 }
                 key_access_key::KID => {
                     if let Value::Text(s) = v {
@@ -1135,7 +1175,7 @@ impl TdfCbor {
             wrapped_key,
             policy_binding: policy_binding
                 .ok_or_else(|| TdfCborError::MissingField("policyBinding".to_string()))?,
-            encrypted_metadata: None,
+            encrypted_metadata,
             kid,
             // The TDF-CBOR KAO integer-key table defines no split id.
             sid: None,
@@ -1169,8 +1209,7 @@ impl TdfCbor {
             match key {
                 policy_binding_key::ALG => {
                     if let Value::Integer(i) = v {
-                        let i128_val: i128 = i.into();
-                        alg = Self::enum_to_hash_alg(i128_val as u64);
+                        alg = Self::enum_to_hash_alg(Self::int_to_u64(i)?);
                     }
                 }
                 policy_binding_key::HASH => {
@@ -1209,8 +1248,7 @@ impl TdfCbor {
             match key {
                 method_key::ALGORITHM => {
                     if let Value::Integer(i) = v {
-                        let i128_val: i128 = i.into();
-                        algorithm = match i128_val as u64 {
+                        algorithm = match Self::int_to_u64(i)? {
                             enums::SYMMETRIC_ALG_AES_256_GCM => "AES-256-GCM".to_string(),
                             _ => "AES-256-GCM".to_string(),
                         };
@@ -1266,8 +1304,7 @@ impl TdfCbor {
                 }
                 integrity_key::SEGMENT_HASH_ALG => {
                     if let Value::Integer(i) = v {
-                        let i128_val: i128 = i.into();
-                        segment_hash_alg = Self::enum_to_hash_alg(i128_val as u64);
+                        segment_hash_alg = Self::enum_to_hash_alg(Self::int_to_u64(i)?);
                     }
                 }
                 integrity_key::SEGMENTS => {
@@ -1279,14 +1316,12 @@ impl TdfCbor {
                 }
                 integrity_key::SEGMENT_SIZE_DEFAULT => {
                     if let Value::Integer(i) = v {
-                        let i128_val: i128 = i.into();
-                        segment_size_default = i128_val as u64;
+                        segment_size_default = Self::int_to_u64(i)?;
                     }
                 }
                 integrity_key::ENCRYPTED_SEGMENT_SIZE_DEFAULT => {
                     if let Value::Integer(i) = v {
-                        let i128_val: i128 = i.into();
-                        encrypted_segment_size_default = i128_val as u64;
+                        encrypted_segment_size_default = Self::int_to_u64(i)?;
                     }
                 }
                 _ => {}
@@ -1326,8 +1361,7 @@ impl TdfCbor {
             match key {
                 root_sig_key::ALG => {
                     if let Value::Integer(i) = v {
-                        let i128_val: i128 = i.into();
-                        alg = Self::enum_to_hash_alg(i128_val as u64);
+                        alg = Self::enum_to_hash_alg(Self::int_to_u64(i)?);
                     }
                 }
                 root_sig_key::SIG => {
@@ -1371,14 +1405,12 @@ impl TdfCbor {
                 }
                 segment_key::SEGMENT_SIZE => {
                     if let Value::Integer(i) = v {
-                        let i128_val: i128 = i.into();
-                        segment_size = Some(i128_val as u64);
+                        segment_size = Some(Self::int_to_u64(i)?);
                     }
                 }
                 segment_key::ENCRYPTED_SEGMENT_SIZE => {
                     if let Value::Integer(i) = v {
-                        let i128_val: i128 = i.into();
-                        encrypted_segment_size = Some(i128_val as u64);
+                        encrypted_segment_size = Some(Self::int_to_u64(i)?);
                     }
                 }
                 _ => {}
@@ -1392,16 +1424,22 @@ impl TdfCbor {
         })
     }
 
+    /// Convert a CBOR integer to `u64`, rejecting negative or out-of-range values
+    #[cfg(feature = "cbor")]
+    fn int_to_u64(i: ciborium::value::Integer) -> Result<u64, TdfCborError> {
+        let i128_val: i128 = i.into();
+        u64::try_from(i128_val).map_err(|_| {
+            TdfCborError::DecodingError(format!("Integer out of u64 range: {i128_val}"))
+        })
+    }
+
     /// Extract integer key from CBOR value
     #[cfg(feature = "cbor")]
     fn extract_int_key(value: &ciborium::Value) -> Result<u64, TdfCborError> {
         use ciborium::Value;
 
         match value {
-            Value::Integer(i) => {
-                let i128_val: i128 = (*i).into();
-                Ok(i128_val as u64)
-            }
+            Value::Integer(i) => Self::int_to_u64(*i),
             _ => Err(TdfCborError::DecodingError(
                 "Expected integer key".to_string(),
             )),
@@ -1437,6 +1475,20 @@ impl TdfCbor {
         let plaintext = cipher
             .decrypt(nonce, ciphertext.as_ref())
             .map_err(EncryptionError::AeadError)?;
+
+        // Verify segment hash and root signature against the AES-GCM tag
+        const GCM_TAG_LENGTH: usize = 16;
+        if ciphertext.len() < GCM_TAG_LENGTH {
+            return Err(EncryptionError::SegmentError(
+                "Ciphertext too short for GMAC tag".to_string(),
+            ));
+        }
+        let gmac_tag = ciphertext[ciphertext.len() - GCM_TAG_LENGTH..].to_vec();
+        self.manifest
+            .encryption_information
+            .integrity_information
+            .verify_segments_and_root_signature(&[gmac_tag], payload_key)
+            .map_err(|e| EncryptionError::SegmentError(e.to_string()))?;
 
         Ok(plaintext)
     }
@@ -1636,12 +1688,14 @@ mod tests {
     use super::*;
 
     /// Get test KAS URL from environment variable or use default
+    #[cfg(feature = "kas-client")]
     fn test_kas_url() -> String {
         std::env::var("TEST_KAS_URL").unwrap_or_else(|_| "https://platform.arkavo.net".to_string())
     }
 
     /// Generate a test EC key pair for testing TDF-CBOR encryption
     /// Returns (private_key_pem, public_key_pem)
+    #[cfg(feature = "kas-client")]
     fn generate_test_ec_key_pair() -> (String, String) {
         use p256::SecretKey;
         use p256::elliptic_curve::Generate;
@@ -1746,6 +1800,7 @@ mod tests {
 
     /// The KAS checks the binding as `HMAC-SHA256(DEK, manifest policy)`, where
     /// the manifest policy is the base64 string itself.
+    #[cfg(feature = "kas-client")]
     #[test]
     fn test_policy_binding_matches_manifest_policy() {
         let policy = Policy::new(
@@ -1775,6 +1830,7 @@ mod tests {
         assert_eq!(kao.policy_binding.hash, expected);
     }
 
+    #[cfg(feature = "kas-client")]
     #[test]
     fn test_builder_missing_kas_url() {
         let policy = Policy::new(
@@ -1788,6 +1844,7 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[cfg(feature = "kas-client")]
     #[test]
     fn test_builder_missing_policy() {
         let result = TdfCbor::encrypt(b"Data").kas_url(&test_kas_url()).build();

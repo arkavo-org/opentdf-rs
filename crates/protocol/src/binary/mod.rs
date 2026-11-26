@@ -39,10 +39,21 @@ pub fn read_u32_be<R: Read>(reader: &mut R) -> io::Result<u32> {
     Ok(u32::from_be_bytes(buf))
 }
 
-/// Read exactly n bytes from a reader
+/// Maximum initial buffer reservation when reading length-prefixed data.
+/// Prevents upfront multi-MiB/GiB OOM allocations from untrusted length prefixes.
+const READ_CHUNK_CAP: usize = 64 * 1024;
+
+/// Read exactly n bytes from a reader without upfront allocation of untrusted sizes.
 pub fn read_bytes<R: Read>(reader: &mut R, n: usize) -> io::Result<Vec<u8>> {
-    let mut buf = vec![0u8; n];
-    reader.read_exact(&mut buf)?;
+    let mut buf = Vec::with_capacity(n.min(READ_CHUNK_CAP));
+    let mut limited = reader.take(n as u64);
+    limited.read_to_end(&mut buf)?;
+    if buf.len() != n {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            format!("Expected {} bytes, got {}", n, buf.len()),
+        ));
+    }
     Ok(buf)
 }
 
@@ -140,5 +151,12 @@ mod tests {
 
         let mut cursor = Cursor::new(buf);
         assert_eq!(read_bytes(&mut cursor, 5).unwrap(), data);
+    }
+
+    #[test]
+    fn test_read_bytes_huge_length_fails_without_oom() {
+        let mut cursor = Cursor::new(b"short");
+        let err = read_bytes(&mut cursor, usize::MAX / 2).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
     }
 }

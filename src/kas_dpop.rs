@@ -92,7 +92,7 @@ impl CallerKey {
             htm,
             htu,
             access_token,
-            chrono::Utc::now().timestamp(),
+            time::OffsetDateTime::now_utc().unix_timestamp(),
             &new_jti(),
         )
     }
@@ -370,7 +370,7 @@ mod tests {
             assert_eq!(claims["htm"], "POST");
             assert_eq!(claims["htu"], REWRAP);
             let iat = claims["iat"].as_i64().unwrap();
-            assert!((chrono::Utc::now().timestamp() - iat).abs() <= 5);
+            assert!((time::OffsetDateTime::now_utc().unix_timestamp() - iat).abs() <= 5);
             assert_eq!(claims["ath"], "wSv7o_jGd5w9-_euwLflNt2x3eaE7OVdfOCEWWqWUKE");
         }
     }

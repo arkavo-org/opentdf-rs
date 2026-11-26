@@ -26,8 +26,8 @@ wasm-opt = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-opentdf = { path = "../..", version = "0.18.0", default-features = false }
-opentdf-protocol = { path = "../protocol", version = "0.18.0" }
+opentdf = { path = "../..", version = "0.19.0", default-features = false }
+opentdf-protocol = { path = "../protocol", version = "0.19.0" }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 serde.workspace = true
@@ -40,8 +40,8 @@ url = "2"
 js-sys = "0.3"
 console_error_panic_hook = "0.1"
 base64.workspace = true
-# Chrono needs wasmbind feature for WASM Date interop
-chrono = { version = "0.4", features = ["serde", "wasmbind"] }
+# time needs wasm-bindgen feature for WASM Date interop
+time = { version = "0.3", features = ["wasm-bindgen"] }
 # UUID needs js feature for WASM random generation
 uuid = { version = "1.11", features = ["v4", "serde", "js"] }
 getrandom = { version = "0.2", features = ["js"] }

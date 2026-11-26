@@ -583,3 +583,112 @@ fn validator_accepts_proper_child_value_fqn() {
     };
     let _ = AccessPdp::new(vec![attr], PdpOptions::default()).unwrap();
 }
+
+#[test]
+fn validator_rejects_duplicate_definitions_and_values() {
+    let make_attr = |fqn: &str, val_fqn: &str| Attribute {
+        fqn: fqn.into(),
+        rule: AttributeRule::AnyOf,
+        values: vec![Value {
+            fqn: val_fqn.into(),
+            value: "x".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    // Duplicate attribute definition (case-insensitive)
+    let err = AccessPdp::new(
+        vec![
+            make_attr(
+                "https://example.com/attr/foo",
+                "https://example.com/attr/foo/value/a",
+            ),
+            make_attr(
+                "https://EXAMPLE.COM/attr/FOO",
+                "https://example.com/attr/foo/value/b",
+            ),
+        ],
+        PdpOptions::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(err, PdpError::InvalidAttributeDefinition(_)));
+
+    // Duplicate value FQN inside the same definition
+    let dup_val_attr = Attribute {
+        fqn: "https://example.com/attr/foo".into(),
+        rule: AttributeRule::Hierarchy,
+        values: vec![
+            Value {
+                fqn: "https://example.com/attr/foo/value/a".into(),
+                value: "a".into(),
+                ..Default::default()
+            },
+            Value {
+                fqn: "https://example.com/attr/foo/value/A".into(),
+                value: "a".into(),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let err = AccessPdp::new(vec![dup_val_attr], PdpOptions::default()).unwrap_err();
+    assert!(matches!(err, PdpError::InvalidAttributeDefinition(_)));
+}
+
+#[test]
+fn check_merges_actions_for_case_colliding_entitlement_keys() {
+    let attr = Attribute {
+        fqn: "https://example.com/attr/tag".into(),
+        rule: AttributeRule::AnyOf,
+        values: vec![Value {
+            fqn: "https://example.com/attr/tag/value/a".into(),
+            value: "a".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let pdp = AccessPdp::new(vec![attr], PdpOptions::default()).unwrap();
+    let e = ents(&[
+        ("https://example.com/attr/tag/value/a", &["read"]),
+        ("https://EXAMPLE.COM/attr/TAG/value/A", &["write"]),
+    ]);
+    let write_action = Action {
+        name: "write".into(),
+    };
+    assert_eq!(
+        pdp.check(
+            &e,
+            &read(),
+            &["https://example.com/attr/tag/value/a".to_string()]
+        )
+        .unwrap(),
+        AccessDecision::Allow
+    );
+    assert_eq!(
+        pdp.check(
+            &e,
+            &write_action,
+            &["https://example.com/attr/tag/value/a".to_string()]
+        )
+        .unwrap(),
+        AccessDecision::Allow
+    );
+}
+
+#[test]
+fn registered_resource_value_parse_handles_resm_correctly() {
+    use crate::pdp::identifier::FullyQualifiedRegisteredResourceValue;
+
+    let ns_resm =
+        FullyQualifiedRegisteredResourceValue::parse("https://resm/resm/doc/value/v1").unwrap();
+    assert_eq!(ns_resm.namespace, "resm");
+    assert_eq!(ns_resm.name, "doc");
+    assert_eq!(ns_resm.value, "v1");
+
+    let legacy_resm =
+        FullyQualifiedRegisteredResourceValue::parse("https://resm/resm/value/v1").unwrap();
+    assert_eq!(legacy_resm.namespace, "");
+    assert_eq!(legacy_resm.name, "resm");
+    assert_eq!(legacy_resm.value, "v1");
+}

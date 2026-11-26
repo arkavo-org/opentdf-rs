@@ -20,9 +20,13 @@ p256 = { workspace = true }
 # AES-GCM for rewrap operations
 aes-gcm.workspace = true
 
-# Key derivation
+# Key derivation & policy binding
 hkdf.workspace = true
+hmac.workspace = true
 sha2.workspace = true
+subtle = "2.6"
+zeroize.workspace = true
+opentdf-protocol = { path = "../protocol", version = "0.19.0" }
 
 # Encoding
 base64.workspace = true

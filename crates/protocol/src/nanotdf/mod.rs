@@ -60,8 +60,16 @@ pub const POLICY_IV: [u8; 3] = [0x00, 0x00, 0x00];
 /// Maximum payload length (3 bytes = 16,777,215 bytes ~= 16 MB)
 pub const MAX_PAYLOAD_LENGTH: u32 = 0x00FF_FFFF;
 
-/// Minimum NanoTDF size (header only, no payload, no signature)
-pub const MIN_NANOTDF_SIZE: usize = 43;
+/// Minimum NanoTDF size (header only, no payload, no signature):
+/// 3 (magic) + 2 (empty KAS locator) + 1 (ECC mode) + 1 (sym config)
+/// + 1 (policy type) + 2 (empty policy len) + 8 (GMAC binding) + 33 (P-256 key) = 51 bytes.
+pub const MIN_NANOTDF_SIZE: usize = 51;
 
-/// Maximum NanoTDF size (max header + max payload + max signature)
-pub const MAX_NANOTDF_SIZE: usize = 584 + 16_777_218 + 133;
+/// Maximum NanoTDF size (max header + max payload + max P-521 signature):
+///
+/// - max header = 3 (magic) + 289 (KAS locator: 2 + 255 + 32) + 1 (ECC) + 1 (sym)
+///   + 1 (policy type) + 2 (policy len) + 65535 (policy) + 289 (policy KAS locator)
+///   + 67 (P-521 policy epk) + 132 (P-521 ECDSA binding) + 67 (P-521 header epk) = 66,387 bytes
+/// - max payload = 3 (len) + 16,777,215 = 16,777,218 bytes
+/// - max P-521 signature = 67 (pubkey) + 132 (r||s) = 199 bytes
+pub const MAX_NANOTDF_SIZE: usize = 66_387 + 16_777_218 + 199;
