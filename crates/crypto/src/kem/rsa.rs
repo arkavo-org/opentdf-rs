@@ -6,7 +6,8 @@
 //!
 //! # Backend Selection
 //!
-//! - **aws-lc-rs** (default): Constant-time RSA operations, FIPS validated.
+//! - **aws-lc-rs** (default): Constant-time RSA operations (links AWS-LC's FIPS
+//!   module only when the application enables `aws-lc-rs/fips`).
 //!   This is the recommended backend for production use.
 //!
 //! - **rustcrypto-provider** (optional): Pure Rust RSA from the RustCrypto `rsa`

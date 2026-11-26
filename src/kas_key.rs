@@ -9,7 +9,7 @@ use thiserror::Error;
 #[cfg(feature = "kas-client")]
 use reqwest::Client;
 
-// Use aws-lc-rs for RSA public key validation (constant-time, FIPS validated)
+// Use aws-lc-rs for constant-time RSA public key validation
 #[cfg(feature = "kas-client")]
 use aws_lc_rs::rsa::PublicEncryptingKey;
 
@@ -213,7 +213,7 @@ pub async fn fetch_kas_public_key_connect(
 /// Parse and validate a PEM-encoded RSA public key
 ///
 /// This function validates that the key is in proper PEM format and can be parsed as an RSA public key.
-/// Uses aws-lc-rs for constant-time RSA operations (FIPS validated).
+/// Uses aws-lc-rs for constant-time RSA operations.
 ///
 /// # Arguments
 ///

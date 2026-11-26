@@ -34,7 +34,8 @@ reqwest = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 jsonwebtoken = { version = "10", optional = true, features = ["aws_lc_rs"] }
 rand = { workspace = true, optional = true }
-# RSA operations use aws-lc-rs (constant-time, FIPS validated)
+# RSA operations use aws-lc-rs (constant-time; links non-FIPS aws-lc-sys unless
+# the application enables `aws-lc-rs/fips`, e.g. via `crypto-profile`)
 aws-lc-rs = { version = "1.18", optional = true }
 pem = { version = "3.0", optional = true }
 # URL parsing and validation for KAS endpoint security
@@ -117,10 +118,12 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
 
 [features]
-default = ["kas-client"]
+default = ["kas-client", "rustls-tls"]
 
 # KAS (Key Access Service) client with aws-lc-rs backend (recommended)
-# Uses constant-time RSA operations, FIPS validated
+# Constant-time RSA via aws-lc-rs (uses AWS-LC's FIPS module only when the
+# application enables `aws-lc-rs/fips`, e.g. via `crypto-profile`).
+# With `default-features = false`, also select a TLS feature below.
 kas-client = ["_kas-client-base", "dep:aws-lc-rs", "dep:pem", "opentdf-crypto/aws-lc-provider"]
 
 # KAS client with pure Rust backend (RustCrypto)
@@ -128,10 +131,16 @@ kas-client = ["_kas-client-base", "dep:aws-lc-rs", "dep:pem", "opentdf-crypto/aw
 kas-client-rustcrypto = ["_kas-client-base", "opentdf-crypto/rustcrypto-provider"]
 
 # Internal: shared KAS client dependencies (do not use directly)
-_kas-client-base = ["dep:reqwest", "dep:tokio", "dep:jsonwebtoken", "dep:rand", "dep:url", "dep:ed25519-dalek", "opentdf-crypto/kem-rsa", "opentdf-crypto/kem-ec", "rustls-tls"]
+_kas-client-base = ["dep:reqwest", "dep:tokio", "dep:jsonwebtoken", "dep:rand", "dep:url", "dep:ed25519-dalek", "opentdf-crypto/kem-rsa", "opentdf-crypto/kem-ec"]
 
 # TLS backend selection for reqwest
+# `rustls-tls` pulls reqwest's default ring-backed rustls provider.
+# Use `rustls-tls-no-provider` (or `rustls-tls-webpki-roots-no-provider`) when the
+# application supplies its own rustls CryptoProvider (such as `crypto-profile`)
+# and passes a preconfigured client to `KasClient::with_http_client`.
 rustls-tls = ["reqwest?/rustls-tls"]
+rustls-tls-no-provider = ["reqwest?/rustls-tls-no-provider"]
+rustls-tls-webpki-roots-no-provider = ["reqwest?/rustls-tls-webpki-roots-no-provider"]
 native-tls = ["reqwest?/native-tls"]
 
 # TDF-CBOR format support (optional)
