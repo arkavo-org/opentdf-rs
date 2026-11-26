@@ -694,6 +694,8 @@ opentdf = { version = "0.20", default-features = false, features = ["kas-client"
 opentdf = { version = "0.20", default-features = false }
 ```
 
+For application-governed TLS profiles and AWS-LC FIPS module selection (such as CNSA 2.0, FIPS 140-3, or BSI), pair `rustls-tls-no-provider` with [`crypto-profile`](https://github.com/crypto-profile/crypto-profile) and pass the resulting `rustls::ClientConfig` through `KasClient::with_http_client_builder` (via `reqwest::Client::builder().use_preconfigured_tls(...)`).
+
 #### WASM Note
 
 The `opentdf-wasm` crate uses browser-native **WebCrypto** for RSA operations—no Rust crypto crate needed, no timing vulnerability.

@@ -137,8 +137,9 @@ _kas-client-base = ["dep:reqwest", "dep:tokio", "dep:jsonwebtoken", "dep:rand", 
 # TLS backend selection for reqwest
 # `rustls-tls` pulls reqwest's default ring-backed rustls provider.
 # Use `rustls-tls-no-provider` (or `rustls-tls-webpki-roots-no-provider`) when the
-# application supplies its own rustls CryptoProvider (such as `crypto-profile`)
-# and passes a preconfigured client to `KasClient::with_http_client`.
+# application supplies its own rustls CryptoProvider (such as `crypto-profile`:
+# https://github.com/crypto-profile/crypto-profile) and passes a preconfigured
+# client via `KasClient::with_http_client_builder` or `KasClient::with_http_client`.
 rustls-tls = ["reqwest?/rustls-tls"]
 rustls-tls-no-provider = ["reqwest?/rustls-tls-no-provider"]
 rustls-tls-webpki-roots-no-provider = ["reqwest?/rustls-tls-webpki-roots-no-provider"]

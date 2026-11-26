@@ -9,7 +9,7 @@
 
 ### Added
 
-- `KasClient::with_http_client_builder` (recommended for custom TLS / `crypto-profile` configs; enforces `redirect::Policy::none()` and `https_only(true)` for HTTPS endpoints) and `KasClient::with_http_client` (for shared connection pools, with defense-in-depth redirect/final-URL refusal in `send_rewrap_request`).
+- `KasClient::with_http_client_builder` (recommended for custom TLS / [`crypto-profile`](https://github.com/crypto-profile/crypto-profile) configs; enforces `redirect::Policy::none()` and `https_only(true)` for HTTPS endpoints) and `KasClient::with_http_client` (for shared connection pools, with defense-in-depth redirect/final-URL refusal in `send_rewrap_request`).
 - `rustls-tls-no-provider` and `rustls-tls-webpki-roots-no-provider` Cargo features so applications owning their `rustls::crypto::CryptoProvider` avoid pulling `ring` or stock `rustls` providers.
 
 ## [0.19.0] — 2026-11-26

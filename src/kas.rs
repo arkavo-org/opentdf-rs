@@ -256,8 +256,8 @@ impl KasClient {
     /// This is the **recommended** entry point when the application governs TLS
     /// or transport policy — for example, calling
     /// `.use_preconfigured_tls(client_config)` with a `rustls::ClientConfig`
-    /// built by `crypto-profile`, configuring mTLS client authentication, or
-    /// setting custom timeouts/proxies.
+    /// built by [`crypto-profile`](https://github.com/crypto-profile/crypto-profile),
+    /// configuring mTLS client authentication, or setting custom timeouts/proxies.
     ///
     /// # Security
     ///
