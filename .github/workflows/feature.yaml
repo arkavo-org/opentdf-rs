@@ -224,3 +224,47 @@ jobs:
         run: |
           cargo fmt -- --check
           cargo clippy --target wasm32-unknown-unknown -- -D warnings
+
+  crypto-profile:
+    name: crypto-profile (AWS-LC FIPS + provider-free rustls)
+    runs-on: ubuntu-24.04
+    env:
+      AWS_LC_FIPS_SYS_USE_SYSTEM: "0"
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: setup-rust
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+
+      - name: install-fips-build-deps
+        run: sudo apt-get update && sudo apt-get install -y cmake golang clang libclang-dev
+
+      - name: verify-dependency-graph
+        working-directory: tests/crypto-profile
+        run: |
+          if cargo tree -e normal -i ring 2>/dev/null | grep -q '^ring '; then
+            echo "ERROR: ring leaked into crypto-profile consumer graph" >&2
+            exit 1
+          fi
+          if cargo tree -e normal,features -i rustls | grep -qE 'rustls feature "(ring|aws_lc_rs|aws-lc-rs)"'; then
+            echo "ERROR: stock rustls provider feature leaked into crypto-profile consumer graph" >&2
+            cargo tree -e normal,features -i rustls >&2
+            exit 1
+          fi
+          cargo tree -e normal -i aws-lc-fips-sys | grep -q '^aws-lc-fips-sys '
+
+      - name: format-and-clippy
+        working-directory: tests/crypto-profile
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+
+      - name: test-crypto-profile-integration
+        working-directory: tests/crypto-profile
+        run: cargo test --verbose
