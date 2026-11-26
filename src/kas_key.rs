@@ -59,12 +59,88 @@ pub struct KasEcPublicKeyResponse {
     pub kid: String, // Key ID (e.g., "ec:secp256r1")
 }
 
+/// Validate a KAS base URL and build the legacy `/kas/v2/kas_public_key` endpoint
+/// using `url::Url` (rejecting non-HTTPS non-loopback URLs, private IPs, userinfo,
+/// query strings, and fragments).
+#[cfg(feature = "kas-client")]
+fn build_legacy_public_key_endpoint(
+    kas_url: &str,
+    algorithm: Option<&str>,
+) -> Result<String, KasKeyError> {
+    crate::kas_discovery::validate_kas_url(kas_url)
+        .map_err(|e| KasKeyError::HttpError(format!("Invalid KAS URL: {e}")))?;
+
+    let mut parsed = url::Url::parse(kas_url)
+        .map_err(|e| KasKeyError::HttpError(format!("Invalid KAS URL '{kas_url}': {e}")))?;
+
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(KasKeyError::HttpError(
+            "KAS URL must not contain userinfo".to_string(),
+        ));
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err(KasKeyError::HttpError(
+            "KAS URL must not contain query string or fragment".to_string(),
+        ));
+    }
+
+    let base_path = parsed.path().trim_end_matches('/');
+    let new_path = if base_path.ends_with("/kas") {
+        format!("{base_path}/v2/kas_public_key")
+    } else {
+        format!("{base_path}/kas/v2/kas_public_key")
+    };
+    parsed.set_path(&new_path);
+
+    if let Some(alg) = algorithm {
+        parsed.query_pairs_mut().append_pair("algorithm", alg);
+    }
+
+    Ok(parsed.into())
+}
+
+/// Validate a pre-resolved ConnectRPC public-key URL (HTTPS / loopback + SSRF checks).
+#[cfg(feature = "kas-client")]
+fn validate_connect_public_key_url(public_key_url: &str) -> Result<(), KasKeyError> {
+    crate::kas_discovery::validate_kas_url(public_key_url)
+        .map_err(|e| KasKeyError::HttpError(format!("Invalid KAS public key URL: {e}")))?;
+    let parsed = url::Url::parse(public_key_url).map_err(|e| {
+        KasKeyError::HttpError(format!(
+            "Invalid KAS public key URL '{public_key_url}': {e}"
+        ))
+    })?;
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(KasKeyError::HttpError(
+            "KAS public key URL must not contain userinfo".to_string(),
+        ));
+    }
+    if parsed.fragment().is_some() {
+        return Err(KasKeyError::HttpError(
+            "KAS public key URL must not contain a fragment".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Build a `reqwest::Client` configured with `redirect::Policy::none()` for KAS
+/// public-key retrieval, preventing 3xx redirects from substituting a public key
+/// from an unvalidated host.
+#[cfg(feature = "kas-client")]
+pub fn build_kas_key_http_client() -> Result<Client, KasKeyError> {
+    Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(KasKeyError::ReqwestError)
+}
+
 /// Fetch the KAS public key from the platform
 ///
 /// # Arguments
 ///
-/// * `kas_url` - Base URL of the KAS service (e.g., "http://localhost:8080/kas")
-/// * `http_client` - HTTP client to use for the request
+/// * `kas_url` - Base URL of the KAS service (e.g., "https://kas.example.com/kas")
+/// * `http_client` - HTTP client to use for the request. Pass a no-redirect client
+///   (see [`build_kas_key_http_client`]) so a 3xx response cannot substitute a key
+///   from another host.
 ///
 /// # Returns
 ///
@@ -78,13 +154,7 @@ pub async fn fetch_kas_public_key(
     kas_url: &str,
     http_client: &Client,
 ) -> Result<KasPublicKeyResponse, KasKeyError> {
-    // Construct the public key endpoint URL
-    let trimmed = kas_url.trim_end_matches('/');
-    let endpoint = if trimmed.ends_with("/kas") {
-        format!("{}/v2/kas_public_key", trimmed)
-    } else {
-        format!("{}/kas/v2/kas_public_key", trimmed)
-    };
+    let endpoint = build_legacy_public_key_endpoint(kas_url, None)?;
 
     // Make the HTTP GET request
     let response = http_client.get(&endpoint).send().await?;
@@ -110,11 +180,15 @@ pub async fn fetch_kas_public_key(
 /// Unlike `fetch_kas_public_key`, this expects a pre-resolved URL (typically
 /// from `KasEndpoints::public_key_url`) and POSTs an empty JSON body — the
 /// Connect protocol requires a request body even for empty message types.
+/// Pass a no-redirect client (see [`build_kas_key_http_client`]) to prevent
+/// 3xx public-key substitution.
 #[cfg(feature = "kas-client")]
 pub async fn fetch_kas_public_key_connect(
     public_key_url: &str,
     http_client: &Client,
 ) -> Result<KasPublicKeyResponse, KasKeyError> {
+    validate_connect_public_key_url(public_key_url)?;
+
     let response = http_client
         .post(public_key_url)
         .header("Content-Type", "application/json")
@@ -196,13 +270,7 @@ pub async fn fetch_kas_ec_public_key(
     kas_url: &str,
     http_client: &Client,
 ) -> Result<KasEcPublicKeyResponse, KasKeyError> {
-    // Construct the public key endpoint URL
-    let trimmed = kas_url.trim_end_matches('/');
-    let endpoint = if trimmed.ends_with("/kas") {
-        format!("{}/v2/kas_public_key?algorithm=ec:secp256r1", trimmed)
-    } else {
-        format!("{}/kas/v2/kas_public_key?algorithm=ec:secp256r1", trimmed)
-    };
+    let endpoint = build_legacy_public_key_endpoint(kas_url, Some("ec:secp256r1"))?;
 
     // Make the HTTP GET request
     let response = http_client.get(&endpoint).send().await?;
@@ -229,11 +297,15 @@ pub async fn fetch_kas_ec_public_key(
 /// Fetch the KAS EC public key via ConnectRPC.
 ///
 /// Unlike `fetch_kas_ec_public_key`, this expects a pre-resolved URL.
+/// Pass a no-redirect client (see [`build_kas_key_http_client`]) to prevent
+/// 3xx public-key substitution.
 #[cfg(feature = "kas-client")]
 pub async fn fetch_kas_ec_public_key_connect(
     public_key_url: &str,
     http_client: &Client,
 ) -> Result<KasEcPublicKeyResponse, KasKeyError> {
+    validate_connect_public_key_url(public_key_url)?;
+
     let response = http_client
         .post(public_key_url)
         .header("Content-Type", "application/json")

@@ -406,10 +406,40 @@ impl NanoTdf {
     /// 1. Parse header and extract ephemeral public key
     /// 2. Perform ECDH with recipient private key
     /// 3. Derive decryption key using HKDF-SHA256 with NanoTDF salt
-    /// 4. Verify policy binding (GMAC or ECDH)
-    /// 5. Decrypt payload with AES-256-GCM
-    /// 6. Verify optional ECDSA signature
+    /// 4. Verify policy binding
+    /// 5. Verify optional ECDSA payload signature (self-consistency against embedded key)
+    /// 6. Decrypt payload with AES-256-GCM
+    ///
+    /// **Security note**: If a payload signature is present, this method verifies it against
+    /// the public key embedded in the trailer without checking a trust anchor, and does not
+    /// require a signature to be present. To enforce a trusted signer key set and prevent
+    /// signature stripping, use [`decrypt_with_trusted_signers`](Self::decrypt_with_trusted_signers).
     pub fn decrypt(&self, kas_private_key: &[u8]) -> Result<Vec<u8>, NanoTdfError> {
+        self.decrypt_inner(kas_private_key, None, false)
+    }
+
+    /// Decrypt NanoTDF payload while verifying the payload signature against a caller-supplied
+    /// set of trusted compressed SEC1 signer public keys.
+    ///
+    /// - When `require_signature` is `true`, an unsigned NanoTDF (or one whose signature trailer
+    ///   was stripped) is rejected with `NanoTdfError::DecryptionFailed`.
+    /// - When a signature is present, its embedded public key MUST match one of `trusted_signers`
+    ///   (compared in constant time) before the ECDSA signature is verified.
+    pub fn decrypt_with_trusted_signers(
+        &self,
+        kas_private_key: &[u8],
+        trusted_signers: &[&[u8]],
+        require_signature: bool,
+    ) -> Result<Vec<u8>, NanoTdfError> {
+        self.decrypt_inner(kas_private_key, Some(trusted_signers), require_signature)
+    }
+
+    fn decrypt_inner(
+        &self,
+        kas_private_key: &[u8],
+        trusted_signers: Option<&[&[u8]]>,
+        require_signature: bool,
+    ) -> Result<Vec<u8>, NanoTdfError> {
         // Convert EccMode to EcCurve
         let curve = match self.header.ecc_and_binding_mode.ecc_mode {
             EccMode::Secp256r1 => EcCurve::P256,
@@ -448,7 +478,7 @@ impl NanoTdf {
             }
         }
 
-        // Verify optional ECDSA payload signature before returning plaintext
+        // Verify optional/required ECDSA payload signature before returning plaintext
         let sig_mode = self.header.symmetric_and_payload_config.signature_mode;
         if sig_mode.has_signature || self.signature.is_some() {
             let sig = self.signature.as_ref().ok_or_else(|| {
@@ -456,6 +486,16 @@ impl NanoTdf {
                     "Header declares payload signature but signature is absent".to_string(),
                 )
             })?;
+            if let Some(trusted) = trusted_signers {
+                let is_trusted = trusted.iter().any(|k| {
+                    k.len() == sig.public_key.len() && bool::from(k.ct_eq(&sig.public_key))
+                });
+                if !is_trusted {
+                    return Err(NanoTdfError::DecryptionFailed(
+                        "Payload signature public key is not in trusted signer set".to_string(),
+                    ));
+                }
+            }
             let sig_ecc_mode = sig_mode.signature_ecc_mode.ok_or_else(|| {
                 NanoTdfError::InvalidHeader("Signature ECC mode missing".to_string())
             })?;
@@ -463,6 +503,10 @@ impl NanoTdf {
             self.header.write_to(&mut signed_data)?;
             self.payload.write_to(&mut signed_data)?;
             verify_nanotdf_signature(sig_ecc_mode, sig, &signed_data)?;
+        } else if require_signature {
+            return Err(NanoTdfError::DecryptionFailed(
+                "Payload signature is required but missing".to_string(),
+            ));
         }
 
         // Determine tag size from config
@@ -772,6 +816,54 @@ mod tests {
         assert_eq!(
             ntdf.decrypt(kas_priv_der.as_bytes()).unwrap(),
             b"hello nanotdf"
+        );
+
+        // Trusted signer verification: trusted key passes, attacker key rejected, stripped signature rejected
+        let trusted_pk = verifying_key.to_sec1_point(true).as_bytes().to_vec();
+        assert_eq!(
+            ntdf.decrypt_with_trusted_signers(
+                kas_priv_der.as_bytes(),
+                &[trusted_pk.as_slice()],
+                true
+            )
+            .unwrap(),
+            b"hello nanotdf"
+        );
+        let other_pk = SigningKey::from(&SecretKey::generate())
+            .verifying_key()
+            .to_sec1_point(true)
+            .as_bytes()
+            .to_vec();
+        assert!(
+            ntdf.decrypt_with_trusted_signers(
+                kas_priv_der.as_bytes(),
+                &[other_pk.as_slice()],
+                true
+            )
+            .is_err()
+        );
+
+        // Stripping signature when require_signature=true must fail
+        let mut stripped = ntdf.clone();
+        stripped
+            .header
+            .symmetric_and_payload_config
+            .signature_mode
+            .has_signature = false;
+        stripped
+            .header
+            .symmetric_and_payload_config
+            .signature_mode
+            .signature_ecc_mode = None;
+        stripped.signature = None;
+        assert!(
+            stripped
+                .decrypt_with_trusted_signers(
+                    kas_priv_der.as_bytes(),
+                    &[trusted_pk.as_slice()],
+                    true,
+                )
+                .is_err()
         );
 
         // Flip a signature byte -> must reject

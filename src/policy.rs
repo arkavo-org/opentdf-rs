@@ -253,13 +253,13 @@ impl fmt::Display for AttributeIdentifier {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum AttributeValue {
-    /// RFC 3339 timestamp — declared before `String` so serialized timestamps
-    /// round-trip as `DateTime` rather than being swallowed by `String`.
-    #[serde(with = "time::serde::rfc3339")]
-    DateTime(OffsetDateTime),
+    /// String value — declared before `DateTime` so JSON strings (including
+    /// ISO-8601 formatted strings) remain `String` for string operators and WASM callers.
     String(String),
     Number(f64),
     Boolean(bool),
+    #[serde(with = "time::serde::rfc3339")]
+    DateTime(OffsetDateTime),
     StringArray(Vec<String>),
     NumberArray(Vec<f64>),
 }
@@ -1241,15 +1241,20 @@ fn validate_condition(condition: &AttributeCondition) -> Result<(), PolicyError>
                 }
             }
 
-            // Numeric comparison operations
+            // Numeric and datetime comparison operations (also accepts RFC 3339 strings from JSON)
             Operator::GreaterThan
             | Operator::GreaterThanOrEqual
             | Operator::LessThan
             | Operator::LessThanOrEqual => {
-                if !matches!(
-                    value,
-                    AttributeValue::Number(_) | AttributeValue::DateTime(_)
-                ) {
+                let is_valid = match value {
+                    AttributeValue::Number(_) | AttributeValue::DateTime(_) => true,
+                    AttributeValue::String(s) => {
+                        OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
+                            .is_ok()
+                    }
+                    _ => false,
+                };
+                if !is_valid {
                     return Err(PolicyError::InvalidValueType {
                         attribute: condition.attribute.as_string(),
                         expected: "number or datetime".to_string(),
@@ -1317,7 +1322,17 @@ fn evaluate_condition(
     // Evaluate based on operator and value types
     let attr_name = condition.attribute.as_string();
     match condition.operator {
-        Operator::Equals => Ok(compare_values(attr_value, expected_value, |a, b| a == b)?),
+        Operator::Equals => {
+            if matches!(attr_value, AttributeValue::Number(n) if n.is_nan())
+                || matches!(expected_value, AttributeValue::Number(n) if n.is_nan())
+            {
+                return Err(PolicyError::EvaluationError {
+                    reason: "Cannot evaluate Equals on NaN value".to_string(),
+                    attribute: Some(attr_name),
+                });
+            }
+            compare_values(attr_value, expected_value, |a, b| a == b)
+        }
         Operator::NotEquals => {
             if std::mem::discriminant(attr_value) != std::mem::discriminant(expected_value) {
                 return Err(PolicyError::InvalidValueType {
@@ -1326,11 +1341,14 @@ fn evaluate_condition(
                     actual: format!("{:?}", attr_value),
                 });
             }
-            // Fail closed for IEEE-754 NaN (NaN != x would otherwise evaluate to true)
+            // Reject IEEE-754 NaN with an error so NOT(...) cannot invert it to true
             if matches!(attr_value, AttributeValue::Number(n) if n.is_nan())
                 || matches!(expected_value, AttributeValue::Number(n) if n.is_nan())
             {
-                return Ok(false);
+                return Err(PolicyError::EvaluationError {
+                    reason: "Cannot evaluate NotEquals on NaN value".to_string(),
+                    attribute: Some(attr_name),
+                });
             }
             compare_values(attr_value, expected_value, |a, b| a != b)
         }
@@ -1362,7 +1380,15 @@ fn evaluate_condition(
             AttributeValue::StringArray(values) => match attr_value {
                 AttributeValue::String(s) => Ok(values.contains(s)),
                 // Empty untagged JSON array deserializes as StringArray([])
-                AttributeValue::Number(_) if values.is_empty() => Ok(false),
+                AttributeValue::Number(n) if values.is_empty() => {
+                    if n.is_nan() {
+                        return Err(PolicyError::EvaluationError {
+                            reason: "Cannot evaluate In on NaN value".to_string(),
+                            attribute: Some(attr_name),
+                        });
+                    }
+                    Ok(false)
+                }
                 _ => Err(PolicyError::InvalidValueType {
                     attribute: attr_name,
                     expected: "string".to_string(),
@@ -1370,7 +1396,15 @@ fn evaluate_condition(
                 }),
             },
             AttributeValue::NumberArray(values) => match attr_value {
-                AttributeValue::Number(n) => Ok(values.contains(n)),
+                AttributeValue::Number(n) => {
+                    if n.is_nan() {
+                        return Err(PolicyError::EvaluationError {
+                            reason: "Cannot evaluate In on NaN value".to_string(),
+                            attribute: Some(attr_name),
+                        });
+                    }
+                    Ok(values.contains(n))
+                }
                 _ => Err(PolicyError::InvalidValueType {
                     attribute: attr_name,
                     expected: "number".to_string(),
@@ -1387,7 +1421,15 @@ fn evaluate_condition(
             AttributeValue::StringArray(values) => match attr_value {
                 AttributeValue::String(s) => Ok(!values.contains(s)),
                 // Empty untagged JSON array deserializes as StringArray([])
-                AttributeValue::Number(n) if values.is_empty() => Ok(!n.is_nan()),
+                AttributeValue::Number(n) if values.is_empty() => {
+                    if n.is_nan() {
+                        return Err(PolicyError::EvaluationError {
+                            reason: "Cannot evaluate NotIn on NaN value".to_string(),
+                            attribute: Some(attr_name),
+                        });
+                    }
+                    Ok(true)
+                }
                 _ => Err(PolicyError::InvalidValueType {
                     attribute: attr_name,
                     expected: "string".to_string(),
@@ -1397,10 +1439,12 @@ fn evaluate_condition(
             AttributeValue::NumberArray(values) => match attr_value {
                 AttributeValue::Number(n) => {
                     if n.is_nan() {
-                        Ok(false)
-                    } else {
-                        Ok(!values.contains(n))
+                        return Err(PolicyError::EvaluationError {
+                            reason: "Cannot evaluate NotIn on NaN value".to_string(),
+                            attribute: Some(attr_name),
+                        });
                     }
+                    Ok(!values.contains(n))
                 }
                 _ => Err(PolicyError::InvalidValueType {
                     attribute: attr_name,
@@ -1419,22 +1463,24 @@ fn evaluate_condition(
             // Special handling for string values to support hierarchies
             match (attr_value, expected_value) {
                 (AttributeValue::String(a), AttributeValue::String(b)) => {
-                    // If strings are identical, they're equal in the hierarchy
-                    if a == b {
-                        return Ok(true);
-                    }
-
                     // Normalize strings for hierarchy lookup
                     let a_upper = a.to_uppercase();
                     let b_upper = b.to_uppercase();
 
-                    // Use the configurable hierarchy — fail closed if either level is unknown
+                    // Use the configurable hierarchy — return Err on unknown levels
+                    // so NOT(...) cannot invert an indeterminate comparison into a grant.
                     let hierarchy = get_clearance_hierarchy();
-                    let (Some(&level_a), Some(&level_b)) = (
-                        hierarchy.levels.get(&a_upper),
-                        hierarchy.levels.get(&b_upper),
-                    ) else {
-                        return Ok(false);
+                    let Some(&level_a) = hierarchy.levels.get(&a_upper) else {
+                        return Err(PolicyError::EvaluationError {
+                            reason: format!("Unknown clearance level: '{a}'"),
+                            attribute: Some(attr_name),
+                        });
+                    };
+                    let Some(&level_b) = hierarchy.levels.get(&b_upper) else {
+                        return Err(PolicyError::EvaluationError {
+                            reason: format!("Unknown clearance level: '{b}'"),
+                            attribute: Some(attr_name),
+                        });
                     };
 
                     // User's level must be >= required level
@@ -1449,22 +1495,24 @@ fn evaluate_condition(
             // Special handling for string values to support hierarchies
             match (attr_value, expected_value) {
                 (AttributeValue::String(a), AttributeValue::String(b)) => {
-                    // If strings are identical, they're equal in the hierarchy
-                    if a == b {
-                        return Ok(true);
-                    }
-
                     // Normalize strings for hierarchy lookup
                     let a_upper = a.to_uppercase();
                     let b_upper = b.to_uppercase();
 
-                    // Use the configurable hierarchy — fail closed if either level is unknown
+                    // Use the configurable hierarchy — return Err on unknown levels
+                    // so NOT(...) cannot invert an indeterminate comparison into a grant.
                     let hierarchy = get_clearance_hierarchy();
-                    let (Some(&level_a), Some(&level_b)) = (
-                        hierarchy.levels.get(&a_upper),
-                        hierarchy.levels.get(&b_upper),
-                    ) else {
-                        return Ok(false);
+                    let Some(&level_a) = hierarchy.levels.get(&a_upper) else {
+                        return Err(PolicyError::EvaluationError {
+                            reason: format!("Unknown clearance level: '{a}'"),
+                            attribute: Some(attr_name),
+                        });
+                    };
+                    let Some(&level_b) = hierarchy.levels.get(&b_upper) else {
+                        return Err(PolicyError::EvaluationError {
+                            reason: format!("Unknown clearance level: '{b}'"),
+                            attribute: Some(attr_name),
+                        });
                     };
 
                     // User's level must be <= maximum level
@@ -1515,7 +1563,9 @@ where
     Ok(compare(actual, expected))
 }
 
-/// Helper function to compare ordered numeric or datetime values (preserving full sub-second precision)
+/// Helper function to compare ordered numeric or datetime values (preserving full sub-second precision).
+/// Also supports RFC 3339 datetime strings so JSON-deserialized policies work seamlessly
+/// alongside `AttributeValue::DateTime`.
 fn compare_ordered<F>(
     attribute: &str,
     actual: &AttributeValue,
@@ -1526,10 +1576,47 @@ where
     F: Fn(std::cmp::Ordering) -> bool,
 {
     match (actual, expected) {
-        (AttributeValue::Number(a), AttributeValue::Number(b)) => {
-            Ok(a.partial_cmp(b).is_some_and(predicate))
-        }
+        (AttributeValue::Number(a), AttributeValue::Number(b)) => match a.partial_cmp(b) {
+            Some(ord) => Ok(predicate(ord)),
+            None => Err(PolicyError::EvaluationError {
+                reason: "Cannot compare NaN numeric values".to_string(),
+                attribute: Some(attribute.to_string()),
+            }),
+        },
         (AttributeValue::DateTime(a), AttributeValue::DateTime(b)) => Ok(predicate(a.cmp(b))),
+        (AttributeValue::DateTime(a), AttributeValue::String(b_str)) => {
+            let b = OffsetDateTime::parse(b_str, &time::format_description::well_known::Rfc3339)
+                .map_err(|_| PolicyError::InvalidValueType {
+                    attribute: attribute.to_string(),
+                    expected: "RFC 3339 datetime".to_string(),
+                    actual: format!("actual={:?}, expected={:?}", actual, expected),
+                })?;
+            Ok(predicate(a.cmp(&b)))
+        }
+        (AttributeValue::String(a_str), AttributeValue::DateTime(b)) => {
+            let a = OffsetDateTime::parse(a_str, &time::format_description::well_known::Rfc3339)
+                .map_err(|_| PolicyError::InvalidValueType {
+                    attribute: attribute.to_string(),
+                    expected: "RFC 3339 datetime".to_string(),
+                    actual: format!("actual={:?}, expected={:?}", actual, expected),
+                })?;
+            Ok(predicate(a.cmp(b)))
+        }
+        (AttributeValue::String(a_str), AttributeValue::String(b_str)) => {
+            let a = OffsetDateTime::parse(a_str, &time::format_description::well_known::Rfc3339)
+                .map_err(|_| PolicyError::InvalidValueType {
+                    attribute: attribute.to_string(),
+                    expected: "number or RFC 3339 datetime".to_string(),
+                    actual: format!("actual={:?}, expected={:?}", actual, expected),
+                })?;
+            let b = OffsetDateTime::parse(b_str, &time::format_description::well_known::Rfc3339)
+                .map_err(|_| PolicyError::InvalidValueType {
+                    attribute: attribute.to_string(),
+                    expected: "number or RFC 3339 datetime".to_string(),
+                    actual: format!("actual={:?}, expected={:?}", actual, expected),
+                })?;
+            Ok(predicate(a.cmp(&b)))
+        }
         _ => Err(PolicyError::InvalidValueType {
             attribute: attribute.to_string(),
             expected: "number or datetime".to_string(),
@@ -2318,7 +2405,7 @@ mod attribute_lookup_tests {
     }
 
     #[test]
-    fn test_unknown_clearance_levels_fail_closed() {
+    fn test_unknown_clearance_levels_return_err_even_under_not() {
         let attr = AttributeIdentifier::new("clearance", "level");
         let min_policy = AttributePolicy::condition(
             attr.clone(),
@@ -2330,8 +2417,13 @@ mod attribute_lookup_tests {
             attr.clone(),
             AttributeValue::String("UNCLASSIFIED".to_string()),
         );
-        // Unknown required level must NOT collapse to 0 and grant access.
-        assert!(!min_policy.evaluate(&attrs).unwrap());
+        // Unknown required level must return Err so NOT(...) cannot invert it into a grant.
+        assert!(min_policy.evaluate(&attrs).is_err());
+        assert!(
+            AttributePolicy::create_not(min_policy)
+                .evaluate(&attrs)
+                .is_err()
+        );
 
         let max_policy = AttributePolicy::condition(
             attr.clone(),
@@ -2339,31 +2431,41 @@ mod attribute_lookup_tests {
             AttributeValue::String("SECRET".to_string()),
         );
         attrs.insert(attr, AttributeValue::String("UNKNOWN_LEVEL".to_string()));
-        // Unknown user level must NOT collapse to 0 and pass MaximumOf.
-        assert!(!max_policy.evaluate(&attrs).unwrap());
+        // Unknown user level must return Err both directly and under NOT(...).
+        assert!(max_policy.evaluate(&attrs).is_err());
+        assert!(
+            AttributePolicy::create_not(max_policy)
+                .evaluate(&attrs)
+                .is_err()
+        );
     }
 
     #[test]
-    fn test_datetime_json_roundtrip_and_subsecond_ordering() {
+    fn test_datetime_string_interop_and_subsecond_ordering() {
         let t1 =
             time::OffsetDateTime::from_unix_timestamp_nanos(1_700_000_000_100_000_000).unwrap();
         let t2 =
             time::OffsetDateTime::from_unix_timestamp_nanos(1_700_000_000_900_000_000).unwrap();
 
-        let val = AttributeValue::DateTime(t1);
-        let json = serde_json::to_string(&val).unwrap();
+        // ISO-8601 JSON strings deserialize as String so WASM/string equals & contains still work
+        let json = serde_json::to_string(&AttributeValue::DateTime(t1)).unwrap();
         let roundtripped: AttributeValue = serde_json::from_str(&json).unwrap();
-        assert_eq!(roundtripped, AttributeValue::DateTime(t1));
+        assert!(matches!(roundtripped, AttributeValue::String(_)));
 
         let attr = AttributeIdentifier::new("time", "created");
+        // Sub-second ordering works for both DateTime and RFC 3339 String values
         let gt_policy = AttributePolicy::condition(
             attr.clone(),
             Operator::GreaterThan,
             AttributeValue::DateTime(t1),
         );
         let mut attrs = HashMap::new();
-        attrs.insert(attr, AttributeValue::DateTime(t2));
+        attrs.insert(attr.clone(), AttributeValue::DateTime(t2));
         assert!(gt_policy.evaluate(&attrs).unwrap());
+
+        let gt_from_json =
+            AttributePolicy::condition(attr.clone(), Operator::GreaterThan, roundtripped);
+        assert!(gt_from_json.evaluate(&attrs).unwrap());
     }
 
     #[test]
@@ -2379,16 +2481,26 @@ mod attribute_lookup_tests {
         attrs.insert(attr.clone(), AttributeValue::String("10".to_string()));
         assert!(ne_num.evaluate(&attrs).is_err());
 
-        // NaN must fail closed for NotEquals and NotIn
+        // NaN must return Err for NotEquals, NOT(NotEquals), and NotIn (never flip under NOT)
         attrs.insert(attr.clone(), AttributeValue::Number(f64::NAN));
-        assert!(!ne_num.evaluate(&attrs).unwrap());
+        assert!(ne_num.evaluate(&attrs).is_err());
+        assert!(
+            AttributePolicy::create_not(ne_num)
+                .evaluate(&attrs)
+                .is_err()
+        );
 
         let not_in = AttributePolicy::condition(
             attr,
             Operator::NotIn,
             AttributeValue::NumberArray(vec![1.0, 2.0]),
         );
-        assert!(!not_in.evaluate(&attrs).unwrap());
+        assert!(not_in.evaluate(&attrs).is_err());
+        assert!(
+            AttributePolicy::create_not(not_in)
+                .evaluate(&attrs)
+                .is_err()
+        );
     }
 
     #[test]

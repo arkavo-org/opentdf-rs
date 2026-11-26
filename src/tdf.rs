@@ -162,8 +162,11 @@ impl TdfEncryptBuilder {
         self
     }
 
-    /// Set the KAS public key PEM (RSA or EC P-256) used to wrap the payload key
+    /// Set the KAS RSA public key PEM used to wrap the payload key (via RSA-OAEP SHA-1)
     /// into `manifest.encryptionInformation.keyAccess[0].wrappedKey`.
+    ///
+    /// If omitted, `wrappedKey` is left empty (suitable only for offline/test workflows
+    /// that supply the payload key directly).
     #[cfg(feature = "kas-client")]
     #[must_use]
     pub fn kas_public_key(mut self, pem: impl Into<String>) -> Self {
@@ -360,7 +363,10 @@ impl TdfEncryptFileBuilder {
         self
     }
 
-    /// Set the KAS public key PEM used to wrap the payload key
+    /// Set the KAS RSA public key PEM used to wrap the payload key (via RSA-OAEP SHA-1)
+    /// into `manifest.encryptionInformation.keyAccess[0].wrappedKey`.
+    ///
+    /// If omitted, `wrappedKey` is left empty.
     #[cfg(feature = "kas-client")]
     #[must_use]
     pub fn kas_public_key(mut self, pem: impl Into<String>) -> Self {

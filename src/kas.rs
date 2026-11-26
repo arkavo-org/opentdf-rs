@@ -863,12 +863,17 @@ impl KasClient {
                     }
                 })?;
 
-                // Allocate plaintext buffer
-                let mut plaintext = vec![0u8; oaep_key.min_output_size()];
+                // Allocate plaintext buffer (zeroized on drop)
+                let mut plaintext = zeroize::Zeroizing::new(vec![0u8; oaep_key.min_output_size()]);
 
                 // Decrypt using SHA-1 OAEP
                 let plaintext_slice = oaep_key
-                    .decrypt(&OAEP_SHA1_MGF1SHA1, wrapped_key, &mut plaintext, None)
+                    .decrypt(
+                        &OAEP_SHA1_MGF1SHA1,
+                        wrapped_key,
+                        plaintext.as_mut_slice(),
+                        None,
+                    )
                     .map_err(|e| KasError::UnwrapError {
                         algorithm: "RSA-OAEP".to_string(),
                         reason: format!("RSA-OAEP decryption failed: {:?}", e),
@@ -908,8 +913,8 @@ impl KasClient {
                 let salt = salt_hasher.finalize();
 
                 let hkdf = Hkdf::<Sha256>::new(Some(&salt), shared_secret.raw_secret_bytes());
-                let mut symmetric_key = [0u8; 32];
-                hkdf.expand(&[], &mut symmetric_key)
+                let mut symmetric_key = zeroize::Zeroizing::new([0u8; 32]);
+                hkdf.expand(&[], symmetric_key.as_mut())
                     .map_err(|e| KasError::CryptoError {
                         operation: "HKDF".to_string(),
                         reason: format!("HKDF expansion failed: {}", e),
@@ -930,7 +935,7 @@ impl KasClient {
                 let nonce = Nonce::from_slice(&wrapped_key[..12]);
                 let ciphertext_and_tag = &wrapped_key[12..];
 
-                let cipher = Aes256Gcm::new_from_slice(&symmetric_key).map_err(|e| {
+                let cipher = Aes256Gcm::new_from_slice(symmetric_key.as_ref()).map_err(|e| {
                     KasError::CryptoError {
                         operation: "AES-GCM-init".to_string(),
                         reason: format!("Failed to create cipher: {}", e),

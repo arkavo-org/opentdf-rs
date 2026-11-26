@@ -7,7 +7,9 @@ pub mod ec_unwrap;
 #[cfg(feature = "rsa")]
 pub mod rsa_unwrap;
 
-pub use ec_unwrap::{custom_ecdh, ec_unwrap, ec_unwrap_with_policy_binding};
+pub use ec_unwrap::{
+    custom_ecdh, ec_unwrap, ec_unwrap_with_keyed_policy_binding, ec_unwrap_with_policy_binding,
+};
 
 #[cfg(feature = "rsa")]
 pub use rsa_unwrap::{rsa_unwrap, rsa_unwrap_with_policy_binding, verify_standard_policy_binding};

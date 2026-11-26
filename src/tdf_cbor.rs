@@ -243,6 +243,10 @@ pub struct TdfCborManifest {
 
     /// Optional assertions (spec: assertion.md), same shape as
     /// `TdfManifest::assertions`.
+    ///
+    /// **Security note**: Decoded assertions are NOT cryptographically verified
+    /// during `TdfCbor::from_bytes` or `TdfCbor::decrypt_with_key`. Callers MUST
+    /// verify assertion bindings/signatures before trusting assertion contents.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assertions: Option<Vec<Assertion>>,
 }

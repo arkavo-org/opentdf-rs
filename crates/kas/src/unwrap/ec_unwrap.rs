@@ -34,12 +34,42 @@ pub fn custom_ecdh(
 /// Full EC unwrap flow for NanoTDF with header validation and policy binding verification.
 ///
 /// Parses the complete NanoTDF header, verifies that it uses P-256, verifies the
-/// keyed HMAC-SHA256 policy binding against the derived DEK in constant time, and
-/// rewraps the DEK for the client session.
+/// policy binding in constant time, and rewraps the DEK for the client session.
+///
+/// **Interoperability & security note**: For OpenTDF L1L v1.2 interoperability with
+/// the Go SDK / `otdfctl`, this function accepts **either** the reference unkeyed
+/// `SHA-256(policy_bytes)[24..32]` binding **or** the keyed
+/// `HMAC-SHA256(dek, policy_bytes)[24..32]` binding. Because the unkeyed SHA-256
+/// binding can be recomputed without any key, it only detects accidental corruption
+/// and does not prevent an attacker from swapping the header policy. Deployments that
+/// require cryptographic policy binding without legacy Go-SDK unkeyed interop should
+/// use [`ec_unwrap_with_keyed_policy_binding`].
 pub fn ec_unwrap_with_policy_binding(
     header_bytes: &[u8],
     kas_private_key: &SecretKey,
     session_shared_secret: &[u8],
+) -> Result<String, KasServerError> {
+    ec_unwrap_with_policy_binding_inner(header_bytes, kas_private_key, session_shared_secret, true)
+}
+
+/// Strict EC unwrap flow for NanoTDF requiring a **keyed** `HMAC-SHA256(dek, policy)[24..32]`
+/// policy binding.
+///
+/// Unlike [`ec_unwrap_with_policy_binding`], this rejects unkeyed SHA-256 bindings so an
+/// attacker without the DEK cannot swap the header policy and recompute the binding.
+pub fn ec_unwrap_with_keyed_policy_binding(
+    header_bytes: &[u8],
+    kas_private_key: &SecretKey,
+    session_shared_secret: &[u8],
+) -> Result<String, KasServerError> {
+    ec_unwrap_with_policy_binding_inner(header_bytes, kas_private_key, session_shared_secret, false)
+}
+
+fn ec_unwrap_with_policy_binding_inner(
+    header_bytes: &[u8],
+    kas_private_key: &SecretKey,
+    session_shared_secret: &[u8],
+    allow_legacy_unkeyed: bool,
 ) -> Result<String, KasServerError> {
     let version = detect_nanotdf_version(header_bytes).ok_or_else(|| {
         KasServerError::InvalidHeader("unrecognized or truncated NanoTDF magic/version".to_string())
@@ -69,7 +99,7 @@ pub fn ec_unwrap_with_policy_binding(
     let dek_salt = compute_nanotdf_salt(version);
     let session_salt = compute_nanotdf_salt(NanoTdfVersion::V12);
 
-    // Derive DEK to verify the keyed policy binding before rewrapping
+    // Derive DEK to verify the policy binding before rewrapping
     let mut dek = Zeroizing::new([0u8; 32]);
     Hkdf::<Sha256>::new(Some(&dek_salt), &dek_shared_secret).expand(b"", dek.as_mut())?;
 
@@ -96,7 +126,9 @@ pub fn ec_unwrap_with_policy_binding(
     let keyed = &computed[24..];
 
     let b = header.policy.binding.as_slice();
-    if b.len() != 8 || !(bool::from(b.ct_eq(keyed)) | bool::from(b.ct_eq(reference))) {
+    let keyed_ok = b.len() == 8 && bool::from(b.ct_eq(keyed));
+    let legacy_ok = allow_legacy_unkeyed && b.len() == 8 && bool::from(b.ct_eq(reference));
+    if !(keyed_ok | legacy_ok) {
         return Err(KasServerError::PolicyBindingFailed(
             "NanoTDF policy binding mismatch".to_string(),
         ));
@@ -309,14 +341,22 @@ mod tests {
         let mut ref_bytes = Vec::new();
         header.write_to(&mut ref_bytes).unwrap();
         assert!(ec_unwrap_with_policy_binding(&ref_bytes, &kas_private, session_secret).is_ok());
+        // Strict keyed helper rejects unkeyed SHA-256 binding
+        assert!(matches!(
+            ec_unwrap_with_keyed_policy_binding(&ref_bytes, &kas_private, session_secret),
+            Err(KasServerError::PolicyBindingFailed(_))
+        ));
 
-        // Keyed HMAC-SHA256 binding is also accepted
+        // Keyed HMAC-SHA256 binding is accepted by both helpers
         let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&dek).unwrap();
         mac.update(&policy_content);
         header.policy.binding = mac.finalize().into_bytes()[24..32].to_vec();
         let mut keyed_bytes = Vec::new();
         header.write_to(&mut keyed_bytes).unwrap();
         assert!(ec_unwrap_with_policy_binding(&keyed_bytes, &kas_private, session_secret).is_ok());
+        assert!(
+            ec_unwrap_with_keyed_policy_binding(&keyed_bytes, &kas_private, session_secret).is_ok()
+        );
 
         // Tamper policy content without recomputing binding -> PolicyBindingFailed
         header.policy.body = PolicyBody::EmbeddedPlaintext(b"tampered-policy".to_vec());

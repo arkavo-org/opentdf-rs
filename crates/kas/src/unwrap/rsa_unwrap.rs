@@ -22,25 +22,61 @@ use sha2::Sha256;
 use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
-/// Verify Standard TDF HMAC-SHA256 policy binding in constant time:
-/// `Base64(HMAC-SHA256(dek, base64_policy))`.
+/// Decode 64 ASCII hex characters into 32 bytes (returns `None` if invalid hex).
+fn decode_hex_32(hex_bytes: &[u8]) -> Option<[u8; 32]> {
+    if hex_bytes.len() != 64 {
+        return None;
+    }
+    let hex_val = |b: u8| -> Option<u8> {
+        match b {
+            b'0'..=b'9' => Some(b - b'0'),
+            b'a'..=b'f' => Some(b - b'a' + 10),
+            b'A'..=b'F' => Some(b - b'A' + 10),
+            _ => None,
+        }
+    };
+    let (pairs, _) = hex_bytes.as_chunks::<2>();
+    let mut out = [0u8; 32];
+    for (i, &[hi_b, lo_b]) in pairs.iter().enumerate() {
+        let hi = hex_val(hi_b)?;
+        let lo = hex_val(lo_b)?;
+        out[i] = (hi << 4) | lo;
+    }
+    Some(out)
+}
+
+/// Verify Standard TDF HMAC-SHA256 policy binding in constant time.
+///
+/// Accepts both OpenTDF standard formats:
+/// - `Base64(raw 32-byte HMAC-SHA256(dek, base64_policy))`
+/// - `Base64(hex(HMAC-SHA256(dek, base64_policy)))` (64 ASCII hex bytes, emitted by the OpenTDF Go SDK)
 pub fn verify_standard_policy_binding(
     dek: &[u8],
     base64_policy: &str,
     expected_binding_b64: &str,
 ) -> Result<(), KasServerError> {
-    let expected_bytes = BASE64
+    let decoded = BASE64
         .decode(expected_binding_b64)
         .map_err(|e| KasServerError::PolicyBindingFailed(format!("invalid base64 binding: {e}")))?;
+
+    let expected_mac: [u8; 32] = match decoded.len() {
+        32 => decoded.as_slice().try_into().expect("checked len == 32"),
+        64 => decode_hex_32(&decoded).ok_or_else(|| {
+            KasServerError::PolicyBindingFailed("invalid hex policy binding".to_string())
+        })?,
+        other => {
+            return Err(KasServerError::PolicyBindingFailed(format!(
+                "invalid policy binding length: {other} bytes (expected 32 raw or 64 hex)"
+            )));
+        }
+    };
 
     let mut mac = Hmac::<Sha256>::new_from_slice(dek)
         .map_err(|e| KasServerError::PolicyBindingFailed(format!("invalid HMAC key: {e}")))?;
     mac.update(base64_policy.as_bytes());
     let computed = mac.finalize().into_bytes();
 
-    if computed.len() != expected_bytes.len()
-        || !bool::from(computed.as_slice().ct_eq(&expected_bytes))
-    {
+    if !bool::from(computed.as_slice().ct_eq(&expected_mac)) {
         return Err(KasServerError::PolicyBindingFailed(
             "policy binding mismatch".to_string(),
         ));
@@ -242,7 +278,8 @@ mod tests {
         let policy_b64 = STANDARD.encode(br#"{"uuid":"test","body":{}}"#);
         let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(DEK).unwrap();
         mac.update(policy_b64.as_bytes());
-        let expected_hash = STANDARD.encode(mac.finalize().into_bytes());
+        let raw_mac = mac.finalize().into_bytes();
+        let expected_hash = STANDARD.encode(raw_mac);
 
         let encoded = rsa_unwrap_with_policy_binding(
             &wrapped,
@@ -253,6 +290,26 @@ mod tests {
         )
         .unwrap();
         assert_eq!(open_rewrapped(&encoded, SESSION_SECRET), DEK);
+
+        // Go-SDK format: Base64(hex(HMAC)) (64 ASCII hex bytes)
+        let hex_mac: String = raw_mac.iter().map(|b| format!("{b:02x}")).collect();
+        let go_sdk_hash = STANDARD.encode(hex_mac.as_bytes());
+        let encoded_go = rsa_unwrap_with_policy_binding(
+            &wrapped,
+            &rsa_private,
+            SESSION_SECRET,
+            &policy_b64,
+            &go_sdk_hash,
+        )
+        .unwrap();
+        assert_eq!(open_rewrapped(&encoded_go, SESSION_SECRET), DEK);
+
+        // Invalid hex of length 64 is rejected
+        let bad_hex = STANDARD.encode([b'z'; 64]);
+        assert!(matches!(
+            verify_standard_policy_binding(DEK, &policy_b64, &bad_hex),
+            Err(KasServerError::PolicyBindingFailed(_))
+        ));
 
         let err = rsa_unwrap_with_policy_binding(
             &wrapped,

@@ -5,7 +5,7 @@
 use crate::error::KasServerError;
 use aes_gcm::Aes256Gcm;
 use aes_gcm::aead::generic_array::GenericArray;
-use aes_gcm::aead::{Aead, Key, KeyInit};
+use aes_gcm::aead::{Aead, KeyInit};
 use hkdf::Hkdf;
 use rand::RngCore;
 use rand::rngs::OsRng;
@@ -59,9 +59,9 @@ pub fn rewrap_dek(
     OsRng.fill_bytes(&mut nonce);
     let nonce_ga = GenericArray::from_slice(&nonce);
 
-    // Wrap the derived DEK with AES-256-GCM
-    let key = Key::<Aes256Gcm>::from(*wrapping_key);
-    let cipher = Aes256Gcm::new(&key);
+    // Wrap the derived DEK with AES-256-GCM (avoid copying key out of Zeroizing)
+    let cipher = Aes256Gcm::new_from_slice(wrapping_key.as_ref())
+        .map_err(|_| KasServerError::AesGcmError("invalid AES-256 wrapping key".to_string()))?;
     let wrapped_dek = cipher.encrypt(nonce_ga, &dek[..])?;
 
     Ok((nonce.to_vec(), wrapped_dek))
@@ -76,6 +76,12 @@ pub fn rewrap_dek_simple(
     dek: &[u8],
     session_shared_secret: &[u8],
 ) -> Result<(Vec<u8>, Vec<u8>), KasServerError> {
+    if dek.len() != 16 && dek.len() != 32 {
+        return Err(KasServerError::InvalidKeySize {
+            expected: 32,
+            got: dek.len(),
+        });
+    }
     if session_shared_secret.is_empty() {
         return Err(KasServerError::EcdhError(
             "session shared secret must not be empty".to_string(),
@@ -93,9 +99,9 @@ pub fn rewrap_dek_simple(
     OsRng.fill_bytes(&mut nonce);
     let nonce_ga = GenericArray::from_slice(&nonce);
 
-    // Encrypt DEK with AES-256-GCM
-    let key = Key::<Aes256Gcm>::from(*derived_key);
-    let cipher = Aes256Gcm::new(&key);
+    // Encrypt DEK with AES-256-GCM (avoid copying key out of Zeroizing)
+    let cipher = Aes256Gcm::new_from_slice(derived_key.as_ref())
+        .map_err(|_| KasServerError::AesGcmError("invalid AES-256 derived key".to_string()))?;
     let wrapped_dek = cipher.encrypt(nonce_ga, dek)?;
 
     Ok((nonce.to_vec(), wrapped_dek))
@@ -181,5 +187,9 @@ mod tests {
         assert!(rewrap_dek(&[], b"session", &dek_salt, &dek_salt, b"").is_err());
         assert!(rewrap_dek(b"dek", &[], &dek_salt, &dek_salt, b"").is_err());
         assert!(rewrap_dek_simple(b"dek-32-bytes-0000000000000000000", &[]).is_err());
+        // Invalid DEK lengths (0 bytes, 8 bytes) must be rejected; 16-byte AES-128 accepted
+        assert!(rewrap_dek_simple(&[], b"session_secret").is_err());
+        assert!(rewrap_dek_simple(&[0u8; 8], b"session_secret").is_err());
+        assert!(rewrap_dek_simple(&[0u8; 16], b"session_secret").is_ok());
     }
 }

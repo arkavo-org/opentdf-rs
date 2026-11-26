@@ -27,6 +27,7 @@ thiserror.workspace = true
 time.workspace = true
 uuid.workspace = true
 aes-gcm.workspace = true
+zeroize.workspace = true
 
 # KAS client dependencies (simplified, crypto moved to opentdf-crypto)
 reqwest = { workspace = true, optional = true }

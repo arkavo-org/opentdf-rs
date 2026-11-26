@@ -564,8 +564,8 @@ pub fn unwrap_key_with_ec(
         .decode(wrapped_key_base64)
         .map_err(|e| KemError::UnwrapError(format!("Invalid wrapped key encoding: {}", e)))?;
 
-    // Minimum size: 12-byte nonce + 16-byte GCM tag = 28 bytes
-    if wrapped_data.len() < 28 {
+    // Minimum size: 12-byte nonce + 16-byte AES-128 DEK + 16-byte GCM tag = 44 bytes
+    if wrapped_data.len() < 44 {
         return Err(KemError::UnwrapError("Wrapped key too short".into()));
     }
 
@@ -581,6 +581,13 @@ pub fn unwrap_key_with_ec(
     let plaintext = cipher
         .decrypt(nonce, ciphertext)
         .map_err(|e| KemError::UnwrapError(format!("AES-GCM decryption failed: {}", e)))?;
+
+    if plaintext.len() != 16 && plaintext.len() != 32 {
+        return Err(KemError::UnwrapError(format!(
+            "Invalid unwrapped DEK length: {} bytes (expected 16 or 32)",
+            plaintext.len()
+        )));
+    }
 
     Ok(plaintext)
 }
@@ -709,5 +716,16 @@ mod tests {
         let unwrapped_spki =
             unwrap_key_with_ec(&priv_pem, &wrapped.wrapped_key, &eph_spki_pem).unwrap();
         assert_eq!(unwrapped_spki, dek16);
+
+        // 0-byte DEK must be rejected on unwrap
+        let wrapped_empty = wrap_key_with_ec(&pub_pem, &[]).unwrap();
+        assert!(
+            unwrap_key_with_ec(
+                &priv_pem,
+                &wrapped_empty.wrapped_key,
+                &wrapped_empty.ephemeral_public_key,
+            )
+            .is_err()
+        );
     }
 }

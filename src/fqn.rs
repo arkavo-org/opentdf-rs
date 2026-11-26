@@ -141,17 +141,30 @@ impl AttributeFqn {
                 if value_part.is_empty() {
                     return Err(FqnError::MissingComponent { component: "value" });
                 }
+                let decoded_name = percent_decode(name)?;
+                let decoded_value = percent_decode(value_part)?;
+                if decoded_name.contains('/') || decoded_value.contains('/') {
+                    return Err(FqnError::MalformedUrl(
+                        "FQN attribute name and value must not contain '/'".to_string(),
+                    ));
+                }
                 // Has value component
                 Ok(Self {
                     namespace,
-                    name: percent_decode(name),
-                    value: Some(percent_decode(value_part)),
+                    name: decoded_name,
+                    value: Some(decoded_value),
                 })
             } else {
+                let decoded_name = percent_decode(path)?;
+                if decoded_name.contains('/') {
+                    return Err(FqnError::MalformedUrl(
+                        "FQN attribute name must not contain '/'".to_string(),
+                    ));
+                }
                 // Just attribute name, no value
                 Ok(Self {
                     namespace,
-                    name: percent_decode(path),
+                    name: decoded_name,
                     value: None,
                 })
             }
@@ -166,18 +179,18 @@ impl AttributeFqn {
                 }),
                 [name] => Ok(Self {
                     namespace,
-                    name: percent_decode(name),
+                    name: percent_decode(name)?,
                     value: None,
                 }),
                 [name, value] => Ok(Self {
                     namespace,
-                    name: percent_decode(name),
-                    value: Some(percent_decode(value)),
+                    name: percent_decode(name)?,
+                    value: Some(percent_decode(value)?),
                 }),
                 _ => Ok(Self {
                     namespace,
-                    name: percent_decode(parts[0]),
-                    value: Some(percent_decode(&parts[1..].join("/"))),
+                    name: percent_decode(parts[0])?,
+                    value: Some(percent_decode(&parts[1..].join("/"))?),
                 }),
             }
         }
@@ -408,8 +421,8 @@ fn percent_encode(s: &str) -> String {
     out
 }
 
-/// RFC 3986 percent-decoding for UTF-8 URL path segments
-fn percent_decode(s: &str) -> String {
+/// RFC 3986 percent-decoding for UTF-8 URL path segments (rejects invalid UTF-8)
+fn percent_decode(s: &str) -> Result<String, FqnError> {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -428,7 +441,9 @@ fn percent_decode(s: &str) -> String {
             i += 1;
         }
     }
-    String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
+    String::from_utf8(out).map_err(|_| {
+        FqnError::MalformedUrl("Percent-decoded FQN segment is not valid UTF-8".to_string())
+    })
 }
 
 #[cfg(test)]
@@ -517,8 +532,16 @@ mod tests {
         assert_eq!(parsed_l.get_value(), Some("Łdmin"));
 
         // Invalid percent sequences must not decode '+' or consume following valid '%'
-        assert_eq!(percent_decode("%+a"), "%+a");
-        assert_eq!(percent_decode("%%20"), "% ");
+        assert_eq!(percent_decode("%+a").unwrap(), "%+a");
+        assert_eq!(percent_decode("%%20").unwrap(), "% ");
+
+        // Invalid UTF-8 sequences must be rejected (no lossy U+FFFD aliasing)
+        assert!(AttributeFqn::parse("https://example.com/attr/role/value/%FF").is_err());
+        assert!(AttributeFqn::parse("https://example.com/attr/role/value/%FE").is_err());
+
+        // Encoded '/' must not smuggle path separators into name or value
+        assert!(AttributeFqn::parse("https://example.com/attr/a%2Fvalue%2Fb").is_err());
+        assert!(AttributeFqn::parse("https://example.com/attr/role/value/a%2Fb").is_err());
 
         // Reject empty namespace, userinfo, query/fragment, and empty name/value
         assert!(AttributeFqn::parse("https://").is_err());
