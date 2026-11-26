@@ -2,6 +2,44 @@
 
 ## [Unreleased]
 
+## [0.19.0] — 2026-11-26
+
+A security and dependency-audit release. Replaces the unmaintained `chrono` crate (`RUSTSEC-2026-0543`) with `time 0.3` across the workspace, closes a legacy single-block integrity downgrade path in Standard TDF decryption, adds integrity verification to TDF-JSON and TDF-CBOR decryption, hardens ABAC/PDP evaluation, KAS server/client validation, NanoTDF signature & collection handling, and WASM public-key retrieval.
+
+### Security
+
+- **RUSTSEC-2026-0543 (`chrono` unmaintained).** Migrated all workspace crates from `chrono` to `time 0.3` (`serde-well-known`, `formatting`, `parsing`, and `wasm-bindgen` on `wasm32`), clearing `cargo deny check advisories`.
+- **Standard TDF legacy single-block downgrade bypass (`src/archive.rs`).** `TdfEntry::decrypt_with_key` now refuses manifests with an empty `segments` list instead of falling back to unauthenticated single-block decryption. Callers needing legacy single-block archives can opt in explicitly via `TdfEntry::decrypt_legacy_single_block_with_key`.
+- **TDF-JSON and TDF-CBOR integrity verification (`src/jsonrpc.rs`, `src/tdf_cbor.rs`).** `TdfJson::decrypt_with_key`, `TdfJsonRpc::decrypt_with_key`, and `TdfCbor::decrypt_with_key` now verify segment GMAC hashes and the manifest root signature against the payload key.
+- **ABAC policy & PDP fail-closed hardening (`src/policy.rs`, `src/pdp/`, `src/fqn.rs`).**
+  - Unknown clearance levels (`MinimumOf`/`MaximumOf`) and `NaN` values (`Equals`, `NotEquals`, `In`, `NotIn`, ordered comparisons) return `PolicyError::EvaluationError` instead of `Ok(false)` so `NOT(...)` cannot invert an indeterminate condition into a grant.
+  - `NotEquals` rejects variant mismatches with `InvalidValueType`; `AttributePolicy::depth()` and `validate_policy()` are now iterative to prevent stack overflow on deeply nested policies.
+  - PDP rejects duplicate attribute definitions, duplicate value FQNs, cross-definition value collisions, and malformed `/value/` segments, merges actions across case-colliding entitlement keys, and fixes `hierarchy_rule` and `resm` resource FQN parsing.
+  - `AttributeFqn` fixes UTF-8 percent-encoding/decoding, rejects invalid UTF-8 sequences (no lossy `U+FFFD` aliasing), rejects encoded `/` (`%2F`), and rejects empty namespaces, userinfo, queries, and fragments.
+- **NanoTDF, KAS, and WASM hardening (`crates/crypto`, `crates/kas`, `crates/protocol`, `crates/wasm`, `src/kas*.rs`).**
+  - Added ECDSA payload signature verification across P-256, P-384, P-521, and secp256k1 in `NanoTdf::decrypt` plus `NanoTdf::decrypt_with_trusted_signers` for pinned signer keys and required-signature enforcement.
+  - Encrypted `PolicyBody::EmbeddedEncrypted` under `dek` + `POLICY_IV` in `NanoTdfCollectionBuilder::build`, verified policy binding on collection decryptor construction, and rejected `iv == 0` / `iv > MAX_IV`.
+  - Bounded `read_bytes` and NanoTDF readers with chunked `take(n)` reads (64 KiB initial cap) to prevent upfront OOM allocation from untrusted length prefixes.
+  - Added `rsa_unwrap_with_policy_binding` (accepting raw 32-byte and Go-SDK 64-byte hex HMAC bindings), `ec_unwrap_with_policy_binding` (OpenTDF L1L v1.2 interop), and `ec_unwrap_with_keyed_policy_binding` (strict keyed HMAC); fixed `rewrap_dek_simple` HKDF salt to `SHA256("TDF")`; enforced 2048-bit RSA minimum, 16/32-byte DEK lengths, and additional key zeroization.
+  - Enforced `validate_kas_url` (HTTPS/loopback + SSRF checks) and `url::Url` construction on native and WASM KAS public-key fetches, added `build_kas_key_http_client()` (`redirect::Policy::none()`), set `RequestRedirect::Error` and `extractable = false` in WASM, and enforced `policy.validate()` in WASM `tdf_create` / `policy_create`.
+
+### Changed
+
+- **Breaking:** `AttributeValue::DateTime`, `TimeWindow::not_before`/`not_after`, and `PolicyBuilder::valid_from`/`valid_until` now use `time::OffsetDateTime` instead of `chrono::DateTime<chrono::Utc>`.
+- **Breaking:** `TdfEntry::decrypt_with_key` refuses manifests with empty `segments`; use `TdfEntry::decrypt_legacy_single_block_with_key` for legacy single-block archives.
+- **Breaking:** `AttributePolicy::evaluate` returns `Err(PolicyError::EvaluationError)` for unknown clearance levels in `MinimumOf`/`MaximumOf` and for `NaN` comparisons.
+- **Breaking:** `KasServerError` gained `PolicyBindingFailed(String)`; `KeyAlgorithm::parse` uses exact matching; `KasEcKeypair` emits standard SPKI PEM (still accepts legacy SEC1 PEM on import).
+
+### Added
+
+- `TdfEntry::decrypt_legacy_single_block_with_key` (`src/archive.rs`).
+- `TdfEncryptBuilder::kas_public_key` and `TdfEncryptFileBuilder::kas_public_key` (`src/tdf.rs`).
+- `kas_key::build_kas_key_http_client` (`src/kas_key.rs`).
+- `NanoTdf::decrypt_with_trusted_signers` (`crates/crypto`).
+- `rsa_unwrap_with_policy_binding`, `verify_standard_policy_binding`, `ec_unwrap_with_policy_binding`, and `ec_unwrap_with_keyed_policy_binding` (`crates/kas`).
+- `CollectionItem::try_to_bytes` and `CollectionItem::try_to_nanotdf_payload_bytes` (`crates/protocol`).
+- Web Worker `globalThis.fetch` and `crypto.subtle` support in `crates/wasm`.
+
 ## [0.18.0] — 2026-11-10
 
 A security release. The WASM decrypt function sent the caller's OAuth token to whatever KAS the TDF named, archive members were read with no size limit, and the optional RustCrypto RSA path was on a version with a timing side channel. All three are fixed; the first two change behaviour for existing callers.

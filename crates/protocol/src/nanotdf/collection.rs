@@ -376,11 +376,17 @@ mod tests {
 
     #[test]
     fn test_invalid_iv_rejected_on_write() {
-        let zero_iv = CollectionItem::new(0, vec![1, 2, 3]);
+        let zero_iv = CollectionItem {
+            iv: RESERVED_POLICY_IV,
+            ciphertext_and_tag: vec![1, 2, 3],
+        };
         assert!(zero_iv.try_to_bytes().is_err());
         assert!(zero_iv.try_to_nanotdf_payload_bytes().is_err());
 
-        let too_large = CollectionItem::new(MAX_IV + 1, vec![1, 2, 3]);
+        let too_large = CollectionItem {
+            iv: MAX_IV + 1,
+            ciphertext_and_tag: vec![1, 2, 3],
+        };
         assert!(too_large.try_to_bytes().is_err());
         assert!(too_large.try_to_nanotdf_payload_bytes().is_err());
     }

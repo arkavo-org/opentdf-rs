@@ -953,11 +953,13 @@ mod single_segment_tests {
     fn test_decrypt_rejects_short_iv_without_panic() {
         let mut enc = TdfEncryption::new().unwrap();
         let dummy = [0u8; 32];
-        assert!(enc.decrypt(&dummy, b"short", &dummy).is_err());
+        let mut short_iv = [0u8; 5];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut short_iv);
+        assert!(enc.decrypt(&dummy, &short_iv, &dummy).is_err());
 
         let bad = EncryptedPayload {
             ciphertext: BASE64.encode(dummy),
-            iv: BASE64.encode(b"short"),
+            iv: BASE64.encode(short_iv),
             encrypted_key: BASE64.encode(dummy),
             policy_key_hash: String::new(),
         };
