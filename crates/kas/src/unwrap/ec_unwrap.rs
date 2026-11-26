@@ -11,7 +11,7 @@ use opentdf_protocol::binary::{BinaryRead, BinaryWrite};
 use opentdf_protocol::nanotdf::{EccMode, Header, PolicyBody};
 use p256::elliptic_curve::point::AffineCoordinates;
 use p256::{PublicKey, SecretKey};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use std::io::Cursor;
 use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
@@ -86,15 +86,17 @@ pub fn ec_unwrap_with_policy_binding(
         | PolicyBody::EmbeddedEncryptedWithKeyAccess { content, .. } => content.clone(),
     };
 
+    let digest = Sha256::digest(&policy_bytes);
+    let reference = &digest[24..];
+
     let mut mac = Hmac::<Sha256>::new_from_slice(dek.as_ref())
         .map_err(|e| KasServerError::PolicyBindingFailed(format!("invalid HMAC key: {e}")))?;
     mac.update(&policy_bytes);
     let computed = mac.finalize().into_bytes();
-    let expected = &computed[24..];
+    let keyed = &computed[24..];
 
-    if header.policy.binding.len() != 8
-        || !bool::from(header.policy.binding.as_slice().ct_eq(expected))
-    {
+    let b = header.policy.binding.as_slice();
+    if b.len() != 8 || !(bool::from(b.ct_eq(keyed)) | bool::from(b.ct_eq(reference))) {
         return Err(KasServerError::PolicyBindingFailed(
             "NanoTDF policy binding mismatch".to_string(),
         ));
@@ -276,7 +278,7 @@ mod tests {
         .unwrap_err();
         assert!(matches!(err, KasServerError::InvalidHeader(_)));
 
-        // Build a valid V12 header with keyed HMAC-SHA256 policy binding
+        // Build a valid V12 header with OpenTDF reference SHA-256 policy binding
         let shared = custom_ecdh(&ephemeral_private, &kas_public).unwrap();
         let dek_salt = compute_nanotdf_salt(NanoTdfVersion::V12);
         let mut dek = [0u8; 32];
@@ -284,9 +286,7 @@ mod tests {
             .expand(b"", &mut dek)
             .unwrap();
         let policy_content = b"policy-bytes".to_vec();
-        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&dek).unwrap();
-        mac.update(&policy_content);
-        let binding = mac.finalize().into_bytes()[24..32].to_vec();
+        let ref_binding = Sha256::digest(&policy_content)[24..32].to_vec();
 
         let mut header = Header {
             magic_number_and_version: MagicNumberAndVersion::new(),
@@ -300,15 +300,23 @@ mod tests {
                 SymmetricCipher::Aes256Gcm128,
             ),
             policy: Policy {
-                body: PolicyBody::EmbeddedPlaintext(policy_content),
-                binding,
+                body: PolicyBody::EmbeddedPlaintext(policy_content.clone()),
+                binding: ref_binding,
             },
             ephemeral_public_key: ephemeral_bytes.as_bytes().to_vec(),
         };
 
-        let mut valid_bytes = Vec::new();
-        header.write_to(&mut valid_bytes).unwrap();
-        assert!(ec_unwrap_with_policy_binding(&valid_bytes, &kas_private, session_secret).is_ok());
+        let mut ref_bytes = Vec::new();
+        header.write_to(&mut ref_bytes).unwrap();
+        assert!(ec_unwrap_with_policy_binding(&ref_bytes, &kas_private, session_secret).is_ok());
+
+        // Keyed HMAC-SHA256 binding is also accepted
+        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&dek).unwrap();
+        mac.update(&policy_content);
+        header.policy.binding = mac.finalize().into_bytes()[24..32].to_vec();
+        let mut keyed_bytes = Vec::new();
+        header.write_to(&mut keyed_bytes).unwrap();
+        assert!(ec_unwrap_with_policy_binding(&keyed_bytes, &kas_private, session_secret).is_ok());
 
         // Tamper policy content without recomputing binding -> PolicyBindingFailed
         header.policy.body = PolicyBody::EmbeddedPlaintext(b"tampered-policy".to_vec());

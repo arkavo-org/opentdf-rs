@@ -279,8 +279,8 @@ mod tests {
     fn test_iv_conversion() {
         let iv = NanoTdfIv::from_bytes([0x01, 0x02, 0x03]);
         let nonce = iv.to_gcm_nonce();
-        assert_eq!(&nonce[0..3], &[0x01, 0x02, 0x03]);
-        assert_eq!(&nonce[3..12], &[0u8; 9]); // Rest is zeros
+        assert_eq!(&nonce[0..9], &[0u8; 9]); // Leading zeros
+        assert_eq!(&nonce[9..12], &[0x01, 0x02, 0x03]);
     }
 
     #[test]

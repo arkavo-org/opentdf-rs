@@ -56,6 +56,7 @@ use opentdf_protocol::nanotdf::{
     policy::{Policy, PolicyBody},
     resource_locator::ResourceLocator,
 };
+use sha2::{Digest, Sha256};
 use std::io::Cursor;
 use std::sync::atomic::{AtomicU32, Ordering};
 use subtle::ConstantTimeEq;
@@ -82,12 +83,13 @@ fn verify_collection_policy_binding(header: &Header, dek: &AesKey) -> Result<(),
         ));
     }
     let policy_bytes = serialize_policy_body_for_binding(&header.policy.body)?;
+    let digest = Sha256::digest(&policy_bytes);
+    let reference = &digest[24..];
     let mac = calculate_hmac(dek.as_slice(), &policy_bytes)
         .map_err(|e| NanoTdfError::DecryptionFailed(format!("Policy binding HMAC failed: {e}")))?;
-    let expected = &mac[24..];
-    if header.policy.binding.len() != 8
-        || !bool::from(header.policy.binding.as_slice().ct_eq(expected))
-    {
+    let keyed = &mac[24..];
+    let b = header.policy.binding.as_slice();
+    if b.len() != 8 || !(bool::from(b.ct_eq(keyed)) | bool::from(b.ct_eq(reference))) {
         return Err(NanoTdfError::PolicyBindingFailed);
     }
     Ok(())
@@ -439,16 +441,16 @@ impl NanoTdfCollectionBuilder {
             other => other,
         };
 
-        // Calculate keyed policy binding: HMAC-SHA256(dek, policy_bytes)[24..32]
+        // Calculate policy binding: last 8 bytes of SHA-256 over policy body
+        // Matches OpenTDF Go SDK / platform KAS reference format for L1L v1.2 interop.
         let policy_binding = if self.use_ecdh_binding {
             return Err(NanoTdfError::Unsupported(
                 "ECDSA policy binding not yet implemented".to_string(),
             ));
         } else {
             let policy_bytes = serialize_policy_body_for_binding(&policy_body)?;
-            let mac = calculate_hmac(dek.as_slice(), &policy_bytes)
-                .map_err(|e| NanoTdfError::EncryptionFailed(format!("Policy binding HMAC: {e}")))?;
-            mac[24..].to_vec() // Last 8 bytes
+            let digest = Sha256::digest(&policy_bytes);
+            digest[24..].to_vec() // Last 8 bytes
         };
 
         // Create KAS resource locator

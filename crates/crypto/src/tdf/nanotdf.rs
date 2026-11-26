@@ -43,6 +43,7 @@ use opentdf_protocol::nanotdf::{
     policy::{Policy, PolicyBody},
     resource_locator::{Protocol, ResourceLocator},
 };
+use sha2::{Digest, Sha256};
 use std::io::{self, Cursor, Read, Write};
 use subtle::ConstantTimeEq;
 use thiserror::Error;
@@ -273,7 +274,8 @@ impl NanoTdfBuilder {
         // Encrypt payload with AES-256-GCM
         let ciphertext_and_tag = encrypt(&aes_key, &iv, plaintext, tag_size)?;
 
-        // Calculate keyed policy binding: HMAC-SHA256(aes_key, policy_bytes)[24..32]
+        // Calculate policy binding: last 8 bytes of SHA-256 over policy body
+        // Matches OpenTDF Go SDK / platform KAS reference format for L1L v1.2 interop.
         let policy_binding = if self.use_ecdh_binding {
             // ECDSA binding (future)
             return Err(NanoTdfError::Unsupported(
@@ -281,9 +283,8 @@ impl NanoTdfBuilder {
             ));
         } else {
             let policy_bytes = serialize_policy_body_for_binding(&policy_body)?;
-            let mac = calculate_hmac(aes_key.as_slice(), &policy_bytes)
-                .map_err(|e| NanoTdfError::EncryptionFailed(format!("Policy binding HMAC: {e}")))?;
-            mac[24..].to_vec() // Last 8 bytes
+            let digest = Sha256::digest(&policy_bytes);
+            digest[24..].to_vec() // Last 8 bytes
         };
 
         // Create KAS resource locator
@@ -424,7 +425,9 @@ impl NanoTdf {
         let aes_key =
             kem.derive_key_with_private(kas_private_key, &self.header.ephemeral_public_key)?;
 
-        // Verify policy binding using keyed HMAC-SHA256 in constant time
+        // Verify policy binding in constant time.
+        // Accepts either the OpenTDF Go SDK/KAS reference binding (SHA-256 tail)
+        // or the keyed HMAC-SHA256(aes_key, policy_bytes) tail.
         if self.header.ecc_and_binding_mode.use_ecdsa_binding {
             return Err(NanoTdfError::Unsupported(
                 "ECDSA policy binding verification not yet implemented".to_string(),
@@ -432,20 +435,15 @@ impl NanoTdf {
         }
         {
             let policy_bytes = serialize_policy_body_for_binding(&self.header.policy.body)?;
+            let digest = Sha256::digest(&policy_bytes);
+            let reference = &digest[24..];
             let mac = calculate_hmac(aes_key.as_slice(), &policy_bytes).map_err(|e| {
                 NanoTdfError::DecryptionFailed(format!("Policy binding HMAC failed: {e}"))
             })?;
-            let expected_binding = &mac[24..]; // Last 8 bytes
+            let keyed = &mac[24..];
 
-            if self.header.policy.binding.len() != 8
-                || !bool::from(
-                    self.header
-                        .policy
-                        .binding
-                        .as_slice()
-                        .ct_eq(expected_binding),
-                )
-            {
+            let b = self.header.policy.binding.as_slice();
+            if b.len() != 8 || !(bool::from(b.ct_eq(keyed)) | bool::from(b.ct_eq(reference))) {
                 return Err(NanoTdfError::PolicyBindingFailed);
             }
         }
@@ -711,25 +709,46 @@ mod tests {
             .encrypt(b"hello nanotdf", &kas_public)
             .unwrap();
 
+        // Default builder emits OpenTDF Go SDK/KAS reference binding (SHA-256 tail)
+        let policy_bytes = serialize_policy_body_for_binding(&ntdf.header.policy.body).unwrap();
+        let sha = Sha256::digest(&policy_bytes);
+        assert_eq!(ntdf.header.policy.binding.as_slice(), &sha[24..]);
+
         // Normal decrypt succeeds
         assert_eq!(
             ntdf.decrypt(kas_priv_der.as_bytes()).unwrap(),
             b"hello nanotdf"
         );
 
-        // Tampering policy body must fail keyed HMAC-SHA256 policy binding verification
+        // Tampering policy body must fail policy binding verification
         let mut tampered_policy = ntdf.clone();
         tampered_policy.header.policy.body =
             PolicyBody::EmbeddedPlaintext(b"tampered-policy".to_vec());
-        assert!(tampered_policy.decrypt(kas_priv_der.as_bytes()).is_err());
+        assert!(matches!(
+            tampered_policy.decrypt(kas_priv_der.as_bytes()),
+            Err(NanoTdfError::PolicyBindingFailed)
+        ));
 
-        // Replacing binding with unkeyed SHA-256 tail must also fail
-        use sha2::Digest;
-        let mut unkeyed = ntdf.clone();
-        let policy_bytes = serialize_policy_body_for_binding(&unkeyed.header.policy.body).unwrap();
-        let sha = sha2::Sha256::digest(&policy_bytes);
-        unkeyed.header.policy.binding = sha[24..].to_vec();
-        assert!(unkeyed.decrypt(kas_priv_der.as_bytes()).is_err());
+        // Keyed HMAC-SHA256 binding is also accepted on verification
+        let kem = EcdhKem::new(EcCurve::P256);
+        let aes_key = kem
+            .derive_key_with_private(kas_priv_der.as_bytes(), &ntdf.header.ephemeral_public_key)
+            .unwrap();
+        let mut keyed = ntdf.clone();
+        let mac = calculate_hmac(aes_key.as_slice(), &policy_bytes).unwrap();
+        keyed.header.policy.binding = mac[24..].to_vec();
+        assert_eq!(
+            keyed.decrypt(kas_priv_der.as_bytes()).unwrap(),
+            b"hello nanotdf"
+        );
+
+        // Corrupting the binding bytes must fail verification
+        let mut bad_binding = ntdf.clone();
+        bad_binding.header.policy.binding[0] ^= 0xFF;
+        assert!(matches!(
+            bad_binding.decrypt(kas_priv_der.as_bytes()),
+            Err(NanoTdfError::PolicyBindingFailed)
+        ));
 
         // Payload ECDSA signature verification: valid signature passes, forged fails
         let signing_key = SigningKey::from(&SecretKey::generate());
