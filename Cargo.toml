@@ -15,8 +15,8 @@ readme = "README.md"
 
 [dependencies]
 # New modular crates
-opentdf-protocol = { path = "crates/protocol", version = "0.19.0" }
-opentdf-crypto = { path = "crates/crypto", version = "0.19.0", default-features = false }
+opentdf-protocol.workspace = true
+opentdf-crypto.workspace = true
 
 # Core dependencies (using workspace versions)
 zip = { version = "9.0.4", default-features = false, features = ["deflate"] }
@@ -76,9 +76,14 @@ ciborium = "0.2"
 members = ["crates/protocol", "crates/crypto", "crates/kas", "crates/wasm"]
 
 [workspace.package]
-version = "0.19.0"
+version = "0.20.0"
 
 [workspace.dependencies]
+# Internal workspace crates (keep versions in sync with [workspace.package].version)
+opentdf = { path = ".", version = "0.20.0", default-features = false }
+opentdf-protocol = { path = "crates/protocol", version = "0.20.0" }
+opentdf-crypto = { path = "crates/crypto", version = "0.20.0", default-features = false }
+
 # Core serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

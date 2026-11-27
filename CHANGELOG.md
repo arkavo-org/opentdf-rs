@@ -2,9 +2,11 @@
 
 ## [Unreleased]
 
+## [0.20.0] — 2026-11-27
+
 ### Changed
 
-- **Breaking (for `0.20.0`):** `rustls-tls` moved from internal `_kas-client-base` into `default = ["kas-client", "rustls-tls"]`. Callers using `default-features = false` with `kas-client` or `kas-client-rustcrypto` must now explicitly select a TLS feature (`rustls-tls`, `rustls-tls-no-provider`, `rustls-tls-webpki-roots-no-provider`, or `native-tls`); omitting one is a compile-time error. The deprecated `kas` alias continues to enable `rustls-tls`.
+- **Breaking:** `rustls-tls` moved from internal `_kas-client-base` into `default = ["kas-client", "rustls-tls"]`. Callers using `default-features = false` with `kas-client` or `kas-client-rustcrypto` must now explicitly select a TLS feature (`rustls-tls`, `rustls-tls-no-provider`, `rustls-tls-webpki-roots-no-provider`, or `native-tls`); omitting one is a compile-time error. The deprecated `kas` alias continues to enable `rustls-tls`.
 - Raised minimum `reqwest` requirement to `0.12.5` for `rustls-tls-*-no-provider` support.
 
 ### Added
