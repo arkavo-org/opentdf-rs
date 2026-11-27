@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.20.0] — 2026-11-27
+
+### Changed
+
+- **Breaking:** `rustls-tls` moved from internal `_kas-client-base` into `default = ["kas-client", "rustls-tls"]`. Callers using `default-features = false` with `kas-client` or `kas-client-rustcrypto` must now explicitly select a TLS feature (`rustls-tls`, `rustls-tls-no-provider`, `rustls-tls-webpki-roots-no-provider`, or `native-tls`); omitting one is a compile-time error. The deprecated `kas` alias continues to enable `rustls-tls`.
+- Raised minimum `reqwest` requirement to `0.12.5` for `rustls-tls-*-no-provider` support.
+
+### Added
+
+- `KasClient::with_http_client_builder` (recommended for custom TLS / [`crypto-profile`](https://github.com/crypto-profile/crypto-profile) configs; enforces `redirect::Policy::none()` and `https_only(true)` for HTTPS endpoints) and `KasClient::with_http_client` (for shared connection pools, with defense-in-depth redirect/final-URL refusal in `send_rewrap_request`).
+- `rustls-tls-no-provider` and `rustls-tls-webpki-roots-no-provider` Cargo features so applications owning their `rustls::crypto::CryptoProvider` avoid pulling `ring` or stock `rustls` providers.
+
 ## [0.19.0] — 2026-11-26
 
 A security and dependency-audit release. Replaces the unmaintained `chrono` crate (`RUSTSEC-2026-0543`) with `time 0.3` across the workspace, closes a legacy single-block integrity downgrade path in Standard TDF decryption, adds integrity verification to TDF-JSON and TDF-CBOR decryption, hardens ABAC/PDP evaluation, KAS server/client validation, NanoTDF signature & collection handling, and WASM public-key retrieval.

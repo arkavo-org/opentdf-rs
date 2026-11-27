@@ -645,27 +645,29 @@ Add to your Cargo.toml ([crates.io](https://crates.io/crates/opentdf)):
 
 ```toml
 [dependencies]
-opentdf = "0.16"
+opentdf = "0.20"
 ```
 
 ### Feature Flags
 
 ```text
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ Feature                    Default   Description                            │
-├─────────────────────────────────────────────────────────────────────────────┤
-│ kas-client                 ✅        KAS client + aws-lc-rs (FIPS, secure)  │
-│ kas-client-rustcrypto      -         KAS client + pure Rust (portable)      │
-│ rustls-tls                 ✅        TLS via rustls                         │
-│ native-tls                 -         TLS via OpenSSL/SecureTransport        │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────────┐
+│ Feature                              Default   Description                           │
+├──────────────────────────────────────────────────────────────────────────────────────┤
+│ kas-client                           ✅        KAS client + aws-lc-rs (constant-time)│
+│ kas-client-rustcrypto                -         KAS client + pure Rust (portable)     │
+│ rustls-tls                           ✅        TLS via rustls (reqwest ring default) │
+│ rustls-tls-no-provider               -         rustls, no provider & no bundled roots│
+│ rustls-tls-webpki-roots-no-provider  -         rustls + webpki roots, no provider    │
+│ native-tls                           -         TLS via OpenSSL/SecureTransport       │
+└──────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 #### Crypto Providers
 
 | Provider | Timing-Safe | FIPS | Portable | WASM |
 |----------|-------------|------|----------|------|
-| **aws-lc-rs** (default) | ✅ | ✅ | Needs C compiler | ❌ |
+| **aws-lc-rs** (default) | ✅ | Optional (enable `aws-lc-rs/fips` in application) | Needs C compiler | ❌ |
 | **rustcrypto** | Patched in `rsa` 0.10 ([RUSTSEC-2023-0071](https://rustsec.org/advisories/RUSTSEC-2023-0071)) | ❌ | ✅ Pure Rust | ❌ |
 | **WebCrypto** (WASM only) | ✅ | Browser-dependent | N/A | ✅ |
 
@@ -673,17 +675,26 @@ opentdf = "0.16"
 
 ```toml
 # Recommended: Secure defaults (aws-lc-rs + rustls)
-opentdf = "0.16"
+opentdf = "0.20"
+
+# Application-governed TLS / FIPS (pass a preconfigured rustls::ClientConfig via
+# KasClient::with_http_client_builder or KasClient::with_http_client; no bundled roots)
+opentdf = { version = "0.20", default-features = false, features = ["kas-client", "rustls-tls-no-provider"] }
+
+# Application-installed process-default CryptoProvider + bundled Mozilla webpki roots
+opentdf = { version = "0.20", default-features = false, features = ["kas-client", "rustls-tls-webpki-roots-no-provider"] }
 
 # Pure Rust: No C compiler needed (not FIPS validated)
-opentdf = { version = "0.16", default-features = false, features = ["kas-client-rustcrypto"] }
+opentdf = { version = "0.20", default-features = false, features = ["kas-client-rustcrypto", "rustls-tls"] }
 
 # Native TLS: Use system TLS (OpenSSL on Linux, SecureTransport on macOS)
-opentdf = { version = "0.16", default-features = false, features = ["kas-client", "native-tls"] }
+opentdf = { version = "0.20", default-features = false, features = ["kas-client", "native-tls"] }
 
 # Minimal: Core TDF operations only (no KAS client, no async)
-opentdf = { version = "0.16", default-features = false }
+opentdf = { version = "0.20", default-features = false }
 ```
+
+For application-governed TLS profiles and AWS-LC FIPS module selection (such as CNSA 2.0, FIPS 140-3, or BSI), pair `rustls-tls-no-provider` with [`crypto-profile`](https://github.com/crypto-profile/crypto-profile) and pass the resulting `rustls::ClientConfig` through `KasClient::with_http_client_builder` (via `reqwest::Client::builder().use_preconfigured_tls(...)`).
 
 #### WASM Note
 

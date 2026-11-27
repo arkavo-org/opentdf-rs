@@ -118,7 +118,7 @@ pub enum EphemeralKeyPair {
 impl EphemeralKeyPair {
     /// Generate a new ephemeral key pair of the specified type
     ///
-    /// Uses aws-lc-rs for RSA key generation (constant-time, FIPS validated).
+    /// Uses aws-lc-rs for constant-time RSA key generation.
     pub fn new(key_type: KeyType) -> Result<Self, KasError> {
         use crate::p256::elliptic_curve::Generate;
 
@@ -183,7 +183,7 @@ impl EphemeralKeyPair {
 /// By default the client signs the rewrap request (the signed request token)
 /// with an internal ephemeral RSA key (RS256) and sends the access token as a
 /// bearer. [`KasClient::with_caller_key`] switches to the caller's own key.
-/// Uses aws-lc-rs for constant-time RSA operations (FIPS validated).
+/// Uses aws-lc-rs for constant-time RSA operations.
 #[cfg(feature = "kas-client")]
 pub struct KasClient {
     http_client: Client,
@@ -229,28 +229,99 @@ impl KasClient {
     /// is the platform-issued access token. When [`KasClient::with_caller_key`]
     /// sets a caller key, that caller key signs the inner (signed request)
     /// token instead of the ephemeral RSA key.
+    ///
+    /// With `rustls-tls-webpki-roots-no-provider` (and without `rustls-tls`),
+    /// install a process-default `rustls::crypto::CryptoProvider` before calling
+    /// `KasClient::new`. With `rustls-tls-no-provider` (which bundles neither a
+    /// `CryptoProvider` nor root certificates), use
+    /// [`KasClient::with_http_client_builder`] or [`KasClient::with_http_client`]
+    /// with a `rustls::ClientConfig` via `.use_preconfigured_tls(..)`.
+    ///
+    /// # Panics
+    ///
+    /// When compiled with `rustls-tls-no-provider` or
+    /// `rustls-tls-webpki-roots-no-provider` (and without `rustls-tls` or
+    /// `native-tls`), `reqwest::ClientBuilder::build` panics if no
+    /// process-default `rustls::crypto::CryptoProvider` has been installed.
     pub fn new(
         config: &crate::kas_discovery::OpentdfConfiguration,
         oauth_token: impl Into<String>,
     ) -> Result<Self, KasError> {
-        // `from_config` validates both the rewrap and public-key URLs for
-        // HTTPS / scheme / SSRF constraints before returning.
+        let builder = Client::builder().timeout(std::time::Duration::from_secs(30));
+        Self::with_http_client_builder(config, oauth_token, builder)
+    }
+
+    /// Create a new KAS client from a caller-configured [`reqwest::ClientBuilder`].
+    ///
+    /// This is the **recommended** entry point when the application governs TLS
+    /// or transport policy — for example, calling
+    /// `.use_preconfigured_tls(client_config)` with a `rustls::ClientConfig`
+    /// built by [`crypto-profile`](https://github.com/crypto-profile/crypto-profile),
+    /// configuring mTLS client authentication, or setting custom timeouts/proxies.
+    ///
+    /// # Security
+    ///
+    /// Unlike [`KasClient::with_http_client`], this constructor enforces
+    /// transport invariants on `builder` before building the client:
+    /// - Both resolved KAS URLs are validated for HTTPS / scheme / SSRF
+    ///   constraints via [`crate::kas_discovery::KasEndpoints::from_config`].
+    /// - Overrides `.redirect(reqwest::redirect::Policy::none())` so a 3xx
+    ///   response cannot forward `Authorization` / `DPoP` headers or replay the
+    ///   signed request body (`307`/`308`) to another destination.
+    /// - Enforces `.https_only(true)` whenever the resolved rewrap URL uses
+    ///   HTTPS (still allowing loopback `http://localhost` / `127.0.0.1` /
+    ///   `[::1]` for local development and mock tests).
+    pub fn with_http_client_builder(
+        config: &crate::kas_discovery::OpentdfConfiguration,
+        oauth_token: impl Into<String>,
+        builder: reqwest::ClientBuilder,
+    ) -> Result<Self, KasError> {
         let endpoints = crate::kas_discovery::KasEndpoints::from_config(config)?;
+        let mut builder = builder.redirect(reqwest::redirect::Policy::none());
+        if endpoints.rewrap_url.starts_with("https://") {
+            builder = builder.https_only(true);
+        }
+        let http_client = builder.build().map_err(|e| KasError::HttpError {
+            status: 0,
+            message: format!("Failed to build HTTP client: {}", e),
+        })?;
+        Self::from_endpoints(endpoints, oauth_token, http_client)
+    }
 
-        // Disable redirect following. The KAS rewrap endpoint is an RPC target
-        // that should never redirect; allowing redirects would let a 3xx from a
-        // validated host re-issue the bearer-carrying request to an unvalidated
-        // one (e.g. an internal address), since `validate_kas_url` only runs on
-        // the initial URL, not per-hop.
-        let http_client = Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|e| KasError::HttpError {
-                status: 0,
-                message: format!("Failed to build HTTP client: {}", e),
-            })?;
+    /// Create a new KAS client using an already-built [`reqwest::Client`].
+    ///
+    /// Use this when you need to share a single connection pool across multiple
+    /// clients (matching [`crate::kas_discovery::fetch_well_known`] and
+    /// [`crate::kas_key::fetch_kas_public_key_connect`]). When creating a
+    /// dedicated client, prefer [`KasClient::with_http_client_builder`] so
+    /// `KasClient` enforces `redirect::Policy::none()` itself.
+    ///
+    /// # Security
+    ///
+    /// - Both resolved KAS URLs are validated for HTTPS / scheme / SSRF
+    ///   constraints via [`crate::kas_discovery::KasEndpoints::from_config`].
+    /// - **Configure `.redirect(reqwest::redirect::Policy::none())`** and a
+    ///   bounded `.timeout(..)` on `http_client`. `reqwest` cannot disable
+    ///   redirects after `.build()`, and although `reqwest` strips
+    ///   `Authorization` on cross-host redirects, it does **not** strip custom
+    ///   `DPoP` headers and `307`/`308` redirects can replay the signed request
+    ///   body. As defense in depth, `KasClient` refuses any response whose final
+    ///   URL differs from the validated rewrap URL, though preventing the
+    ///   redirect up front requires `redirect::Policy::none()`.
+    pub fn with_http_client(
+        config: &crate::kas_discovery::OpentdfConfiguration,
+        oauth_token: impl Into<String>,
+        http_client: Client,
+    ) -> Result<Self, KasError> {
+        let endpoints = crate::kas_discovery::KasEndpoints::from_config(config)?;
+        Self::from_endpoints(endpoints, oauth_token, http_client)
+    }
 
+    fn from_endpoints(
+        endpoints: crate::kas_discovery::KasEndpoints,
+        oauth_token: impl Into<String>,
+        http_client: Client,
+    ) -> Result<Self, KasError> {
         let signing_key = PrivateDecryptingKey::generate(KeySize::Rsa2048).map_err(|e| {
             KasError::CryptoError {
                 operation: "generate_signing_key".to_string(),
@@ -361,6 +432,12 @@ impl KasClient {
                     .header("DPoP", proof)
             }
         };
+        let expected_url = url::Url::parse(&self.endpoints.rewrap_url).map_err(|e| {
+            KasError::InvalidUrl(format!(
+                "Invalid KAS rewrap URL '{}': {}",
+                self.endpoints.rewrap_url, e
+            ))
+        })?;
         let response =
             request
                 .json(signed_request)
@@ -372,7 +449,29 @@ impl KasClient {
                     reason: e.to_string(),
                 })?;
 
+        // Defense in depth for callers using `with_http_client`: refuse any
+        // response that followed a redirect away from the validated endpoint.
+        if response.url() != &expected_url {
+            return Err(KasError::RequestError {
+                method: "POST".to_string(),
+                url: self.endpoints.rewrap_url.clone(),
+                reason: format!(
+                    "KAS rewrap request redirected to '{}'; redirects are refused (configure redirect::Policy::none())",
+                    response.url()
+                ),
+            });
+        }
+
         let status = response.status();
+        if status.is_redirection() {
+            return Err(KasError::HttpError {
+                status: status.as_u16(),
+                message: format!(
+                    "KAS rewrap endpoint returned redirect HTTP {}; redirects are refused",
+                    status
+                ),
+            });
+        }
         if !status.is_success() {
             let error_body = response.text().await.unwrap_or_default();
             let detail = crate::kas_discovery::parse_connect_error(&error_body)
@@ -497,7 +596,7 @@ impl KasClient {
     ///
     /// The JWT is signed with RS256 using the client's internal signing key,
     /// or with the caller key (`EdDSA`/`ES256`) when one is set.
-    /// Uses aws-lc-rs for constant-time RSA operations (FIPS validated).
+    /// Uses aws-lc-rs for constant-time RSA operations.
     fn sign_rewrap_request(&self, request: &UnsignedRewrapRequest) -> Result<String, KasError> {
         use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
         use serde::{Deserialize, Serialize};
@@ -831,7 +930,7 @@ impl KasClient {
     /// implements that one. [`KasClient::rewrap_nanotdf`] does not call this
     /// function.
     ///
-    /// Uses aws-lc-rs for constant-time RSA operations (FIPS validated).
+    /// Uses aws-lc-rs for constant-time RSA operations.
     fn unwrap_key(
         &self,
         wrapped_key: &[u8],
@@ -1065,6 +1164,135 @@ mod tests {
         fn test_kas_rejects_invalid_url() {
             let err = expect_err("not-a-url");
             assert!(matches!(err, KasError::InvalidUrl(_)), "got: {err}");
+        }
+
+        #[test]
+        fn test_with_http_client_validates_urls() {
+            let http = Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap();
+            let bad = OpentdfConfiguration::for_kas_connect("http://evil.com");
+            assert!(matches!(
+                KasClient::with_http_client(&bad, "token", http.clone()),
+                Err(KasError::InvalidUrl(_))
+            ));
+            let private = OpentdfConfiguration::for_kas_connect("https://169.254.169.254");
+            assert!(matches!(
+                KasClient::with_http_client(&private, "token", http),
+                Err(KasError::InvalidUrl(_))
+            ));
+        }
+
+        #[tokio::test]
+        async fn test_with_http_client_uses_provided_client() {
+            let mut server = mockito::Server::new_async().await;
+            let mock = server
+                .mock("POST", "/kas.AccessService/Rewrap")
+                .match_header("x-custom-transport", "profile-client")
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body(
+                    r#"{"responses":[{"policyId":"p","results":[{"keyAccessObjectId":"kao-0","status":"permit","entityWrappedKey":"AQIDBA=="}]}]}"#,
+                )
+                .create_async()
+                .await;
+
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert(
+                "x-custom-transport",
+                reqwest::header::HeaderValue::from_static("profile-client"),
+            );
+            let http = Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .default_headers(headers)
+                .build()
+                .unwrap();
+
+            let cfg = OpentdfConfiguration::for_kas_connect(server.url());
+            let client = KasClient::with_http_client(&cfg, "token", http).unwrap();
+            let dek = client
+                .rewrap_nanotdf(b"header", &server.url())
+                .await
+                .unwrap();
+            assert_eq!(dek, vec![1, 2, 3, 4]);
+            mock.assert_async().await;
+        }
+
+        #[tokio::test]
+        async fn test_with_http_client_builder_enforces_no_redirects() {
+            let mut server = mockito::Server::new_async().await;
+            let redirect_target = format!("{}/redirected", server.url());
+            let redirect_mock = server
+                .mock("POST", "/kas.AccessService/Rewrap")
+                .with_status(307)
+                .with_header("location", &redirect_target)
+                .create_async()
+                .await;
+            let target_mock = server
+                .mock("POST", "/redirected")
+                .expect(0)
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body(
+                    r#"{"responses":[{"policyId":"p","results":[{"keyAccessObjectId":"kao-0","status":"permit","entityWrappedKey":"AQIDBA=="}]}]}"#,
+                )
+                .create_async()
+                .await;
+
+            // Even if the caller's builder enables redirects, `with_http_client_builder`
+            // overrides it with `Policy::none()`.
+            let builder = Client::builder().redirect(reqwest::redirect::Policy::limited(5));
+            let cfg = OpentdfConfiguration::for_kas_connect(server.url());
+            let client = KasClient::with_http_client_builder(&cfg, "token", builder).unwrap();
+            let err = client
+                .rewrap_nanotdf(b"header", &server.url())
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, KasError::HttpError { status: 307, .. }),
+                "expected 307 refusal, got: {err:?}"
+            );
+            redirect_mock.assert_async().await;
+            target_mock.assert_async().await;
+        }
+
+        #[tokio::test]
+        async fn test_with_http_client_rejects_followed_redirect_response() {
+            let mut server = mockito::Server::new_async().await;
+            let redirect_target = format!("{}/redirected", server.url());
+            let _redirect_mock = server
+                .mock("POST", "/kas.AccessService/Rewrap")
+                .with_status(307)
+                .with_header("location", &redirect_target)
+                .create_async()
+                .await;
+            let _target_mock = server
+                .mock("POST", "/redirected")
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body(
+                    r#"{"responses":[{"policyId":"p","results":[{"keyAccessObjectId":"kao-0","status":"permit","entityWrappedKey":"AQIDBA=="}]}]}"#,
+                )
+                .create_async()
+                .await;
+
+            // Pre-built client that mistakenly allows redirects: `KasClient` must still
+            // refuse the response whose final URL differs from the validated endpoint.
+            let http = Client::builder()
+                .redirect(reqwest::redirect::Policy::limited(5))
+                .build()
+                .unwrap();
+            let cfg = OpentdfConfiguration::for_kas_connect(server.url());
+            let client = KasClient::with_http_client(&cfg, "token", http).unwrap();
+            let err = client
+                .rewrap_nanotdf(b"header", &server.url())
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, KasError::RequestError { ref reason, .. } if reason.contains("redirected")),
+                "expected redirect refusal, got: {err:?}"
+            );
         }
     }
 }

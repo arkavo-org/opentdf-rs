@@ -1,0 +1,20 @@
+[package]
+name = "opentdf-crypto-profile-test"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+# Standalone consumer crate proving `opentdf` composes cleanly with
+# `crypto-profile-awslc4` (https://github.com/crypto-profile/crypto-profile)
+# without pulling `ring` or stock `rustls` providers into the dependency graph.
+
+[dependencies]
+opentdf = { path = "../..", default-features = false, features = ["kas-client", "rustls-tls-no-provider"] }
+crypto-profile-awslc4 = "0.10.2"
+reqwest = { version = "0.12.5", default-features = false, features = ["json", "rustls-tls-no-provider"] }
+
+[dev-dependencies]
+rcgen = { version = "=0.14.10", default-features = false, features = ["aws_lc_rs", "fips", "pem"] }
+tokio = { version = "1", features = ["macros", "net", "io-util", "rt-multi-thread"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["tls12"] }

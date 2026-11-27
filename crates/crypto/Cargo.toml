@@ -35,7 +35,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 # Protocol types (for NanoTDF)
-opentdf-protocol = { path = "../protocol", version = "0.19.0" }
+opentdf-protocol.workspace = true
 
 # KAS feature dependencies (EC, HKDF)
 p256 = { workspace = true, optional = true }
@@ -47,7 +47,8 @@ hkdf = { workspace = true, optional = true }
 pkcs8 = { workspace = true, optional = true }
 
 # RSA backends (choose one)
-# aws-lc-rs: Constant-time RSA operations, FIPS validated (default for native)
+# aws-lc-rs: Constant-time RSA operations (default for native; uses AWS-LC's
+# FIPS module only when the application enables `aws-lc-rs/fips`)
 # Does NOT support wasm32 - use WebCrypto in browser environments
 aws-lc-rs = { version = "1.18", optional = true }
 # PEM parsing for aws-lc-rs (it only supports DER directly)
@@ -68,7 +69,8 @@ mbedtls = { version = "0.13", default-features = false, features = ["std", "aesn
 [features]
 default = []
 
-# RSA backend: aws-lc-rs (constant-time, FIPS validated, recommended)
+# RSA backend: aws-lc-rs (constant-time, recommended; links FIPS module only
+# when the application enables `aws-lc-rs/fips`)
 # Does NOT support wasm32 - use WebCrypto in browser environments
 aws-lc-provider = ["dep:aws-lc-rs", "dep:pem"]
 
