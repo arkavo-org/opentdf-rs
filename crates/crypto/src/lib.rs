@@ -71,7 +71,15 @@ pub use kem::rsa::wrap_key_with_rsa_oaep;
 pub use kem::ec::{EcCurve, EcWrappedKeyResult, EcdhKem, unwrap_key_with_ec, wrap_key_with_ec};
 
 // PQC (Post-Quantum Cryptography) exports - always available
-pub use kem::pqc::{HybridKem, MlKemLevel, MlKemWrapper};
+pub use kem::pqc::{
+    HybridKem, HybridPrivateKey, HybridPublicKey, HybridWrappedKey, MlKemLevel, MlKemWrapper,
+};
+
+#[cfg(all(
+    feature = "kem-rsa",
+    any(feature = "aws-lc-provider", feature = "rustcrypto-provider")
+))]
+pub use kem::pqc::RsaOaepBytesKem;
 
 #[cfg(feature = "kem-ec")]
 pub use types::EcPrivateKey;
