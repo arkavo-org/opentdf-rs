@@ -248,9 +248,10 @@ mod aws_lc_ml_kem {
 
             let kek = derive_wrapping_key(shared_secret.as_ref(), self.security_level)?;
 
-            let mut nonce_bytes = [0u8; NONCE_LEN];
-            aws_lc_rs::rand::fill(&mut nonce_bytes)
-                .map_err(|_| KemError::WrapError("Failed to generate random nonce".to_string()))?;
+            let rng = aws_lc_rs::rand::SystemRandom::new();
+            let nonce_bytes: [u8; NONCE_LEN] = aws_lc_rs::rand::generate(&rng)
+                .map_err(|_| KemError::WrapError("Failed to generate random nonce".to_string()))?
+                .expose();
 
             let cipher = Aes256Gcm::new_from_slice(kek.as_ref())
                 .map_err(|_| KemError::KeyDerivationFailed)?;
