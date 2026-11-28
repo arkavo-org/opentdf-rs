@@ -645,7 +645,7 @@ Add to your Cargo.toml ([crates.io](https://crates.io/crates/opentdf)):
 
 ```toml
 [dependencies]
-opentdf = "0.20"
+opentdf = "0.21"
 ```
 
 ### Feature Flags
@@ -675,23 +675,23 @@ opentdf = "0.20"
 
 ```toml
 # Recommended: Secure defaults (aws-lc-rs + rustls)
-opentdf = "0.20"
+opentdf = "0.21"
 
 # Application-governed TLS / FIPS (pass a preconfigured rustls::ClientConfig via
 # KasClient::with_http_client_builder or KasClient::with_http_client; no bundled roots)
-opentdf = { version = "0.20", default-features = false, features = ["kas-client", "rustls-tls-no-provider"] }
+opentdf = { version = "0.21", default-features = false, features = ["kas-client", "rustls-tls-no-provider"] }
 
 # Application-installed process-default CryptoProvider + bundled Mozilla webpki roots
-opentdf = { version = "0.20", default-features = false, features = ["kas-client", "rustls-tls-webpki-roots-no-provider"] }
+opentdf = { version = "0.21", default-features = false, features = ["kas-client", "rustls-tls-webpki-roots-no-provider"] }
 
 # Pure Rust: No C compiler needed (not FIPS validated)
-opentdf = { version = "0.20", default-features = false, features = ["kas-client-rustcrypto", "rustls-tls"] }
+opentdf = { version = "0.21", default-features = false, features = ["kas-client-rustcrypto", "rustls-tls"] }
 
 # Native TLS: Use system TLS (OpenSSL on Linux, SecureTransport on macOS)
-opentdf = { version = "0.20", default-features = false, features = ["kas-client", "native-tls"] }
+opentdf = { version = "0.21", default-features = false, features = ["kas-client", "native-tls"] }
 
 # Minimal: Core TDF operations only (no KAS client, no async)
-opentdf = { version = "0.20", default-features = false }
+opentdf = { version = "0.21", default-features = false }
 ```
 
 For application-governed TLS profiles and AWS-LC FIPS module selection (such as CNSA 2.0, FIPS 140-3, or BSI), pair `rustls-tls-no-provider` with [`crypto-profile`](https://github.com/crypto-profile/crypto-profile) and pass the resulting `rustls::ClientConfig` through `KasClient::with_http_client_builder` (via `reqwest::Client::builder().use_preconfigured_tls(...)`).

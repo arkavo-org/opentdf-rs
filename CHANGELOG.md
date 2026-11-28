@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.21.0] — 2026-11-27
+
+### Added
+
+- FIPS 203 ML-KEM key encapsulation (`MlKemWrapper` for `ML-KEM-512`, `ML-KEM-768`, and `ML-KEM-1024`) in `opentdf-crypto` backed by `aws-lc-rs` (under `aws-lc-provider`), with HKDF-SHA256 key derivation, AES-256-GCM wrapping with parameter-set + ciphertext AAD binding, and `MlKemWrapper::generate_keypair()`.
+- 2-of-2 XOR secret-splitting `HybridKem` implementation in `opentdf-crypto` (with zeroized intermediate shares and `HybridPrivateKey` drop zeroization), plus `RsaOaepBytesKem` adapter and `HybridKem::rsa_ml_kem(oaep_hash, ml_kem_level)`.
+
 ## [0.20.0] — 2026-11-27
 
 ### Changed

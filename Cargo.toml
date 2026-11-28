@@ -76,13 +76,13 @@ ciborium = "0.2"
 members = ["crates/protocol", "crates/crypto", "crates/kas", "crates/wasm"]
 
 [workspace.package]
-version = "0.20.0"
+version = "0.21.0"
 
 [workspace.dependencies]
 # Internal workspace crates (keep versions in sync with [workspace.package].version)
-opentdf = { path = ".", version = "0.20.0", default-features = false }
-opentdf-protocol = { path = "crates/protocol", version = "0.20.0" }
-opentdf-crypto = { path = "crates/crypto", version = "0.20.0", default-features = false }
+opentdf = { path = ".", version = "0.21.0", default-features = false }
+opentdf-protocol = { path = "crates/protocol", version = "0.21.0" }
+opentdf-crypto = { path = "crates/crypto", version = "0.21.0", default-features = false }
 
 # Core serialization
 serde = { version = "1.0", features = ["derive"] }
